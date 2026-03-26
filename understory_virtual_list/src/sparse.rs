@@ -43,7 +43,17 @@ impl<S: Scalar> SparsePrefixSumExtentModel<S> {
 
     /// Updates the default extent for un-materialized items.
     pub fn set_default_extent(&mut self, default_extent: S) {
-        self.default_extent = default_extent;
+        // Extents are expected to be finite. Catch NaNs (and infinities) in
+        // debug builds so misuse does not go unnoticed.
+        debug_assert!(
+            default_extent.is_finite(),
+            "SparsePrefixSumExtentModel extents must be finite; got {default_extent:?}"
+        );
+        self.default_extent = if default_extent.is_sign_negative() {
+            S::zero()
+        } else {
+            default_extent
+        };
     }
 
     /// Returns true if there is no item.
