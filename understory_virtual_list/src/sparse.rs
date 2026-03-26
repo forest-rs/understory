@@ -46,6 +46,11 @@ impl<S: Scalar> SparsePrefixSumExtentModel<S> {
         self.default_extent = default_extent;
     }
 
+    /// Returns true if there is no item.
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
     /// Returns the total number of items.
     pub fn len(&self) -> usize {
         self.len
