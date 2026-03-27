@@ -454,7 +454,7 @@ mod tests {
     #[test]
     fn rebuild_initializes_prefixes_from_zero() {
         let mut model = SparsePrefixSumExtentModel::<f32>::new(10.0, 3);
-        model.rebuild([(0usize, 25f32), (1, 15.)], &|v| *v);
+        model.rebuild([(0, 25_f32), (1, 15.)], &|v| *v);
 
         assert_eq!(model.offset_of(0), 0.0);
         assert_eq!(model.offset_of(1), 25.0);
