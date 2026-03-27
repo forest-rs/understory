@@ -59,13 +59,19 @@
 //! // and position them after `before_extent` worth of spacer.
 //! ```
 //!
-//! For non-uniform item sizes, use [`PrefixSumExtentModel`] and feed measured
-//! extents back into it after layout. A typical pattern is:
+//! For non-uniform item sizes, use either [`PrefixSumExtentModel`] if all items are readily
+//! available and it is feasible to load them up-front, or [`SparsePrefixSumExtentModel`] if there
+//! are too many items to keep loaded at all-times and feed measured extents back into it after
+//! layout.
+//! A typical pattern is:
 //! - start with a rough estimate for all items,
-//! - measure actual extents after layout and call [`PrefixSumExtentModel::set_extent`]
-//!   or [`PrefixSumExtentModel::rebuild`],
-//! - and use [`PrefixSumExtentModel::total_extent_for_len`] and
-//!   [`PrefixSumExtentModel::index_at_offset_for_len`] to keep scroll behavior
+//! - measure actual extents after layout and call [`PrefixSumExtentModel::set_extent`] /
+//!   [`SparsePrefixSumExtentModel::set_extent`] or [`PrefixSumExtentModel::rebuild`] /
+//!   [`SparsePrefixSumExtentModel::rebuild`],
+//! - and use [`PrefixSumExtentModel::total_extent_for_len`] /
+//!   [`SparsePrefixSumExtentModel::total_extent_for_len`] and
+//!   [`PrefixSumExtentModel::index_at_offset_for_len`] /
+//!   [`SparsePrefixSumExtentModel::index_at_offset_for_len`] to keep scroll behavior
 //!   stable as measurements refine.
 //!
 //! All extents and offsets live in a caller-chosen 1D coordinate space
