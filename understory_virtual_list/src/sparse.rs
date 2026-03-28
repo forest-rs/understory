@@ -510,7 +510,7 @@ mod tests {
 
         assert_eq!(model.index_at_offset(10.0), 1);
         assert_eq!(model.index_at_offset(25.0), 2);
-        assert_eq!(model.index_at_offset(35.0), 2);
+        assert_eq!(model.index_at_offset(35.0), 3);
     }
 
     #[test]
@@ -533,5 +533,25 @@ mod tests {
 
         model.set_len(6);
         assert_eq!(model.total_extent(), 70.0);
+    }
+
+    #[test]
+    fn index_at_offset_handles_initial_guess_past_len() {
+        let mut model = SparsePrefixSumExtentModel::<f32>::new(1.0, 5);
+        model.set_extent(0, 100.0);
+
+        assert_eq!(model.index_at_offset(50.0), 0);
+        assert_eq!(model.index_at_offset(99.0), 0);
+    }
+
+    #[test]
+    fn index_at_offset_returns_greatest_index_for_trailing_zero_sized_defaults() {
+        let mut model = SparsePrefixSumExtentModel::<f32>::new(0.0, 4);
+        model.set_extent(1, 20.0);
+        model.set_extent(2, 10.0);
+
+        assert_eq!(model.offset_of(3), 30.0);
+        assert_eq!(model.index_at_offset(30.0), 3);
+        assert_eq!(model.index_at_offset(35.0), 3);
     }
 }
