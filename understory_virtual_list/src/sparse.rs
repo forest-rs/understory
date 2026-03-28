@@ -292,12 +292,6 @@ impl<S: Scalar> ExtentModel for SparsePrefixSumExtentModel<S> {
     }
 }
 
-impl<S: Scalar> ResizableExtentModel for SparsePrefixSumExtentModel<S> {
-    fn set_len(&mut self, len: usize) {
-        self.set_len(len);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use crate::{PrefixSumExtentModel, compute_visible_strip};
