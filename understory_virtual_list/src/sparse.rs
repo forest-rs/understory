@@ -6,7 +6,7 @@
 
 use alloc::collections::BTreeMap;
 
-use crate::{ExtentModel, Scalar};
+use crate::{ExtentModel, ResizableExtentModel, Scalar};
 
 /// An [`ExtentModel`] backed by per-item extents and a lazily-maintained prefix-sum cache.
 /// with fixed-sized placeholders for un-materialized items.
@@ -101,6 +101,10 @@ impl<S: Scalar> SparsePrefixSumExtentModel<S> {
         self.last_valid = None;
 
         for (index, item) in items {
+            if index >= self.len {
+                continue;
+            }
+
             let mut extent = size_fn(&item);
             debug_assert!(
                 extent.is_finite(),
@@ -115,6 +119,10 @@ impl<S: Scalar> SparsePrefixSumExtentModel<S> {
 
     /// Updates the extent of a single item and marks prefix sums dirty from this index.
     pub fn set_extent(&mut self, index: usize, extent: S) {
+        if index >= self.len {
+            return;
+        }
+
         // Extents are expected to be finite. Catch NaNs (and infinities) in
         // debug builds so misuse does not go unnoticed.
         debug_assert!(
@@ -124,11 +132,14 @@ impl<S: Scalar> SparsePrefixSumExtentModel<S> {
         // Clamp finite negative values to `0.0`.
         self.extents_and_prefixes.insert(
             index,
-            if extent.is_sign_negative() {
-                (S::zero(), S::zero())
-            } else {
-                (extent, S::zero())
-            },
+            (
+                if extent.is_sign_negative() {
+                    S::zero()
+                } else {
+                    extent
+                },
+                S::zero(),
+            ),
         );
         self.last_valid = self
             .last_valid
@@ -168,37 +179,24 @@ impl<S: Scalar> SparsePrefixSumExtentModel<S> {
         self.last_valid = Some(through);
     }
 
-    fn offset_at_inner(&mut self, index: usize) -> S {
-        if index == 0 {
-            return S::zero();
-        }
-        self.ensure_prefix_through(index);
-        let from_default = self.default_extent
-            * S::from_usize(index - self.extents_and_prefixes.range(..index).count());
-        let last = self.extents_and_prefixes.range(..index).last();
-        let from_prefix = last.map_or_else(S::zero, |(_, (_, p))| *p);
-        // dbg!(last, from_default, from_prefix);
-        from_default + from_prefix
-    }
-
-    fn extent_at_inner(&self, index: usize) -> S {
-        self.extents_and_prefixes
-            .get(&index)
-            .map_or(self.default_extent, |(e, _)| *e)
-    }
-
-    fn total_extent_inner(&mut self) -> S {
-        self.len.checked_sub(1).map_or_else(S::zero, |last| {
-            self.offset_at_inner(last) + self.extent_at_inner(last)
-        })
-    }
-
     /// Returns the offset of `index` from the start of the strip.
     ///
     /// This is a convenience wrapper around the internal prefix-sum cache and
     /// is useful when callers want direct access to offsets for a specific item.
     pub fn offset_at(&mut self, index: usize) -> S {
-        self.offset_at_inner(index)
+        let index = index;
+        if index == 0 || self.len == 0 {
+            return S::zero();
+        }
+        let index = index.min(self.len - 1);
+
+        self.ensure_prefix_through(index);
+        let from_default = self.default_extent
+            * S::from_usize(index - self.extents_and_prefixes.range(..index).count());
+        let last = self.extents_and_prefixes.range(..index).last();
+        let from_prefix = last.map_or_else(S::zero, |(_, (_, p))| *p);
+
+        from_default + from_prefix
     }
 
     /// Returns the extent of `index`.
@@ -206,17 +204,22 @@ impl<S: Scalar> SparsePrefixSumExtentModel<S> {
     /// This is a convenience wrapper for callers that need extents without going
     /// through the [`ExtentModel`] trait.
     pub fn extent_at(&self, index: usize) -> S {
-        self.extent_at_inner(index)
+        if index < self.len {
+            self.extents_and_prefixes
+                .get(&index)
+                .map_or(self.default_extent, |(e, _)| *e)
+        } else {
+            S::zero()
+        }
     }
 
     /// Returns the total extent for the first `len` items.
     ///
     /// If `len` exceeds the current number of extents, it is clamped.
     pub fn total_extent_for_len(&mut self, len: usize) -> S {
-        if len == 0 {
-            return S::zero();
-        }
-        self.offset_at_inner(len - 1) + self.extent_at(len - 1)
+        len.min(self.len)
+            .checked_sub(1)
+            .map_or_else(S::zero, |last| self.offset_at(last) + self.extent_at(last))
     }
 
     /// Returns an index for `offset` within the first `len` items.
@@ -230,14 +233,26 @@ impl<S: Scalar> SparsePrefixSumExtentModel<S> {
         }
 
         self.ensure_prefix_through(len);
-
         let target = offset.max(S::zero());
+
+        if self.default_extent == S::zero() {
+            let result = self
+                .extents_and_prefixes
+                .iter()
+                .take_while(|(_, (extent, prefix))| *prefix - *extent <= target)
+                .last();
+            return result.map_or(0, |(index, _)| *index);
+        }
+
         let mut result = (target / self.default_extent)
             .truncate_to_isize()
             .cast_unsigned();
         loop {
             let offset_at = self.offset_at(result);
             let offset_past = offset_at + self.extent_at(result);
+            if offset_at == offset_past {
+                break result.min(len - 1);
+            }
             result = match (offset_at <= target, target < offset_past) {
                 (true, true) => break result.min(len - 1),
                 (true, false) => result.saturating_add(1),
@@ -256,19 +271,25 @@ impl<S: Scalar> ExtentModel for SparsePrefixSumExtentModel<S> {
     }
 
     fn total_extent(&mut self) -> S {
-        self.total_extent_inner()
+        self.total_extent_for_len(self.len)
     }
 
     fn extent_of(&mut self, index: usize) -> S {
-        self.extent_at_inner(index)
+        self.extent_at(index)
     }
 
     fn offset_of(&mut self, index: usize) -> S {
-        self.offset_at_inner(index)
+        self.offset_at(index)
     }
 
     fn index_at_offset(&mut self, offset: S) -> usize {
-        self.index_at_offset_for_len(offset, usize::MAX)
+        self.index_at_offset_for_len(offset, self.len)
+    }
+}
+
+impl<S: Scalar> ResizableExtentModel for SparsePrefixSumExtentModel<S> {
+    fn set_len(&mut self, len: usize) {
+        self.set_len(len)
     }
 }
 
@@ -404,11 +425,11 @@ mod tests {
         let dense_strip = compute_visible_strip(&mut dense_model, 0., 640., 320., 320.);
 
         let mut sparse_model = SparsePrefixSumExtentModel::new(51., 100);
-        assert_eq!(sparse_model.offset_at_inner(100), 5100.);
+        assert_eq!(sparse_model.total_extent(), 5100.);
         for i in 0..6 {
             sparse_model.set_extent(i, 51.);
         }
-        assert_eq!(sparse_model.offset_at_inner(100), 5100.);
+        assert_eq!(sparse_model.total_extent(), 5100.);
         let sparse_strip = compute_visible_strip(&mut sparse_model, 0., 640., 320., 320.);
 
         assert_eq!(dense_strip, sparse_strip);
@@ -421,6 +442,15 @@ mod tests {
         assert_eq!(model.extent_of(0), 0.0);
         assert_eq!(model.offset_of(1), 0.0);
         assert_eq!(model.total_extent(), 0.0);
+    }
+
+    #[test]
+    fn total_extent_for_len_clamp() {
+        let mut model = SparsePrefixSumExtentModel::<f32>::new(10.0, 3);
+
+        assert_eq!(model.total_extent_for_len(0), 0.0);
+        assert_eq!(model.total_extent_for_len(1), 10.0);
+        assert_eq!(model.total_extent_for_len(usize::MAX), 30.0);
     }
 
     #[test]
@@ -472,5 +502,38 @@ mod tests {
 
         assert_eq!(model.extent_of(5), 10.0);
         assert_eq!(model.total_extent_for_len(6), 60.0);
+    }
+
+    #[test]
+    fn index_at_offset_for_zero_default_extent() {
+        let mut model = SparsePrefixSumExtentModel::<f32>::new(0.0, 4);
+        model.set_extent(1, 20.0);
+        model.set_extent(2, 10.0);
+
+        assert_eq!(model.index_at_offset(10.0), 1);
+        assert_eq!(model.index_at_offset(25.0), 2);
+        assert_eq!(model.index_at_offset(35.0), 2);
+    }
+
+    #[test]
+    fn out_of_range_set_extent() {
+        let mut model = SparsePrefixSumExtentModel::<f32>::new(10.0, 4);
+
+        model.set_extent(5, 20.0);
+        assert_eq!(model.extent_at(5), 0.0);
+
+        model.set_len(6);
+        assert_eq!(model.extent_at(5), 10.0);
+    }
+
+    #[test]
+    fn out_of_range_rebuild() {
+        let mut model = SparsePrefixSumExtentModel::<f32>::new(10.0, 4);
+
+        model.rebuild([(2, ()), (5, ())], &|_| 20.0);
+        assert_eq!(model.total_extent(), 50.0);
+
+        model.set_len(6);
+        assert_eq!(model.total_extent(), 70.0);
     }
 }
