@@ -576,6 +576,7 @@ dependencies = [
  "understory_outline",
  "understory_property",
  "understory_style",
+ "understory_timeline_model",
 ]
 
 [[package]]
@@ -744,6 +745,10 @@ dependencies = [
  "invalidation",
  "understory_property",
 ]
+
+[[package]]
+name = "understory_timeline_model"
+version = "0.1.0"
 
 [[package]]
 name = "understory_timing"
