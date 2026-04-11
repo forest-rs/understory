@@ -577,6 +577,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "understory_guide"
+version = "0.1.0"
+dependencies = [
+ "kurbo",
+ "understory_axis",
+]
+
+[[package]]
 name = "understory_index"
 version = "0.0.1"
 dependencies = [
