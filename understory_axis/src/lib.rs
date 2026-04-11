@@ -12,6 +12,7 @@
 //! - label eligibility decisions based on spacing thresholds
 //! - spacing metadata for callers that need consistent axis-derived policy
 //! - configurable major-step ladders and subdivision policies for different axis domains
+//! - scalar ruler snapshots that can be placed along arbitrary 2D baselines
 //!
 //! It does not own:
 //! - domain-specific label formatting
@@ -22,6 +23,7 @@
 //! The intended split is:
 //! - a caller supplies a headless axis mapping plus tick policy
 //! - this crate returns tick positions plus their semantic kind
+//! - an adapter above this crate decides how to place those scalar marks in 2D
 //! - the caller formats tick labels appropriate to its own domain
 //!
 //! ## Minimal example
@@ -77,6 +79,103 @@ pub struct AxisTick {
     pub kind: AxisTickKind,
     /// Whether a higher layer should consider labeling this tick.
     pub labeled: bool,
+}
+
+/// Scalar styling options for a headless ruler snapshot.
+///
+/// These values are lengths in caller-defined view units. A higher layer can
+/// interpret them along any 2D normal direction when placing a ruler, guide, or
+/// timeline header.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct AxisRulerOptions {
+    /// Length assigned to major marks.
+    pub major_mark_extent: f64,
+    /// Length assigned to medium marks.
+    pub medium_mark_extent: f64,
+    /// Length assigned to minor marks.
+    pub minor_mark_extent: f64,
+}
+
+impl Default for AxisRulerOptions {
+    fn default() -> Self {
+        Self {
+            major_mark_extent: 18.0,
+            medium_mark_extent: 14.0,
+            minor_mark_extent: 9.0,
+        }
+    }
+}
+
+impl AxisRulerOptions {
+    /// Returns the mark length for a semantic tick kind.
+    #[must_use]
+    pub fn mark_extent(&self, kind: AxisTickKind) -> f64 {
+        match kind {
+            AxisTickKind::Major => self.major_mark_extent,
+            AxisTickKind::Medium => self.medium_mark_extent,
+            AxisTickKind::Minor => self.minor_mark_extent,
+        }
+    }
+}
+
+/// A single scalar ruler mark positioned along a 1D view span.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct AxisRulerMark {
+    /// Tick coordinate in caller-defined domain units.
+    pub value: f64,
+    /// Tick position in the mapped 1D view span.
+    pub view_position: f64,
+    /// Semantic tick kind.
+    pub kind: AxisTickKind,
+    /// Whether a higher layer should consider labeling this mark.
+    pub labeled: bool,
+    /// Mark length in caller-defined view units.
+    pub mark_extent: f64,
+}
+
+/// A headless scalar ruler snapshot derived from an axis mapping and tick guide.
+///
+/// This does not choose any 2D orientation. A higher layer can place the
+/// returned scalar `view_position` values along an arbitrary line or curve.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AxisRuler1D {
+    view_span: Range<f64>,
+    marks: Vec<AxisRulerMark>,
+}
+
+impl AxisRuler1D {
+    /// Builds a ruler snapshot covering the mapping's visible domain.
+    #[must_use]
+    pub fn from_mapping(
+        mapping: &AxisMapping1D,
+        scale: &AxisScale1D,
+        options: AxisRulerOptions,
+    ) -> Self {
+        let view_span = mapping.view_span();
+        let marks = scale
+            .iter_ticks_in_range(mapping.visible_domain())
+            .map(|tick| AxisRulerMark {
+                value: tick.value,
+                view_position: mapping.domain_to_view(tick.value),
+                kind: tick.kind,
+                labeled: tick.labeled,
+                mark_extent: options.mark_extent(tick.kind),
+            })
+            .collect();
+        Self { view_span, marks }
+    }
+
+    /// Returns the ruler's view span in device coordinates.
+    #[must_use]
+    pub fn view_span(&self) -> Range<f64> {
+        self.view_span.clone()
+    }
+
+    /// Returns the scalar marks in view order.
+    #[must_use]
+    pub fn marks(&self) -> &[AxisRulerMark] {
+        &self.marks
+    }
 }
 
 /// Options controlling automatic 1D axis scale derivation.
@@ -1011,8 +1110,8 @@ mod tests {
     use alloc::vec::Vec;
 
     use super::{
-        AxisMajorStepLadder, AxisMapping1D, AxisScale1D, AxisScaleOptions, AxisSubdivisionPolicy,
-        AxisTickKind,
+        AxisMajorStepLadder, AxisMapping1D, AxisRuler1D, AxisRulerOptions, AxisScale1D,
+        AxisScaleOptions, AxisSubdivisionPolicy, AxisTickKind,
     };
 
     #[test]
@@ -1217,5 +1316,47 @@ mod tests {
         let view = mapping.domain_to_view(value);
         let round_trip = mapping.view_to_domain(view);
         assert!((round_trip - value).abs() < 1e-9);
+    }
+
+    #[test]
+    fn ruler_snapshot_uses_mapping_positions_and_mark_extents() {
+        let mapping = AxisMapping1D::linear(20.0..220.0, 0.0..100.0);
+        let scale = AxisScale1D::from_mapping(&mapping, AxisScaleOptions::default());
+        let options = AxisRulerOptions {
+            major_mark_extent: 21.0,
+            medium_mark_extent: 13.0,
+            minor_mark_extent: 7.0,
+        };
+        let ruler = AxisRuler1D::from_mapping(&mapping, &scale, options);
+        assert_eq!(ruler.view_span(), 20.0..220.0);
+        assert!(!ruler.marks().is_empty());
+        for mark in ruler.marks() {
+            assert!((mark.view_position - mapping.domain_to_view(mark.value)).abs() < 1e-9);
+            let expected_extent = match mark.kind {
+                AxisTickKind::Major => 21.0,
+                AxisTickKind::Medium => 13.0,
+                AxisTickKind::Minor => 7.0,
+            };
+            assert_eq!(mark.mark_extent, expected_extent);
+        }
+    }
+
+    #[test]
+    fn log_ruler_snapshot_tracks_log_major_positions() {
+        let mapping = AxisMapping1D::log(0.0..300.0, 1.0..1_000.0, 10.0);
+        let scale = AxisScale1D::from_mapping(&mapping, AxisScaleOptions::default());
+        let ruler = AxisRuler1D::from_mapping(&mapping, &scale, AxisRulerOptions::default());
+        let major_positions: Vec<_> = ruler
+            .marks()
+            .iter()
+            .filter(|mark| mark.kind == AxisTickKind::Major)
+            .map(|mark| (mark.value, mark.view_position))
+            .collect();
+        for value in [1.0, 10.0, 100.0] {
+            let expected = mapping.domain_to_view(value);
+            assert!(major_positions.iter().any(|(mark_value, position)| {
+                *mark_value == value && (*position - expected).abs() < 1e-9
+            }));
+        }
     }
 }

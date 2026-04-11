@@ -10,11 +10,13 @@ This crate owns:
 - major / medium / minor tick classification
 - labeled-tick eligibility
 - spacing metadata for callers that want consistent axis-derived policy
+- scalar ruler snapshots ready for 2D placement by higher layers
 
 Typical usage:
 
 - define an `AxisMapping1D` for the visible domain and view span
 - derive an `AxisScale1D` from that mapping
+- optionally derive an `AxisRuler1D` for scalar mark positions
 - iterate ticks across a visible numeric range
 - format labels in the caller's own domain language
 
