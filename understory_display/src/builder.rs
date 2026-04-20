@@ -6,7 +6,7 @@
 use kurbo::{Rect, RoundedRect, Shape as _, Stroke};
 use peniko::Brush;
 
-use crate::{DisplayItem, DisplayList, DisplayOp, ItemId, SemanticId};
+use crate::{DisplayGlyphRun, DisplayItem, DisplayList, DisplayOp, ItemId, SemanticId};
 
 /// Builder for one retained [`DisplayList`].
 #[derive(Clone, Debug, Default)]
@@ -116,6 +116,17 @@ impl DisplayListBuilder {
         )
     }
 
+    /// Appends one retained glyph-run item.
+    #[must_use]
+    pub fn glyph_run(
+        &mut self,
+        run: DisplayGlyphRun,
+        z: i32,
+        semantic_id: Option<SemanticId>,
+    ) -> ItemId {
+        self.push_with_bounds(run.bounds, z, semantic_id, DisplayOp::GlyphRun { run })
+    }
+
     /// Finishes the builder and returns the retained display list.
     #[must_use]
     pub fn build(self) -> DisplayList {
@@ -180,5 +191,24 @@ mod tests {
         );
         let list = builder.build();
         assert_eq!(list.items()[0].bounds, Rect::new(8.0, 18.0, 32.0, 42.0));
+    }
+
+    #[cfg(not(feature = "std"))]
+    #[test]
+    fn glyph_run_uses_run_bounds() {
+        let mut builder = DisplayListBuilder::new();
+        let _ = builder.glyph_run(
+            DisplayGlyphRun {
+                font_size: 14.0,
+                normalized_coords: Vec::new(),
+                brush: Brush::Solid(Color::from_rgb8(0, 0, 0)),
+                glyphs: Vec::new(),
+                bounds: Rect::new(4.0, 5.0, 12.0, 19.0),
+            },
+            3,
+            None,
+        );
+        let list = builder.build();
+        assert_eq!(list.items()[0].bounds, Rect::new(4.0, 5.0, 12.0, 19.0));
     }
 }

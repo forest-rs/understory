@@ -14,9 +14,9 @@ The focus is on clean separation of concerns, pluggable performance trade‑offs
   - The examples crate includes both a headless showcase and an `imaging`-backed visual demo that lowers this snapshot through `understory_display` at the example layer.
 
 - `understory_display`
-  - Small retained display-list primitives between higher-level retained UI/runtime layers and renderer-facing paint backends.
-  - Owns stable display item ids, retained draw items, and a calm first-slice op set for filled/stroked rects and rounded rects.
-  - Designed to sit between systems like `overstory` and lowerers such as `imaging`, without taking on widget/runtime policy or text shaping.
+  - Small retained display-tree and display-list primitives between higher-level retained UI/runtime layers and renderer-facing paint backends.
+  - Owns a small retained display tree for local measure/place, stable display item ids, retained draw items as a flat lowering target, and Parley-backed glyph runs behind `std`.
+  - Designed to sit between systems like `overstory` and lowerers such as `imaging`, without taking on widget/runtime policy or rich text/editor semantics.
 
 - `understory_index`
   - A generic 2D AABB index with pluggable backends: FlatVec (linear scan), R‑tree, and BVH.
@@ -132,7 +132,7 @@ For example, a canvas or DWG or DXF viewer can reuse the box and index layers wi
   - `understory_focus/README.md` covers focus navigation policies and adapters.
   - `understory_inspector/README.md` documents the host-side controller for outline-backed inspection UIs.
   - `understory_outline/README.md` documents hierarchical visible-row projection, expansion state, and grouped/tree-style usage.
-  - `understory_display/README.md` documents the retained display-list layer and how it fits between retained UI/runtime state and paint backends.
+  - `understory_display/README.md` documents the retained display-tree/display-list layer and how it fits between retained UI/runtime state and paint backends.
   - `understory_selection/README.md` documents the selection container, anchor/revision semantics, and click helpers.
   - `understory_transcript/README.md` documents append-order transcript storage, generic payloads, explicit update semantics, typed entry kinds, and chat/tool/process-style usage.
   - `understory_view2d/README.md` documents the 2D and 1D viewport types, clamping/fit modes, and examples of using visible regions for culling.

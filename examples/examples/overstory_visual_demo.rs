@@ -12,10 +12,6 @@
 //! - `imaging_vello_cpu` rasterizes that scene into an RGBA buffer.
 //! - `softbuffer` presents the result in a `winit` window.
 //!
-//! Labels are intentionally rendered as simple foreground bars rather than real
-//! text. That keeps the current missing display/text seam explicit instead of
-//! pretending the problem is already solved.
-//!
 //! Run:
 //! - `cargo run -p understory_examples --example overstory_visual_demo`
 
@@ -31,9 +27,7 @@ use overstory::{
 };
 use softbuffer::Surface;
 use ui_events_winit::{WindowEventReducer, WindowEventTranslation};
-use understory_examples::overstory_display::{
-    display_list_from_overstory, imaging_scene_from_display,
-};
+use understory_examples::overstory_display::{OverstoryDisplayLowerer, imaging_scene_from_display};
 use understory_style::{
     IdSet, Selector, StyleBuilder, StyleCascade, StyleCascadeBuilder, StyleOrigin,
     StyleSheetBuilder, Theme, ThemeBuilder,
@@ -74,11 +68,11 @@ enum RenderState {
     Suspended,
 }
 
-#[derive(Debug)]
 struct DemoApp {
     ui: Ui,
     ids: DemoIds,
     reducer: WindowEventReducer,
+    display: OverstoryDisplayLowerer,
     render_state: RenderState,
 }
 
@@ -89,6 +83,7 @@ impl DemoApp {
             ui,
             ids,
             reducer: WindowEventReducer::default(),
+            display: OverstoryDisplayLowerer::new(),
             render_state: RenderState::Suspended,
         }
     }
@@ -237,7 +232,7 @@ impl DemoApp {
         }
 
         let snapshot = self.ui.scene();
-        let display_list = display_list_from_overstory(snapshot);
+        let display_list = self.display.display_list_from_overstory(snapshot);
         let imaging_scene = imaging_scene_from_display(&display_list);
         let rgba = renderer
             .render_scene(

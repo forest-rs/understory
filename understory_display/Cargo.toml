@@ -9,9 +9,14 @@ readme = "README.md"
 keywords = ["display", "render-tree", "scene", "understory"]
 categories = ["graphics", "gui", "data-structures"]
 
+[features]
+default = []
+std = ["dep:parley", "parley/std", "parley/system"]
+
 [dependencies]
 kurbo.workspace = true
 peniko.workspace = true
+parley = { workspace = true, optional = true }
 
 [lints]
 workspace = true

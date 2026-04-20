@@ -6,7 +6,7 @@ publish = false
 
 [dependencies]
 overstory = { path = "../overstory" }
-understory_display = { path = "../understory_display" }
+understory_display = { path = "../understory_display", features = ["std"] }
 imaging = { git = "https://github.com/forest-rs/imaging", rev = "999b356f7f2e043292e3c649e1eb803374c347ee", package = "imaging", features = ["std"] }
 imaging_vello_cpu = { git = "https://github.com/forest-rs/imaging", rev = "999b356f7f2e043292e3c649e1eb803374c347ee", package = "imaging_vello_cpu" }
 understory_responder = { path = "../understory_responder", features = [

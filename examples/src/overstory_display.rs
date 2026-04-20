@@ -3,24 +3,104 @@
 
 //! Lowering helpers between Overstory, Understory Display, and Imaging.
 
-use alloc::vec::Vec;
-
-use imaging::{Painter, record};
-use kurbo::{Rect, RoundedRect};
+use imaging::{
+    Painter,
+    record::{self, Glyph},
+};
+use kurbo::{Affine, Point, Stroke, Vec2};
 use overstory::ResolvedElement;
 use peniko::Brush;
-use understory_display::{DisplayList, DisplayListBuilder, DisplayOp};
+use understory_display::{
+    BoxConstraints, DisplayAlign, DisplayList, DisplayNode, DisplayOp, DisplayTree, Insets,
+    TextEngine, parley::Alignment,
+};
 
-extern crate alloc;
+/// Stateful Overstory -> display-list lowerer with reusable text shaping state.
+#[derive(Clone, Default)]
+pub struct OverstoryDisplayLowerer {
+    text: TextEngine,
+}
 
-/// Lower one resolved Overstory snapshot into a retained display list.
-#[must_use]
-pub fn display_list_from_overstory(snapshot: &overstory::SceneSnapshot) -> DisplayList {
-    let mut builder = DisplayListBuilder::new();
-    for (z, element) in snapshot.resolved().iter().enumerate() {
-        append_resolved_element(&mut builder, element, z as i32);
+impl OverstoryDisplayLowerer {
+    /// Creates a new lowerer.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
     }
-    builder.build()
+
+    /// Lowers one resolved Overstory snapshot into a retained display list.
+    #[must_use]
+    pub fn display_list_from_overstory(
+        &mut self,
+        snapshot: &overstory::SceneSnapshot,
+    ) -> DisplayList {
+        let root_origin = Point::new(snapshot.view_rect().x0, snapshot.view_rect().y0);
+        let mut tree = DisplayTree::new(DisplayNode::fixed_frame(
+            snapshot.view_rect().size(),
+            DisplayNode::stack(
+                snapshot
+                    .resolved()
+                    .iter()
+                    .map(|element| Self::display_node_for(root_origin, element))
+                    .collect(),
+            ),
+        ));
+        tree.layout(
+            &mut self.text,
+            root_origin,
+            BoxConstraints::tight(snapshot.view_rect().size()),
+        );
+        tree.to_display_list()
+    }
+
+    fn display_node_for(root_origin: Point, element: &ResolvedElement) -> DisplayNode {
+        let mut children = Vec::new();
+        let size = element.rect.size();
+
+        if element.background.to_rgba8().a != 0 {
+            let background = Brush::Solid(element.background);
+            children.push(if element.corner_radius > 0.0 {
+                DisplayNode::fill_rounded_rect(element.corner_radius, background)
+            } else {
+                DisplayNode::fill_rect(background)
+            });
+        }
+
+        if element.border.width > 0.0 && element.border.color.to_rgba8().a != 0 {
+            let border = Brush::Solid(element.border.color);
+            let stroke = Stroke::new(element.border.width);
+            children.push(if element.corner_radius > 0.0 {
+                DisplayNode::stroke_rounded_rect(element.corner_radius, stroke, border)
+            } else {
+                DisplayNode::stroke_rect(stroke, border)
+            });
+        }
+
+        if let Some(label) = element.label.as_deref() {
+            children.push(DisplayNode::align(
+                DisplayAlign::Start,
+                DisplayAlign::Center,
+                DisplayNode::padding(
+                    Insets::symmetric(16.0, 0.0),
+                    DisplayNode::text(
+                        label,
+                        Brush::Solid(element.foreground),
+                        21.0,
+                        "sans-serif",
+                        Alignment::Start,
+                    ),
+                ),
+            ));
+        }
+
+        DisplayNode::offset(
+            Vec2::new(
+                element.rect.x0 - root_origin.x,
+                element.rect.y0 - root_origin.y,
+            ),
+            DisplayNode::fixed_frame(size, DisplayNode::stack(children)),
+        )
+    }
 }
 
 /// Lower one retained display list into an imaging recording.
@@ -51,68 +131,72 @@ pub fn imaging_scene_from_display(list: &DisplayList) -> record::Scene {
                 } => {
                     painter.stroke(*rect, stroke, brush).draw();
                 }
+                DisplayOp::GlyphRun { run } => {
+                    let glyphs = run
+                        .glyphs
+                        .iter()
+                        .map(|glyph| Glyph {
+                            id: glyph.id,
+                            x: glyph.origin.x as f32,
+                            y: glyph.origin.y as f32,
+                        })
+                        .collect::<Vec<_>>();
+                    painter
+                        .glyphs(&run.font, &run.brush)
+                        .transform(Affine::IDENTITY)
+                        .font_size(run.font_size)
+                        .normalized_coords(&run.normalized_coords)
+                        .draw(&peniko::Style::Fill(peniko::Fill::NonZero), &glyphs);
+                }
             }
         }
     }
     scene
 }
 
-fn append_resolved_element(builder: &mut DisplayListBuilder, element: &ResolvedElement, z: i32) {
-    let background = Brush::Solid(element.background);
-    if element.background.to_rgba8().a != 0 {
-        if element.corner_radius > 0.0 {
-            let _ = builder.fill_rounded_rect(
-                RoundedRect::from_rect(element.rect, element.corner_radius),
-                background,
-                z,
-                None,
-            );
-        } else {
-            let _ = builder.fill_rect(element.rect, background, z, None);
-        }
-    }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use peniko::Color;
 
-    if element.border.width > 0.0 && element.border.color.to_rgba8().a != 0 {
-        let border = Brush::Solid(element.border.color);
-        let stroke = kurbo::Stroke::new(element.border.width);
-        if element.corner_radius > 0.0 {
-            let _ = builder.stroke_rounded_rect(
-                RoundedRect::from_rect(element.rect, element.corner_radius),
-                stroke,
-                border,
-                z,
-                None,
-            );
-        } else {
-            let _ = builder.stroke_rect(element.rect, stroke, border, z, None);
-        }
-    }
+    #[test]
+    fn display_tree_text_lowering_produces_positioned_glyphs() {
+        let mut text = TextEngine::new();
+        let mut tree = DisplayTree::new(DisplayNode::fixed_frame(
+            kurbo::Size::new(160.0, 48.0),
+            DisplayNode::stack(vec![
+                DisplayNode::fill_rounded_rect(10.0, Brush::Solid(Color::from_rgb8(240, 240, 240))),
+                DisplayNode::align(
+                    DisplayAlign::Start,
+                    DisplayAlign::Center,
+                    DisplayNode::padding(
+                        Insets::symmetric(16.0, 0.0),
+                        DisplayNode::text(
+                            "Overstory",
+                            Brush::Solid(Color::BLACK),
+                            21.0,
+                            "sans-serif",
+                            Alignment::Start,
+                        ),
+                    ),
+                ),
+            ]),
+        ));
+        tree.layout(
+            &mut text,
+            Point::ORIGIN,
+            BoxConstraints::tight(kurbo::Size::new(160.0, 48.0)),
+        );
 
-    if element.label.is_some() {
-        let foreground = Brush::Solid(element.foreground);
-        for placeholder in label_placeholders(element) {
-            let _ = builder.fill_rounded_rect(
-                RoundedRect::from_rect(placeholder, placeholder.height() * 0.5),
-                foreground.clone(),
-                z,
-                None,
-            );
-        }
+        let list = tree.to_display_list();
+        let glyph_count: usize = list
+            .items()
+            .iter()
+            .filter_map(|item| match &item.op {
+                DisplayOp::GlyphRun { run } => Some(run.glyphs.len()),
+                _ => None,
+            })
+            .sum();
+        assert!(glyph_count > 0, "expected at least one positioned glyph");
     }
-}
-
-fn label_placeholders(element: &ResolvedElement) -> Vec<Rect> {
-    let Some(label) = element.label.as_deref() else {
-        return Vec::new();
-    };
-    let inset_x = 16.0;
-    let base_y = element.rect.y0 + element.rect.height() * 0.5 - 4.0;
-    let max_width = (element.rect.width() - inset_x * 2.0).max(24.0);
-    let label_width = (f64::from(label.len() as u32) * 7.0).min(max_width);
-    vec![Rect::new(
-        element.rect.x0 + inset_x,
-        base_y,
-        element.rect.x0 + inset_x + label_width,
-        base_y + 8.0,
-    )]
 }
