@@ -8,13 +8,14 @@ use core::num::NonZeroU64;
 
 use invalidation::ChannelSet;
 use kurbo::{Point, Rect};
+use peniko::Color;
 use ui_events::pointer::{PointerButton, PointerEvent, PointerInfo};
 use understory_property::{DependencyObjectExt, Property, PropertyRegistry};
 use understory_style::{ClassId, IdSet, StyleCascade, Theme, ThemeBuilder};
 
 use crate::{
-    BuiltInProperties, ButtonClass, Color, DirtyChannels, Element, ElementId, ElementKind,
-    Interaction, InteractionBatch, LayoutClass, RuntimeState, SceneSnapshot, ThemeKeys,
+    BuiltInProperties, ButtonClass, DirtyChannels, Element, ElementId, ElementKind, Interaction,
+    InteractionBatch, LayoutClass, RuntimeState, SceneSnapshot, ThemeKeys,
 };
 
 /// Retained Overstory UI state.
@@ -360,38 +361,47 @@ impl Ui {
 #[must_use]
 pub fn default_theme() -> Theme {
     ThemeBuilder::new()
-        .set(ThemeKeys::ROOT_BACKGROUND, Color::rgba8(242, 239, 232, 255))
+        .set(
+            ThemeKeys::ROOT_BACKGROUND,
+            Color::from_rgba8(242, 239, 232, 255),
+        )
         .set(
             ThemeKeys::PANEL_BACKGROUND,
-            Color::rgba8(255, 252, 246, 255),
+            Color::from_rgba8(255, 252, 246, 255),
         )
         .set(
             ThemeKeys::SIDEBAR_BACKGROUND,
-            Color::rgba8(226, 222, 213, 255),
+            Color::from_rgba8(226, 222, 213, 255),
         )
         .set(
             ThemeKeys::BUTTON_BACKGROUND,
-            Color::rgba8(238, 233, 225, 255),
+            Color::from_rgba8(238, 233, 225, 255),
         )
         .set(
             ThemeKeys::BUTTON_HOVER_BACKGROUND,
-            Color::rgba8(230, 225, 216, 255),
+            Color::from_rgba8(230, 225, 216, 255),
         )
         .set(
             ThemeKeys::BUTTON_PRESSED_BACKGROUND,
-            Color::rgba8(214, 208, 198, 255),
+            Color::from_rgba8(214, 208, 198, 255),
         )
-        .set(ThemeKeys::PRIMARY_BACKGROUND, Color::rgba8(24, 92, 72, 255))
+        .set(
+            ThemeKeys::PRIMARY_BACKGROUND,
+            Color::from_rgba8(24, 92, 72, 255),
+        )
         .set(
             ThemeKeys::PRIMARY_HOVER_BACKGROUND,
-            Color::rgba8(31, 109, 86, 255),
+            Color::from_rgba8(31, 109, 86, 255),
         )
         .set(
             ThemeKeys::PRIMARY_PRESSED_BACKGROUND,
-            Color::rgba8(18, 72, 57, 255),
+            Color::from_rgba8(18, 72, 57, 255),
         )
-        .set(ThemeKeys::FOREGROUND, Color::rgba8(33, 37, 41, 255))
-        .set(ThemeKeys::BORDER_COLOR, Color::rgba8(143, 133, 122, 255))
+        .set(ThemeKeys::FOREGROUND, Color::from_rgba8(33, 37, 41, 255))
+        .set(
+            ThemeKeys::BORDER_COLOR,
+            Color::from_rgba8(143, 133, 122, 255),
+        )
         .set(ThemeKeys::CORNER_RADIUS, 10.0_f64)
         .set(ThemeKeys::PADDING, 16.0_f64)
         .set(ThemeKeys::GAP, 12.0_f64)

@@ -18,12 +18,21 @@ use crate::{
 };
 
 /// Border styling for one resolved element.
-#[derive(Copy, Clone, Debug, Default, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub struct BorderStyle {
     /// Border color.
     pub color: Color,
     /// Border width in scene units.
     pub width: f64,
+}
+
+impl Default for BorderStyle {
+    fn default() -> Self {
+        Self {
+            color: Color::TRANSPARENT,
+            width: 0.0,
+        }
+    }
 }
 
 /// One resolved retained element, suitable for a renderer-facing adapter.

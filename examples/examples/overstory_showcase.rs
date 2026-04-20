@@ -155,8 +155,9 @@ fn make_button_cascade(ui: &Ui) -> understory_style::StyleCascade {
 fn print_scene(ui: &mut Ui) {
     for element in ui.scene().resolved() {
         let indent = "  ".repeat(element.depth as usize);
+        let background = element.background.to_rgba8();
         println!(
-            "{}{:?} {:?} rect=({:.0},{:.0})-({:.0},{:.0}) bg=#{:08x} border={} hover={} pressed={} label={}",
+            "{}{:?} {:?} rect=({:.0},{:.0})-({:.0},{:.0}) bg=rgba({:02x},{:02x},{:02x},{:02x}) border={} hover={} pressed={} label={}",
             indent,
             element.kind,
             element.id,
@@ -164,7 +165,10 @@ fn print_scene(ui: &mut Ui) {
             element.rect.y0,
             element.rect.x1,
             element.rect.y1,
-            element.background.to_rgba8(),
+            background.r,
+            background.g,
+            background.b,
+            background.a,
             element.border.width,
             element.hovered,
             element.pressed,

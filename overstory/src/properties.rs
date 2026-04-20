@@ -4,10 +4,9 @@
 //! Built-in dependency properties and theme keys for Overstory.
 
 use invalidation::Channel;
+use peniko::Color;
 use understory_property::{Property, PropertyMetadataBuilder, PropertyRegistry};
 use understory_style::ResourceKey;
-
-use crate::Color;
 
 /// Coarse dirty channels used by the first Overstory slice.
 #[derive(Copy, Clone, Debug, Default)]

@@ -48,19 +48,20 @@
 
 extern crate alloc;
 
-mod color;
 mod element;
 mod properties;
 mod runtime;
 mod scene;
 mod ui;
 
-pub use color::Color;
 pub use element::{
     ButtonClass, Element, ElementId, ElementKind, LayoutClass, PSEUDO_DISABLED, PSEUDO_HOVER,
     PSEUDO_PRESSED, PseudoState, TYPE_BUTTON, TYPE_COLUMN, TYPE_PANEL, TYPE_ROOT, TYPE_ROW,
     TYPE_SPACER,
 };
+/// Re-export `peniko` so Overstory callers can use the shared color vocabulary
+/// and palettes without adding another direct dependency for basic styling.
+pub use peniko::{self, Color};
 pub use properties::{BuiltInProperties, DirtyChannels, ThemeKeys};
 pub use runtime::{Interaction, InteractionBatch, RuntimeState};
 pub use scene::{BorderStyle, ResolvedElement, SceneSnapshot};

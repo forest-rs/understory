@@ -9,7 +9,8 @@ Understory crates for the headless kernels:
 - `understory_style` for selector-based style and theme resolution,
 - `understory_box_tree` for spatial indexing and hit testing,
 - `understory_responder` for deterministic routing helpers,
-- `ui-events` for transport-agnostic input event types.
+- `ui-events` for transport-agnostic input event types,
+- `peniko` for the shared color vocabulary exposed by the public API.
 
 This crate intentionally does **not** define a long-term display-list or
 presentation-tree abstraction. The current visual snapshot is a retained,
