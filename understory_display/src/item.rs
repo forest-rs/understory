@@ -6,7 +6,6 @@
 use alloc::{boxed::Box, vec::Vec};
 
 use kurbo::{Affine, Point, Rect, RoundedRect, Stroke, Vec2};
-#[cfg(feature = "std")]
 use parley::FontData;
 use peniko::Brush;
 
@@ -25,7 +24,6 @@ pub struct DisplayGlyph {
 #[derive(Clone, Debug, PartialEq)]
 pub struct DisplayGlyphRun {
     /// Font resource referenced by this run.
-    #[cfg(feature = "std")]
     pub font: FontData,
     /// Font size used during shaping.
     pub font_size: f32,

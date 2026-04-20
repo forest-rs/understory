@@ -14,7 +14,7 @@ use parley::{
 };
 use peniko::Brush;
 
-use crate::{DisplayGlyph, DisplayGlyphRun};
+use crate::{DisplayGlyph, DisplayGlyphRun, TextAlign};
 
 /// Shared Parley shaping resources for retained display glyph runs.
 #[derive(Clone, Default)]
@@ -52,7 +52,7 @@ impl TextEngine {
         layout.break_all_lines(request.max_advance);
         layout.align(
             request.max_advance,
-            request.alignment,
+            request.alignment.into(),
             AlignmentOptions::default(),
         );
 
@@ -118,5 +118,15 @@ pub struct TextRunRequest<'a> {
     /// Optional wrap width.
     pub max_advance: Option<f32>,
     /// Requested paragraph alignment.
-    pub alignment: Alignment,
+    pub alignment: TextAlign,
+}
+
+impl From<TextAlign> for Alignment {
+    fn from(value: TextAlign) -> Self {
+        match value {
+            TextAlign::Start => Self::Start,
+            TextAlign::Center => Self::Center,
+            TextAlign::End => Self::End,
+        }
+    }
 }

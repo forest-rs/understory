@@ -68,10 +68,9 @@ pub use item::{
 pub use list::DisplayList;
 #[cfg(feature = "std")]
 pub use text::{TextEngine, TextRunRequest};
-#[cfg(feature = "std")]
-pub use tree::DisplayText;
 pub use tree::{
-    BoxConstraints, DisplayAlign, DisplayLayout, DisplayNode, DisplayNodeKind, DisplayTree, Insets,
+    BoxConstraints, DisplayAlign, DisplayLayout, DisplayNode, DisplayNodeKind, DisplayText,
+    DisplayTree, Insets, TextAlign,
 };
 
 pub use kurbo;

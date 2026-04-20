@@ -12,7 +12,7 @@ use peniko::Brush;
 
 use crate::{DisplayGlyphRun, DisplayList, DisplayListBuilder, SemanticId};
 #[cfg(feature = "std")]
-use crate::{TextEngine, TextRunRequest, parley::Alignment};
+use crate::{TextEngine, TextRunRequest};
 
 /// Box constraints used during display-tree measure/place.
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -141,6 +141,18 @@ pub enum DisplayAlign {
     End,
     /// Fill the available space.
     Fill,
+}
+
+/// Paragraph/text alignment within a display text node.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub enum TextAlign {
+    /// Align to the leading edge.
+    #[default]
+    Start,
+    /// Center within the available advance.
+    Center,
+    /// Align to the trailing edge.
+    End,
 }
 
 /// Final layout information for one retained display node.
@@ -364,14 +376,13 @@ impl DisplayNode {
     }
 
     /// Creates a text leaf.
-    #[cfg(feature = "std")]
     #[must_use]
     pub fn text(
         text: impl Into<Box<str>>,
         brush: Brush,
         font_size: f32,
         font_family: impl Into<Box<str>>,
-        alignment: Alignment,
+        alignment: TextAlign,
     ) -> Self {
         Self {
             semantic_id: None,
@@ -492,25 +503,22 @@ pub enum DisplayNodeKind {
         brush: Brush,
     },
     /// One retained text node.
-    #[cfg(feature = "std")]
     Text(DisplayText),
 }
 
 /// Retained text node state.
-#[cfg(feature = "std")]
 #[derive(Clone, Debug, PartialEq)]
 pub struct DisplayText {
     text: Box<str>,
     brush: Brush,
     font_size: f32,
     font_family: Box<str>,
-    alignment: Alignment,
+    alignment: TextAlign,
     cached_max_advance: Option<f32>,
     runs: Vec<DisplayGlyphRun>,
     measured_size: Size,
 }
 
-#[cfg(feature = "std")]
 impl DisplayText {
     /// Creates a new retained text node.
     #[must_use]
@@ -519,7 +527,7 @@ impl DisplayText {
         brush: Brush,
         font_size: f32,
         font_family: impl Into<Box<str>>,
-        alignment: Alignment,
+        alignment: TextAlign,
     ) -> Self {
         Self {
             text: text.into(),
@@ -552,7 +560,6 @@ impl DisplayText {
     }
 }
 
-#[cfg(feature = "std")]
 fn measure_node(
     node: &mut DisplayNode,
     text: &mut TextEngine,
@@ -798,7 +805,6 @@ fn lower_node(node: &DisplayNode, builder: &mut DisplayListBuilder, z: &mut i32)
             );
             *z += 1;
         }
-        #[cfg(feature = "std")]
         DisplayNodeKind::Text(display_text) => {
             for run in &display_text.runs {
                 let _ = builder.glyph_run(run.clone(), *z, node.semantic_id);
@@ -866,7 +872,7 @@ mod tests {
             Brush::Solid(Color::BLACK),
             14.0,
             "sans-serif",
-            Alignment::Start,
+            TextAlign::Start,
         ));
         tree.layout(
             &mut text,
@@ -899,7 +905,7 @@ mod tests {
                             Brush::Solid(Color::BLACK),
                             14.0,
                             "sans-serif",
-                            Alignment::Start,
+                            TextAlign::Start,
                         ),
                     ),
                 ),

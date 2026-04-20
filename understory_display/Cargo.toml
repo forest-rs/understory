@@ -11,12 +11,12 @@ categories = ["graphics", "gui", "data-structures"]
 
 [features]
 default = []
-std = ["dep:parley", "parley/std", "parley/system"]
+std = ["parley/std", "parley/system"]
 
 [dependencies]
 kurbo.workspace = true
 peniko.workspace = true
-parley = { workspace = true, optional = true }
+parley.workspace = true
 
 [lints]
 workspace = true
