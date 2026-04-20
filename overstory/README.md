@@ -42,3 +42,6 @@ This crate does not yet own:
 ## Example
 
 See `examples/overstory_showcase.rs` in the workspace examples crate.
+For a windowed demo, see `examples/overstory_visual_demo.rs`, which lowers
+Overstory's resolved snapshot through `understory_display` and only then into
+`imaging`.

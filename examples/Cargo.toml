@@ -6,12 +6,17 @@ publish = false
 
 [dependencies]
 overstory = { path = "../overstory" }
+understory_display = { path = "../understory_display" }
+imaging = { git = "https://github.com/forest-rs/imaging", rev = "999b356f7f2e043292e3c649e1eb803374c347ee", package = "imaging", features = ["std"] }
+imaging_vello_cpu = { git = "https://github.com/forest-rs/imaging", rev = "999b356f7f2e043292e3c649e1eb803374c347ee", package = "imaging_vello_cpu" }
 understory_responder = { path = "../understory_responder", features = [
   "box_tree_adapter",
   "hit2d_adapter",
   "std",
 ] }
 kurbo = { workspace = true, default-features = true }
+peniko = { workspace = true, default-features = true }
+softbuffer = "0.4.8"
 understory_box_tree = { path = "../understory_box_tree" }
 understory_focus = { path = "../understory_focus" }
 understory_index = { path = "../understory_index" }
@@ -22,3 +27,5 @@ understory_outline = { path = "../understory_outline" }
 understory_style = { path = "../understory_style" }
 understory_transcript = { path = "../understory_transcript" }
 understory_virtual_list = { path = "../understory_virtual_list" }
+ui-events-winit = "0.3.0"
+winit = "0.30.10"
