@@ -7,7 +7,7 @@ extern crate alloc;
 
 use alloc::{boxed::Box, vec::Vec};
 
-use kurbo::{Insets as KurboInsets, Point, Rect, RoundedRect, Size, Stroke, Vec2};
+use kurbo::{Affine, Insets as KurboInsets, Point, Rect, RoundedRect, Size, Stroke, Vec2};
 use peniko::Brush;
 
 use crate::{DisplayGlyphRun, DisplayList, DisplayListBuilder, SemanticId};
@@ -278,6 +278,44 @@ impl DisplayNode {
         }
     }
 
+    /// Creates a transform node.
+    #[must_use]
+    pub fn transform(transform: Affine, child: Self) -> Self {
+        Self {
+            semantic_id: None,
+            layout: DisplayLayout::default(),
+            kind: DisplayNodeKind::Transform {
+                transform,
+                child: Box::new(child),
+            },
+        }
+    }
+
+    /// Creates a rectangular clip node.
+    #[must_use]
+    pub fn clip_rect(child: Self) -> Self {
+        Self {
+            semantic_id: None,
+            layout: DisplayLayout::default(),
+            kind: DisplayNodeKind::ClipRect {
+                child: Box::new(child),
+            },
+        }
+    }
+
+    /// Creates an opacity node.
+    #[must_use]
+    pub fn opacity(opacity: f32, child: Self) -> Self {
+        Self {
+            semantic_id: None,
+            layout: DisplayLayout::default(),
+            kind: DisplayNodeKind::Opacity {
+                opacity: opacity.clamp(0.0, 1.0),
+                child: Box::new(child),
+            },
+        }
+    }
+
     /// Creates a fill-rect leaf that fills its assigned layout rectangle.
     #[must_use]
     pub fn fill_rect(brush: Brush) -> Self {
@@ -406,6 +444,25 @@ pub enum DisplayNodeKind {
         /// Child node.
         child: Box<DisplayNode>,
     },
+    /// Apply an affine transform to a child subtree after layout.
+    Transform {
+        /// Affine transform applied to the child subtree.
+        transform: Affine,
+        /// Child node.
+        child: Box<DisplayNode>,
+    },
+    /// Clip a child subtree to the assigned rectangle.
+    ClipRect {
+        /// Child node.
+        child: Box<DisplayNode>,
+    },
+    /// Apply uniform opacity to a child subtree.
+    Opacity {
+        /// Alpha multiplier in `0..=1`.
+        opacity: f32,
+        /// Child node.
+        child: Box<DisplayNode>,
+    },
     /// Fill the assigned layout rectangle.
     FillRect {
         /// Fill brush.
@@ -517,7 +574,13 @@ fn measure_node(
         }
         DisplayNodeKind::Align { child, .. } => measure_node(child, text, constraints),
         DisplayNodeKind::Offset { child, .. } => measure_node(child, text, constraints),
-        DisplayNodeKind::FixedFrame { size, .. } => constraints.constrain(*size),
+        DisplayNodeKind::FixedFrame { size, .. } => Size::new(
+            size.width.clamp(0.0, constraints.max.width),
+            size.height.clamp(0.0, constraints.max.height),
+        ),
+        DisplayNodeKind::Transform { child, .. }
+        | DisplayNodeKind::ClipRect { child }
+        | DisplayNodeKind::Opacity { child, .. } => measure_node(child, text, constraints),
         DisplayNodeKind::FillRect { .. }
         | DisplayNodeKind::StrokeRect { .. }
         | DisplayNodeKind::FillRoundedRect { .. }
@@ -607,6 +670,27 @@ fn layout_node(
                 bounds: rect.union(child.layout.bounds()),
             };
         }
+        DisplayNodeKind::Transform { transform, child } => {
+            let _ = layout_node(child, text, origin, BoxConstraints::tight(size));
+            node.layout = DisplayLayout {
+                rect,
+                bounds: transform.transform_rect_bbox(child.layout.bounds()),
+            };
+        }
+        DisplayNodeKind::ClipRect { child } => {
+            let _ = layout_node(child, text, origin, BoxConstraints::tight(size));
+            node.layout = DisplayLayout {
+                rect,
+                bounds: rect.intersect(child.layout.bounds()),
+            };
+        }
+        DisplayNodeKind::Opacity { child, .. } => {
+            let _ = layout_node(child, text, origin, BoxConstraints::tight(size));
+            node.layout = DisplayLayout {
+                rect,
+                bounds: child.layout.bounds(),
+            };
+        }
         DisplayNodeKind::FillRect { .. } | DisplayNodeKind::FillRoundedRect { .. } => {
             node.layout = DisplayLayout { rect, bounds: rect };
         }
@@ -651,6 +735,28 @@ fn lower_node(node: &DisplayNode, builder: &mut DisplayListBuilder, z: &mut i32)
         | DisplayNodeKind::Offset { child, .. }
         | DisplayNodeKind::FixedFrame { child, .. } => {
             lower_node(child, builder, z);
+        }
+        DisplayNodeKind::Transform { transform, child } => {
+            builder.push_transform(*transform, node.semantic_id);
+            lower_node(child, builder, z);
+            builder.pop_transform();
+        }
+        DisplayNodeKind::ClipRect { child } => {
+            builder.push_clip_rect(node.layout.rect, node.semantic_id);
+            lower_node(child, builder, z);
+            builder.pop_clip();
+        }
+        DisplayNodeKind::Opacity { opacity, child } => {
+            if *opacity <= 0.0 {
+                return;
+            }
+            if *opacity >= 1.0 {
+                lower_node(child, builder, z);
+                return;
+            }
+            builder.push_opacity(*opacity, node.layout.bounds, node.semantic_id);
+            lower_node(child, builder, z);
+            builder.pop_opacity();
         }
         DisplayNodeKind::FillRect { brush } => {
             let _ = builder.fill_rect(node.layout.rect, brush.clone(), *z, node.semantic_id);
@@ -771,7 +877,7 @@ mod tests {
         let list = tree.to_display_list();
         assert!(!list.is_empty());
         assert!(matches!(
-            &list.items()[0].op,
+            &list.items().next().expect("expected paint item").op,
             crate::DisplayOp::GlyphRun { .. }
         ));
     }
@@ -807,7 +913,68 @@ mod tests {
         );
 
         let list = tree.to_display_list();
-        assert_eq!(list.len(), 2);
-        assert_eq!(list.items()[0].bounds, Rect::new(0.0, 0.0, 160.0, 48.0));
+        assert_eq!(list.items().count(), 2);
+        let items = list.items().collect::<Vec<_>>();
+        assert_eq!(items[0].bounds, Rect::new(0.0, 0.0, 160.0, 48.0));
+    }
+
+    #[test]
+    fn fixed_frame_under_tight_parent_keeps_its_own_size() {
+        let mut text = TextEngine::new();
+        let mut tree = DisplayTree::new(DisplayNode::fixed_frame(
+            Size::new(80.0, 24.0),
+            DisplayNode::fill_rect(Brush::Solid(Color::from_rgb8(10, 20, 30))),
+        ));
+
+        tree.layout(
+            &mut text,
+            Point::new(16.0, 20.0),
+            BoxConstraints::tight(Size::new(220.0, 140.0)),
+        );
+
+        let list = tree.to_display_list();
+        let items = list.items().collect::<Vec<_>>();
+        assert_eq!(items[0].bounds, Rect::new(16.0, 20.0, 96.0, 44.0));
+    }
+
+    #[test]
+    fn clip_opacity_and_transform_lower_to_structural_entries() {
+        let mut text = TextEngine::new();
+        let mut tree = DisplayTree::new(DisplayNode::clip_rect(DisplayNode::opacity(
+            0.5,
+            DisplayNode::transform(
+                Affine::translate((12.0, 8.0)),
+                DisplayNode::fixed_frame(
+                    Size::new(80.0, 24.0),
+                    DisplayNode::fill_rect(Brush::Solid(Color::from_rgb8(10, 20, 30))),
+                ),
+            ),
+        )));
+        tree.layout(
+            &mut text,
+            Point::ORIGIN,
+            BoxConstraints::tight(Size::new(80.0, 24.0)),
+        );
+
+        let list = tree.to_display_list();
+        assert!(matches!(
+            list.entries()[0],
+            crate::DisplayEntry::PushClipRect(_)
+        ));
+        assert!(matches!(
+            list.entries()[1],
+            crate::DisplayEntry::PushOpacity(_)
+        ));
+        assert!(matches!(
+            list.entries()[2],
+            crate::DisplayEntry::PushTransform(_)
+        ));
+        assert!(matches!(list.entries()[3], crate::DisplayEntry::Item(_)));
+        assert!(matches!(
+            list.entries()[4],
+            crate::DisplayEntry::PopTransform
+        ));
+        assert!(matches!(list.entries()[5], crate::DisplayEntry::PopOpacity));
+        assert!(matches!(list.entries()[6], crate::DisplayEntry::PopClip));
     }
 }

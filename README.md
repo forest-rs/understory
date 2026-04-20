@@ -10,12 +10,12 @@ The focus is on clean separation of concerns, pluggable performance trade‑offs
 - `overstory`
   - Experimental retained UI/runtime layer built on top of the Understory kernels.
   - Uses `understory_property`, `understory_style`, `understory_box_tree`, and `ui-events` together to pressure-test what belongs in a higher-level toolkit versus future seam crates such as a display tree.
-  - Deliberately stops at a retained visual snapshot rather than pretending to be the long-term renderer-facing display list.
-  - The examples crate includes both a headless showcase and an `imaging`-backed visual demo that lowers this snapshot through `understory_display` at the example layer.
+  - Deliberately stops at a retained visual snapshot rather than collapsing widget/runtime state directly into renderer commands.
+  - The examples crate includes both a headless showcase and an `imaging`-backed visual demo that lowers this snapshot through `understory_display` as a retained display tree and command stream.
 
 - `understory_display`
-  - Small retained display-tree and display-list primitives between higher-level retained UI/runtime layers and renderer-facing paint backends.
-  - Owns a small retained display tree for local measure/place, stable display item ids, retained draw items as a flat lowering target, and Parley-backed glyph runs behind `std`.
+  - Small retained display-tree and retained command-stream primitives between higher-level retained UI/runtime layers and renderer-facing paint backends.
+  - Owns a small retained display tree for local measure/place, stable display item ids, retained paint items plus structural clip/opacity/transform entries as a flat lowering target, and Parley-backed glyph runs behind `std`.
   - Designed to sit between systems like `overstory` and lowerers such as `imaging`, without taking on widget/runtime policy or rich text/editor semantics.
 
 - `understory_index`
@@ -92,7 +92,7 @@ We aim for a three‑tree model that scales and composes well.
 
 1) Widget tree — state and interaction
 2) Box tree — geometry and spatial indexing
-3) Render tree — display list (future crate)
+3) Display tree — retained visual/content structure and lowering boundaries
 
 This split makes debugging easier, enables incremental updates, and lets each layer evolve and be swapped independently.
 For example, a canvas or DWG or DXF viewer can reuse the box and index layers without any UI toolkit.
@@ -118,7 +118,7 @@ For example, a canvas or DWG or DXF viewer can reuse the box and index layers wi
 
 ## Roadmap (sketch)
 
-- Render tree crate and composition and layering utilities.
+- Deeper `understory_display` node vocabulary plus composition and layering utilities.
 - Backend tuning (SAH weights, fanout/leaf sizes), bulk builders, hygiene/rotation, and churn optimizations.
 - Extended benches such as update mixes, overlap stress, and external comparisons.
 - Integration examples with upstream toolkits.
@@ -132,7 +132,7 @@ For example, a canvas or DWG or DXF viewer can reuse the box and index layers wi
   - `understory_focus/README.md` covers focus navigation policies and adapters.
   - `understory_inspector/README.md` documents the host-side controller for outline-backed inspection UIs.
   - `understory_outline/README.md` documents hierarchical visible-row projection, expansion state, and grouped/tree-style usage.
-  - `understory_display/README.md` documents the retained display-tree/display-list layer and how it fits between retained UI/runtime state and paint backends.
+  - `understory_display/README.md` documents the retained display-tree/command-stream layer and how it fits between retained UI/runtime state and paint backends.
   - `understory_selection/README.md` documents the selection container, anchor/revision semantics, and click helpers.
   - `understory_transcript/README.md` documents append-order transcript storage, generic payloads, explicit update semantics, typed entry kinds, and chat/tool/process-style usage.
   - `understory_view2d/README.md` documents the 2D and 1D viewport types, clamping/fit modes, and examples of using visible regions for culling.

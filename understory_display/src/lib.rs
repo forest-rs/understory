@@ -7,7 +7,7 @@
 //! `understory_display` provides:
 //!
 //! - a small retained display tree for local measure/place,
-//! - a flat retained display list as a lowering target,
+//! - a flat retained display command stream as a lowering target,
 //! - and a calm 2D drawing vocabulary.
 //!
 //! It is intended to sit between:
@@ -23,6 +23,7 @@
 //! The first retained display-tree slice is deliberately small:
 //!
 //! - structural nodes such as stacks, padding, alignment, offsets, and fixed frames,
+//! - retained visual boundaries such as clips, opacity scopes, and transforms,
 //! - shape leaves such as rects and rounded rects,
 //! - and, with the `std` feature, Parley-backed text leaves and glyph runs.
 //!
@@ -42,7 +43,7 @@
 //! concrete flow:
 //!
 //! - `overstory::SceneSnapshot` -> retained `understory_display::DisplayTree`
-//! - retained `understory_display::DisplayTree` -> flat `understory_display::DisplayList`
+//! - retained `understory_display::DisplayTree` -> flat retained `understory_display::DisplayList`
 //! - `understory_display::DisplayList` -> `imaging::record::Scene`
 //! - `imaging_vello_cpu` -> pixels in a window
 
@@ -60,7 +61,10 @@ mod tree;
 
 pub use builder::DisplayListBuilder;
 pub use ids::{ItemId, SemanticId};
-pub use item::{DisplayGlyph, DisplayGlyphRun, DisplayItem, DisplayOp};
+pub use item::{
+    DisplayClipRect, DisplayEntry, DisplayGlyph, DisplayGlyphRun, DisplayItem, DisplayOp,
+    DisplayOpacity, DisplayTransform,
+};
 pub use list::DisplayList;
 #[cfg(feature = "std")]
 pub use text::{TextEngine, TextRunRequest};

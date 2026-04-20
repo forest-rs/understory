@@ -1,11 +1,11 @@
 // Copyright 2026 the Understory Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! Retained display items and draw operations.
+//! Retained display entries, paint items, and draw operations.
 
-use alloc::vec::Vec;
+use alloc::{boxed::Box, vec::Vec};
 
-use kurbo::{Point, Rect, RoundedRect, Stroke, Vec2};
+use kurbo::{Affine, Point, Rect, RoundedRect, Stroke, Vec2};
 #[cfg(feature = "std")]
 use parley::FontData;
 use peniko::Brush;
@@ -70,6 +70,66 @@ pub struct DisplayItem {
     pub semantic_id: Option<SemanticId>,
     /// Drawing operation for this item.
     pub op: DisplayOp,
+}
+
+/// One retained display entry in a flattened command stream.
+#[derive(Clone, Debug, PartialEq)]
+pub enum DisplayEntry {
+    /// One paint item.
+    Item(Box<DisplayItem>),
+    /// Begin a rectangular clip scope.
+    PushClipRect(DisplayClipRect),
+    /// End the most recently pushed clip scope.
+    PopClip,
+    /// Begin an opacity/isolated-group scope.
+    PushOpacity(DisplayOpacity),
+    /// End the most recently pushed opacity scope.
+    PopOpacity,
+    /// Begin a transform scope.
+    PushTransform(DisplayTransform),
+    /// End the most recently pushed transform scope.
+    PopTransform,
+}
+
+/// Retained rectangular clip scope.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DisplayClipRect {
+    /// Rectangle used as the clip region.
+    pub rect: Rect,
+    /// Optional semantic or provenance id supplied by the host.
+    pub semantic_id: Option<SemanticId>,
+}
+
+/// Retained opacity scope.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DisplayOpacity {
+    /// Alpha multiplier in `0..=1`.
+    pub opacity: f32,
+    /// Conservative bounds for the grouped content.
+    pub bounds: Rect,
+    /// Optional semantic or provenance id supplied by the host.
+    pub semantic_id: Option<SemanticId>,
+}
+
+impl DisplayOpacity {
+    /// Creates one retained opacity scope with clamped alpha.
+    #[must_use]
+    pub fn new(opacity: f32, bounds: Rect, semantic_id: Option<SemanticId>) -> Self {
+        Self {
+            opacity: opacity.clamp(0.0, 1.0),
+            bounds,
+            semantic_id,
+        }
+    }
+}
+
+/// Retained transform scope.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DisplayTransform {
+    /// Affine transform applied to descendant entries.
+    pub transform: Affine,
+    /// Optional semantic or provenance id supplied by the host.
+    pub semantic_id: Option<SemanticId>,
 }
 
 /// Retained display operations for the initial display-list slice.

@@ -7,8 +7,9 @@
 //! - Overstory owns retained UI state, style resolution, layout, box-tree hit
 //!   testing, and pointer interaction.
 //! - This example lowers the resolved [`overstory::SceneSnapshot`] into
-//!   `understory_display::DisplayList`.
-//! - It then lowers that display list into `imaging::record::Scene`.
+//!   `understory_display::DisplayTree`, then into a retained
+//!   `understory_display::DisplayList` command stream.
+//! - It then lowers that command stream into `imaging::record::Scene`.
 //! - `imaging_vello_cpu` rasterizes that scene into an RGBA buffer.
 //! - `softbuffer` presents the result in a `winit` window.
 //!
