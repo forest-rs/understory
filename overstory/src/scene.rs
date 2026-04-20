@@ -176,13 +176,13 @@ impl<'a> SceneBuilder<'a> {
         available_rect: Rect,
         parent_node: Option<NodeId>,
         depth: u16,
-    ) -> f64 {
+    ) -> LayoutSize {
         let Some(element) = self.elements.get(id.index()) else {
-            return 0.0;
+            return LayoutSize::ZERO;
         };
         let style = self.resolve_style(element);
         if !style.visible {
-            return 0.0;
+            return LayoutSize::ZERO;
         }
 
         let measured_height = self.measure_height(id, available_rect.width());
@@ -234,37 +234,63 @@ impl<'a> SceneBuilder<'a> {
 
         if matches!(
             element.kind,
-            ElementKind::Root | ElementKind::Panel | ElementKind::Column
+            ElementKind::Root | ElementKind::Panel | ElementKind::Row | ElementKind::Column
         ) {
             let content = inset_rect(rect, style.padding);
-            let mut y = content.y0;
-            let child_width = content.width().max(0.0);
             let mut previous_visible = false;
-            for &child in &element.children {
-                let Some(child_element) = self.elements.get(child.index()) else {
-                    continue;
-                };
-                let child_style = self.resolve_style(child_element);
-                if !child_style.visible {
-                    continue;
+            if matches!(element.kind, ElementKind::Row) {
+                let mut x = content.x0;
+                for &child in &element.children {
+                    let Some(child_element) = self.elements.get(child.index()) else {
+                        continue;
+                    };
+                    let child_style = self.resolve_style(child_element);
+                    if !child_style.visible {
+                        continue;
+                    }
+                    if previous_visible {
+                        x += style.gap;
+                    }
+                    let child_rect = Rect::new(x, content.y0, content.x1, content.y1);
+                    let child_size = self.layout_element(
+                        child,
+                        Point::new(x, content.y0),
+                        child_rect,
+                        Some(node),
+                        depth + 1,
+                    );
+                    x += child_size.width;
+                    previous_visible = true;
                 }
-                if previous_visible {
-                    y += style.gap;
+            } else {
+                let mut y = content.y0;
+                let child_width = content.width().max(0.0);
+                for &child in &element.children {
+                    let Some(child_element) = self.elements.get(child.index()) else {
+                        continue;
+                    };
+                    let child_style = self.resolve_style(child_element);
+                    if !child_style.visible {
+                        continue;
+                    }
+                    if previous_visible {
+                        y += style.gap;
+                    }
+                    let child_rect = Rect::new(content.x0, y, content.x0 + child_width, content.y1);
+                    let child_size = self.layout_element(
+                        child,
+                        Point::new(content.x0, y),
+                        child_rect,
+                        Some(node),
+                        depth + 1,
+                    );
+                    y += child_size.height;
+                    previous_visible = true;
                 }
-                let child_rect = Rect::new(content.x0, y, content.x0 + child_width, content.y1);
-                let child_height = self.layout_element(
-                    child,
-                    Point::new(content.x0, y),
-                    child_rect,
-                    Some(node),
-                    depth + 1,
-                );
-                y += child_height;
-                previous_visible = true;
             }
         }
 
-        height
+        LayoutSize { width, height }
     }
 
     fn measure_height(&self, id: ElementId, available_width: f64) -> f64 {
@@ -287,6 +313,19 @@ impl<'a> SceneBuilder<'a> {
         match element.kind {
             ElementKind::Button => style.height.max(0.0),
             ElementKind::Spacer => 0.0,
+            ElementKind::Row => {
+                let width = if style.width > 0.0 {
+                    style.width.min(available_width)
+                } else {
+                    available_width
+                };
+                let child_width = (width - style.padding * 2.0).max(0.0);
+                let mut max_height: f64 = 0.0;
+                for &child in &element.children {
+                    max_height = max_height.max(self.measure_height(child, child_width));
+                }
+                (style.padding * 2.0 + max_height).max(0.0)
+            }
             ElementKind::Panel | ElementKind::Column | ElementKind::Root => {
                 let width = if style.width > 0.0 {
                     style.width.min(available_width)
@@ -325,13 +364,15 @@ impl<'a> SceneBuilder<'a> {
         let border_key = Some(ThemeKeys::BORDER_COLOR);
         let radius_key = Some(ThemeKeys::CORNER_RADIUS);
         let padding_key = match element.kind {
-            ElementKind::Root | ElementKind::Panel | ElementKind::Column => {
+            ElementKind::Root | ElementKind::Panel | ElementKind::Row | ElementKind::Column => {
                 Some(ThemeKeys::PADDING)
             }
             _ => None,
         };
         let gap_key = match element.kind {
-            ElementKind::Root | ElementKind::Panel | ElementKind::Column => Some(ThemeKeys::GAP),
+            ElementKind::Root | ElementKind::Panel | ElementKind::Row | ElementKind::Column => {
+                Some(ThemeKeys::GAP)
+            }
             _ => None,
         };
         let height_key = match element.kind {
@@ -447,6 +488,19 @@ impl ResolvedStyle {
     }
 }
 
+#[derive(Copy, Clone, Debug, Default)]
+struct LayoutSize {
+    width: f64,
+    height: f64,
+}
+
+impl LayoutSize {
+    const ZERO: Self = Self {
+        width: 0.0,
+        height: 0.0,
+    };
+}
+
 fn build_pseudos(element: &Element) -> Vec<understory_style::PseudoClassId> {
     let mut pseudos = Vec::with_capacity(3);
     if element.pseudos.hovered {
@@ -491,6 +545,6 @@ fn background_resource_for(element: &Element) -> Option<ResourceKey> {
                 (false, false, false) => Some(ThemeKeys::BUTTON_BACKGROUND),
             }
         }
-        ElementKind::Column | ElementKind::Spacer => None,
+        ElementKind::Row | ElementKind::Column | ElementKind::Spacer => None,
     }
 }

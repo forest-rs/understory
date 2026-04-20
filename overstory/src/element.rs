@@ -29,6 +29,8 @@ pub enum ElementKind {
     Root,
     /// Decorative/padded container.
     Panel,
+    /// Horizontal stack container.
+    Row,
     /// Vertical stack container.
     Column,
     /// Interactive push button.
@@ -41,12 +43,14 @@ pub enum ElementKind {
 pub const TYPE_ROOT: TypeTag = TypeTag(1);
 /// Type selector for [`ElementKind::Panel`].
 pub const TYPE_PANEL: TypeTag = TypeTag(2);
+/// Type selector for [`ElementKind::Row`].
+pub const TYPE_ROW: TypeTag = TypeTag(3);
 /// Type selector for [`ElementKind::Column`].
-pub const TYPE_COLUMN: TypeTag = TypeTag(3);
+pub const TYPE_COLUMN: TypeTag = TypeTag(4);
 /// Type selector for [`ElementKind::Button`].
-pub const TYPE_BUTTON: TypeTag = TypeTag(4);
+pub const TYPE_BUTTON: TypeTag = TypeTag(5);
 /// Type selector for [`ElementKind::Spacer`].
-pub const TYPE_SPACER: TypeTag = TypeTag(5);
+pub const TYPE_SPACER: TypeTag = TypeTag(6);
 
 /// Small class vocabulary for common button styling.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -163,6 +167,7 @@ impl ElementKind {
         match self {
             Self::Root => TYPE_ROOT,
             Self::Panel => TYPE_PANEL,
+            Self::Row => TYPE_ROW,
             Self::Column => TYPE_COLUMN,
             Self::Button => TYPE_BUTTON,
             Self::Spacer => TYPE_SPACER,

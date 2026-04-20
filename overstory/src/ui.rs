@@ -568,6 +568,32 @@ mod tests {
         assert!(up_batch.events().contains(&Interaction::Clicked(button)));
     }
 
+    #[test]
+    fn row_places_children_left_to_right() {
+        let mut ui = Ui::new(default_theme());
+        ui.set_view_rect(Rect::new(0.0, 0.0, 320.0, 120.0));
+        ui.set_local(ui.root(), ui.properties().padding, 0.0);
+        ui.set_local(ui.root(), ui.properties().gap, 0.0);
+
+        let row = ui.append_child(ui.root(), ElementKind::Row);
+        ui.set_local(row, ui.properties().padding, 0.0);
+        ui.set_local(row, ui.properties().gap, 12.0);
+
+        let left = ui.append_child(row, ElementKind::Panel);
+        ui.set_local(left, ui.properties().width, 100.0);
+        ui.set_local(left, ui.properties().height, 80.0);
+
+        let right = ui.append_child(row, ElementKind::Panel);
+        ui.set_local(right, ui.properties().height, 80.0);
+
+        let scene = ui.rebuild();
+        let left_rect = scene.resolved_element(left).unwrap().rect;
+        let right_rect = scene.resolved_element(right).unwrap().rect;
+
+        assert_eq!(left_rect, Rect::new(0.0, 0.0, 100.0, 80.0));
+        assert_eq!(right_rect, Rect::new(112.0, 0.0, 320.0, 80.0));
+    }
+
     fn primary_pointer() -> PointerInfo {
         PointerInfo {
             pointer_id: Some(PointerId::PRIMARY),

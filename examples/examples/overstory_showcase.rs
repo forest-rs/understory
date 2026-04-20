@@ -78,8 +78,13 @@ fn build_showcase_ui() -> Ui {
 
     let button_cascade = make_button_cascade(&ui);
 
-    let sidebar = ui.append_child(ui.root(), ElementKind::Panel);
+    let shell = ui.append_child(ui.root(), ElementKind::Row);
+    ui.set_local(shell, ui.properties().padding, 0.0);
+    ui.set_local(shell, ui.properties().gap, 16.0);
+
+    let sidebar = ui.append_child(shell, ElementKind::Panel);
     ui.add_layout_class(sidebar, LayoutClass::Sidebar);
+    ui.set_local(sidebar, ui.properties().width, 150.0);
     ui.set_local(sidebar, ui.properties().padding, 18.0);
     ui.set_local(sidebar, ui.properties().gap, 10.0);
 
@@ -96,7 +101,7 @@ fn build_showcase_ui() -> Ui {
     ui.set_label(archive, "Archive");
     ui.set_style(archive, button_cascade.clone());
 
-    let content = ui.append_child(ui.root(), ElementKind::Panel);
+    let content = ui.append_child(shell, ElementKind::Panel);
     ui.set_local(content, ui.properties().padding, 18.0);
     ui.set_local(content, ui.properties().gap, 12.0);
 

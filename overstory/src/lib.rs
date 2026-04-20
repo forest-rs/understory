@@ -22,7 +22,7 @@
 //! The initial crate is deliberately small:
 //!
 //! - append-only retained element tree with stable [`ElementId`]s,
-//! - a built-in element vocabulary (`Root`, `Panel`, `Column`, `Button`,
+//! - a built-in element vocabulary (`Root`, `Panel`, `Row`, `Column`, `Button`,
 //!   `Spacer`),
 //! - built-in layout/visual dependency properties,
 //! - a full rebuild path that resolves style, lays out elements, and projects
@@ -58,7 +58,8 @@ mod ui;
 pub use color::Color;
 pub use element::{
     ButtonClass, Element, ElementId, ElementKind, LayoutClass, PSEUDO_DISABLED, PSEUDO_HOVER,
-    PSEUDO_PRESSED, PseudoState, TYPE_BUTTON, TYPE_COLUMN, TYPE_PANEL, TYPE_ROOT, TYPE_SPACER,
+    PSEUDO_PRESSED, PseudoState, TYPE_BUTTON, TYPE_COLUMN, TYPE_PANEL, TYPE_ROOT, TYPE_ROW,
+    TYPE_SPACER,
 };
 pub use properties::{BuiltInProperties, DirtyChannels, ThemeKeys};
 pub use runtime::{Interaction, InteractionBatch, RuntimeState};

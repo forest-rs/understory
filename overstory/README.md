@@ -21,7 +21,7 @@ until those Understory seam crates exist.
 The initial crate is deliberately small:
 
 - append-only retained element tree with stable `ElementId`s,
-- a built-in element vocabulary (`Root`, `Panel`, `Column`, `Button`, `Spacer`),
+- a built-in element vocabulary (`Root`, `Panel`, `Row`, `Column`, `Button`, `Spacer`),
 - built-in layout/visual dependency properties,
 - a full rebuild path that resolves style, lays out elements, and projects
   them into an `understory_box_tree::Tree`,
