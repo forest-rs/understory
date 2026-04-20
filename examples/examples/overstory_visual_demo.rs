@@ -48,6 +48,7 @@ fn main() {
 
 #[derive(Debug)]
 struct DemoIds {
+    shell: ElementId,
     warm: ElementId,
     cool: ElementId,
     roomy: ElementId,
@@ -72,6 +73,7 @@ enum RenderState {
 struct DemoApp {
     ui: Ui,
     ids: DemoIds,
+    roomy: bool,
     reducer: WindowEventReducer,
     display: OverstoryDisplayLowerer,
     render_state: RenderState,
@@ -80,13 +82,16 @@ struct DemoApp {
 impl DemoApp {
     fn new() -> Self {
         let (ui, ids) = build_demo_ui();
-        Self {
+        let mut app = Self {
             ui,
             ids,
+            roomy: true,
             reducer: WindowEventReducer::default(),
             display: OverstoryDisplayLowerer::new(),
             render_state: RenderState::Suspended,
-        }
+        };
+        app.apply_density(true);
+        app
     }
 
     fn process_pointer_translation(
@@ -138,6 +143,7 @@ impl DemoApp {
     }
 
     fn apply_density(&mut self, roomy: bool) {
+        self.roomy = roomy;
         let sidebar_width = if roomy { 188.0 } else { 152.0 };
         let root_padding = if roomy { 24.0 } else { 14.0 };
         let shell_gap = if roomy { 18.0 } else { 10.0 };
@@ -181,6 +187,8 @@ impl DemoApp {
             self.ui
                 .set_local(id, self.ui.properties().height, button_height);
         }
+
+        self.sync_shell_frame(root_padding);
     }
 
     fn resize_ui(&mut self, size: PhysicalSize<u32>) {
@@ -188,6 +196,17 @@ impl DemoApp {
         let height = size.height.max(1);
         self.ui
             .set_view_rect(Rect::new(0.0, 0.0, f64::from(width), f64::from(height)));
+        self.sync_shell_frame(current_root_padding(self.roomy));
+    }
+
+    fn sync_shell_frame(&mut self, root_padding: f64) {
+        let shell_height = (self.ui.view_rect().height() - root_padding * 2.0).max(0.0);
+        self.ui
+            .set_local(self.ids.shell, self.ui.properties().height, shell_height);
+        self.ui
+            .set_local(self.ids.sidebar, self.ui.properties().height, shell_height);
+        self.ui
+            .set_local(self.ids.content, self.ui.properties().height, shell_height);
     }
 
     fn resize_active_surface(&mut self, size: PhysicalSize<u32>) {
@@ -404,6 +423,7 @@ fn build_demo_ui() -> (Ui, DemoIds) {
     (
         ui,
         DemoIds {
+            shell,
             warm,
             cool,
             roomy,
@@ -415,6 +435,57 @@ fn build_demo_ui() -> (Ui, DemoIds) {
             deploy,
         },
     )
+}
+
+fn current_root_padding(roomy: bool) -> f64 {
+    if roomy { 24.0 } else { 14.0 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resize_sets_shell_and_panels_to_viewport_height() {
+        let mut app = DemoApp::new();
+        app.resize_ui(PhysicalSize::new(960, 640));
+
+        let scene = app.ui.scene();
+        let expected_height = 640.0 - current_root_padding(true) * 2.0;
+
+        for id in [app.ids.shell, app.ids.sidebar, app.ids.content] {
+            let rect = scene.resolved_element(id).expect("resolved element").rect;
+            assert_eq!(rect.height(), expected_height);
+        }
+    }
+
+    #[test]
+    fn density_toggle_updates_shell_frame() {
+        let mut app = DemoApp::new();
+        app.resize_ui(PhysicalSize::new(960, 640));
+        app.apply_density(false);
+
+        let compact_height = 640.0 - current_root_padding(false) * 2.0;
+        let compact_scene = app.ui.scene();
+        for id in [app.ids.shell, app.ids.sidebar, app.ids.content] {
+            let rect = compact_scene
+                .resolved_element(id)
+                .expect("resolved element")
+                .rect;
+            assert_eq!(rect.height(), compact_height);
+        }
+
+        app.apply_density(true);
+        let roomy_height = 640.0 - current_root_padding(true) * 2.0;
+        let roomy_scene = app.ui.scene();
+        for id in [app.ids.shell, app.ids.sidebar, app.ids.content] {
+            let rect = roomy_scene
+                .resolved_element(id)
+                .expect("resolved element")
+                .rect;
+            assert_eq!(rect.height(), roomy_height);
+        }
+    }
 }
 
 fn append_button(
