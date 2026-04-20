@@ -111,8 +111,14 @@ impl DemoApp {
         for interaction in interactions.events() {
             if let Interaction::Clicked(target) = *interaction {
                 match target {
-                    id if id == self.ids.warm => self.ui.set_theme(warm_theme()),
-                    id if id == self.ids.cool => self.ui.set_theme(cool_theme()),
+                    id if id == self.ids.warm => {
+                        self.ui.set_theme(warm_theme());
+                        self.sync_density_selection();
+                    }
+                    id if id == self.ids.cool => {
+                        self.ui.set_theme(cool_theme());
+                        self.sync_density_selection();
+                    }
                     id if id == self.ids.roomy => self.apply_density(true),
                     id if id == self.ids.compact => self.apply_density(false),
                     id if id == self.ids.search => {
@@ -155,7 +161,7 @@ impl DemoApp {
         self.ui
             .set_local(self.ui.root(), self.ui.properties().padding, root_padding);
         self.ui
-            .set_local(self.ui.root(), self.ui.properties().gap, shell_gap);
+            .set_local(self.ids.shell, self.ui.properties().gap, shell_gap);
         self.ui
             .set_local(self.ids.sidebar, self.ui.properties().width, sidebar_width);
         self.ui.set_local(
@@ -176,8 +182,6 @@ impl DemoApp {
         for id in [
             self.ids.warm,
             self.ids.cool,
-            self.ids.roomy,
-            self.ids.compact,
             self.ids.search,
             self.ids.settings,
             self.ids.deploy,
@@ -187,8 +191,15 @@ impl DemoApp {
             self.ui
                 .set_local(id, self.ui.properties().height, button_height);
         }
+        for id in [self.ids.roomy, self.ids.compact] {
+            self.ui
+                .set_local(id, self.ui.properties().padding, button_padding);
+            self.ui
+                .set_local(id, self.ui.properties().height, button_height);
+        }
 
         self.sync_shell_frame(root_padding);
+        self.sync_density_selection();
     }
 
     fn resize_ui(&mut self, size: PhysicalSize<u32>) {
@@ -200,13 +211,62 @@ impl DemoApp {
     }
 
     fn sync_shell_frame(&mut self, root_padding: f64) {
+        let shell_gap = if self.roomy { 18.0 } else { 10.0 };
+        let sidebar_width = if self.roomy { 188.0 } else { 152.0 };
+        let shell_width = (self.ui.view_rect().width() - root_padding * 2.0).max(0.0);
         let shell_height = (self.ui.view_rect().height() - root_padding * 2.0).max(0.0);
+        let content_width = (shell_width - sidebar_width - shell_gap).max(0.0);
+        self.ui
+            .set_local(self.ids.shell, self.ui.properties().width, shell_width);
         self.ui
             .set_local(self.ids.shell, self.ui.properties().height, shell_height);
         self.ui
+            .set_local(self.ids.sidebar, self.ui.properties().width, sidebar_width);
+        self.ui
             .set_local(self.ids.sidebar, self.ui.properties().height, shell_height);
         self.ui
+            .set_local(self.ids.content, self.ui.properties().width, content_width);
+        self.ui
             .set_local(self.ids.content, self.ui.properties().height, shell_height);
+    }
+
+    fn sync_density_selection(&mut self) {
+        let button_bg = *self
+            .ui
+            .theme()
+            .get(ThemeKeys::BUTTON_BACKGROUND)
+            .expect("button background in theme");
+        let primary_bg = *self
+            .ui
+            .theme()
+            .get(ThemeKeys::PRIMARY_BACKGROUND)
+            .expect("primary background in theme");
+        let foreground = *self
+            .ui
+            .theme()
+            .get(ThemeKeys::FOREGROUND)
+            .expect("foreground in theme");
+
+        let (roomy_bg, roomy_fg, compact_bg, compact_fg) = if self.roomy {
+            (primary_bg, palette::css::WHITE, button_bg, foreground)
+        } else {
+            (button_bg, foreground, primary_bg, palette::css::WHITE)
+        };
+
+        self.ui
+            .set_local(self.ids.roomy, self.ui.properties().background, roomy_bg);
+        self.ui
+            .set_local(self.ids.roomy, self.ui.properties().foreground, roomy_fg);
+        self.ui.set_local(
+            self.ids.compact,
+            self.ui.properties().background,
+            compact_bg,
+        );
+        self.ui.set_local(
+            self.ids.compact,
+            self.ui.properties().foreground,
+            compact_fg,
+        );
     }
 
     fn resize_active_surface(&mut self, size: PhysicalSize<u32>) {
@@ -402,7 +462,7 @@ fn build_demo_ui() -> (Ui, DemoIds) {
         "Cool theme",
         false,
     );
-    let roomy = append_button(&mut ui, sidebar_column, &button_cascade, "Roomy", true);
+    let roomy = append_button(&mut ui, sidebar_column, &button_cascade, "Roomy", false);
     let compact = append_button(&mut ui, sidebar_column, &button_cascade, "Compact", false);
 
     let content = ui.append_child(shell, ElementKind::Panel);
@@ -417,7 +477,6 @@ fn build_demo_ui() -> (Ui, DemoIds) {
     let settings = append_button(&mut ui, content_column, &button_cascade, "Settings", false);
     let deploy = append_button(&mut ui, content_column, &button_cascade, "Deploy", true);
 
-    ui.set_local(roomy, ui.properties().foreground, palette::css::WHITE);
     ui.set_local(deploy, ui.properties().foreground, palette::css::WHITE);
 
     (
@@ -451,12 +510,29 @@ mod tests {
         app.resize_ui(PhysicalSize::new(960, 640));
 
         let scene = app.ui.scene();
+        let expected_width = 960.0 - current_root_padding(true) * 2.0;
         let expected_height = 640.0 - current_root_padding(true) * 2.0;
 
-        for id in [app.ids.shell, app.ids.sidebar, app.ids.content] {
-            let rect = scene.resolved_element(id).expect("resolved element").rect;
-            assert_eq!(rect.height(), expected_height);
-        }
+        let shell_rect = scene
+            .resolved_element(app.ids.shell)
+            .expect("resolved element")
+            .rect;
+        assert_eq!(shell_rect.width(), expected_width);
+        assert_eq!(shell_rect.height(), expected_height);
+
+        let sidebar_rect = scene
+            .resolved_element(app.ids.sidebar)
+            .expect("resolved element")
+            .rect;
+        assert_eq!(sidebar_rect.width(), 188.0);
+        assert_eq!(sidebar_rect.height(), expected_height);
+
+        let content_rect = scene
+            .resolved_element(app.ids.content)
+            .expect("resolved element")
+            .rect;
+        assert_eq!(content_rect.width(), expected_width - 188.0 - 18.0);
+        assert_eq!(content_rect.height(), expected_height);
     }
 
     #[test]
@@ -467,24 +543,97 @@ mod tests {
 
         let compact_height = 640.0 - current_root_padding(false) * 2.0;
         let compact_scene = app.ui.scene();
-        for id in [app.ids.shell, app.ids.sidebar, app.ids.content] {
-            let rect = compact_scene
-                .resolved_element(id)
-                .expect("resolved element")
-                .rect;
-            assert_eq!(rect.height(), compact_height);
-        }
+        let compact_shell = compact_scene
+            .resolved_element(app.ids.shell)
+            .expect("resolved element")
+            .rect;
+        let compact_sidebar = compact_scene
+            .resolved_element(app.ids.sidebar)
+            .expect("resolved element")
+            .rect;
+        let compact_content = compact_scene
+            .resolved_element(app.ids.content)
+            .expect("resolved element")
+            .rect;
+        assert_eq!(
+            compact_shell.width(),
+            960.0 - current_root_padding(false) * 2.0
+        );
+        assert_eq!(compact_shell.height(), compact_height);
+        assert_eq!(compact_sidebar.width(), 152.0);
+        assert_eq!(compact_sidebar.height(), compact_height);
+        assert_eq!(
+            compact_content.width(),
+            compact_shell.width() - compact_sidebar.width() - 10.0
+        );
+        assert_eq!(compact_content.height(), compact_height);
 
         app.apply_density(true);
         let roomy_height = 640.0 - current_root_padding(true) * 2.0;
         let roomy_scene = app.ui.scene();
-        for id in [app.ids.shell, app.ids.sidebar, app.ids.content] {
-            let rect = roomy_scene
-                .resolved_element(id)
-                .expect("resolved element")
-                .rect;
-            assert_eq!(rect.height(), roomy_height);
-        }
+        let roomy_shell = roomy_scene
+            .resolved_element(app.ids.shell)
+            .expect("resolved element")
+            .rect;
+        let roomy_sidebar = roomy_scene
+            .resolved_element(app.ids.sidebar)
+            .expect("resolved element")
+            .rect;
+        let roomy_content = roomy_scene
+            .resolved_element(app.ids.content)
+            .expect("resolved element")
+            .rect;
+        assert_eq!(roomy_shell.height(), roomy_height);
+        assert_eq!(roomy_sidebar.width(), 188.0);
+        assert_eq!(roomy_sidebar.height(), roomy_height);
+        assert_eq!(
+            roomy_content.width(),
+            roomy_shell.width() - roomy_sidebar.width() - 18.0
+        );
+        assert_eq!(roomy_content.height(), roomy_height);
+    }
+
+    #[test]
+    fn density_selection_follows_current_mode() {
+        let mut app = DemoApp::new();
+
+        let theme_fg = *app
+            .ui
+            .theme()
+            .get(ThemeKeys::FOREGROUND)
+            .expect("foreground in theme");
+        let theme_button = *app
+            .ui
+            .theme()
+            .get(ThemeKeys::BUTTON_BACKGROUND)
+            .expect("button background in theme");
+        let theme_primary = *app
+            .ui
+            .theme()
+            .get(ThemeKeys::PRIMARY_BACKGROUND)
+            .expect("primary background in theme");
+
+        let scene = app.ui.scene();
+        let roomy = scene
+            .resolved_element(app.ids.roomy)
+            .expect("roomy resolved element");
+        let compact = scene
+            .resolved_element(app.ids.compact)
+            .expect("compact resolved element");
+        assert_eq!(roomy.background, theme_primary);
+        assert_eq!(compact.background, theme_button);
+
+        app.apply_density(false);
+        let scene = app.ui.scene();
+        let roomy = scene
+            .resolved_element(app.ids.roomy)
+            .expect("roomy resolved element");
+        let compact = scene
+            .resolved_element(app.ids.compact)
+            .expect("compact resolved element");
+        assert_eq!(roomy.background, theme_button);
+        assert_eq!(compact.background, theme_primary);
+        assert_eq!(roomy.foreground, theme_fg);
     }
 }
 
