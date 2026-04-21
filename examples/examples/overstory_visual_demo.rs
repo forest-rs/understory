@@ -1184,6 +1184,41 @@ mod tests {
     }
 
     #[test]
+    fn text_input_keyboard_appends_and_submits() {
+        use overstory::ui_events::keyboard::{
+            Code, Key, KeyState, KeyboardEvent, Location, Modifiers, NamedKey,
+        };
+
+        let mut ui = Ui::new(default_theme());
+        ui.set_view_rect(Rect::new(0.0, 0.0, 400.0, 200.0));
+        ui.set_local(ui.root(), ui.properties().padding, 0.0);
+
+        let input = ui.append_child(ui.root(), ElementKind::TextInput);
+        ui.set_local(input, ui.properties().height, 40.0);
+        ui.set_focus(input);
+
+        let key_event = |key: Key| KeyboardEvent {
+            key,
+            code: Code::Unidentified,
+            state: KeyState::Down,
+            modifiers: Modifiers::empty(),
+            location: Location::Standard,
+            repeat: false,
+            is_composing: false,
+        };
+
+        let _ = ui.handle_keyboard_event(&key_event(Key::Character("H".into())));
+        let _ = ui.handle_keyboard_event(&key_event(Key::Character("i".into())));
+        assert_eq!(ui.text_buffer(input), "Hi");
+
+        let _ = ui.handle_keyboard_event(&key_event(Key::Named(NamedKey::Backspace)));
+        assert_eq!(ui.text_buffer(input), "H");
+
+        let batch = ui.handle_keyboard_event(&key_event(Key::Named(NamedKey::Enter)));
+        assert!(batch.events().iter().any(|e| matches!(e, Interaction::Submitted(_))));
+    }
+
+    #[test]
     fn density_selection_follows_current_mode() {
         let mut app = DemoApp::new();
 

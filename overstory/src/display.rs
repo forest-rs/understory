@@ -87,47 +87,59 @@ fn display_node_for(parent_origin: Point, node: &ElementDisplayTree<'_>) -> Disp
         });
     }
 
-    if let Some(label) = element.label.as_deref() {
-        let font_size = if element.font_size > 0.0 {
-            element.font_size
-        } else {
-            DEFAULT_FONT_SIZE
-        };
-        let label_padding = if element.label_padding > 0.0 {
-            element.label_padding
-        } else {
-            DEFAULT_LABEL_PADDING
-        };
-        let font_family = if element.font_family.is_empty() {
-            DEFAULT_FONT_FAMILY
-        } else {
-            &element.font_family
-        };
-        #[allow(
-            clippy::cast_possible_truncation,
-            reason = "Font size is a small positive value; f32 is sufficient."
-        )]
-        let text_node = DisplayNode::text(
-            label,
-            Brush::Solid(element.foreground),
-            font_size as f32,
-            font_family,
-            element.text_align,
-        );
-        if matches!(element.kind, ElementKind::TextBlock) {
-            // TextBlock: top-left aligned, padded, wraps at container width.
-            children.push(DisplayNode::padding(
-                Insets::uniform(element.label_padding.max(0.0)),
-                text_node,
-            ));
-        } else {
-            // Button/other: horizontally padded, vertically centered.
-            children.push(DisplayNode::align(
-                understory_display::DisplayAlign::Start,
-                understory_display::DisplayAlign::Center,
-                DisplayNode::padding(Insets::symmetric(label_padding, 0.0), text_node),
-            ));
-        }
+    // Determine display text: for TextInput, show buffer + cursor; otherwise use label.
+    let is_text_input = matches!(element.kind, ElementKind::TextInput);
+    let display_text: Option<alloc::string::String> = if is_text_input {
+        let cursor = if element.focused { "|" } else { "" };
+        let text = element.label.as_deref().unwrap_or("");
+        Some(alloc::format!("{text}{cursor}"))
+    } else {
+        element.label.as_deref().map(alloc::string::String::from)
+    };
+
+    if let Some(label) = display_text.as_deref()
+        && !label.is_empty()
+    {
+            let font_size = if element.font_size > 0.0 {
+                element.font_size
+            } else {
+                DEFAULT_FONT_SIZE
+            };
+            let label_padding = if element.label_padding > 0.0 {
+                element.label_padding
+            } else {
+                DEFAULT_LABEL_PADDING
+            };
+            let font_family = if element.font_family.is_empty() {
+                DEFAULT_FONT_FAMILY
+            } else {
+                &element.font_family
+            };
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "Font size is a small positive value; f32 is sufficient."
+            )]
+            let text_node = DisplayNode::text(
+                label,
+                Brush::Solid(element.foreground),
+                font_size as f32,
+                font_family,
+                element.text_align,
+            );
+            if matches!(element.kind, ElementKind::TextBlock) {
+                // TextBlock: top-left aligned, padded, wraps at container width.
+                children.push(DisplayNode::padding(
+                    Insets::uniform(element.label_padding.max(0.0)),
+                    text_node,
+                ));
+            } else {
+                // Button/TextInput/other: horizontally padded, vertically centered.
+                children.push(DisplayNode::align(
+                    understory_display::DisplayAlign::Start,
+                    understory_display::DisplayAlign::Center,
+                    DisplayNode::padding(Insets::symmetric(label_padding, 0.0), text_node),
+                ));
+            }
     }
 
     let child_nodes: Vec<DisplayNode> = node

@@ -14,7 +14,7 @@ use understory_style::{ResolveCx, ResourceKey, Theme};
 
 use crate::{
     BuiltInProperties, ButtonClass, Color, Element, ElementId, ElementKind, LayoutClass,
-    PSEUDO_DISABLED, PSEUDO_HOVER, PSEUDO_PRESSED, ThemeKeys,
+    PSEUDO_DISABLED, PSEUDO_FOCUSED, PSEUDO_HOVER, PSEUDO_PRESSED, ThemeKeys,
 };
 
 /// Border styling for one resolved element.
@@ -60,6 +60,8 @@ pub struct ResolvedElement {
     pub hovered: bool,
     /// Press state at snapshot time.
     pub pressed: bool,
+    /// Focus state at snapshot time.
+    pub focused: bool,
     /// Vertical scroll offset (`ScrollView` only).
     pub scroll_offset: f64,
     /// Resolved font size for label text.
@@ -253,9 +255,18 @@ impl<'a> SceneBuilder<'a> {
                 width: style.border_width,
             },
             corner_radius: style.corner_radius,
-            label: element.label.clone(),
+            label: if matches!(element.kind, ElementKind::TextInput) {
+                if element.text_buffer.is_empty() {
+                    None
+                } else {
+                    Some(Box::from(element.text_buffer.as_str()))
+                }
+            } else {
+                element.label.clone()
+            },
             hovered: element.pseudos.hovered,
             pressed: element.pseudos.pressed,
+            focused: element.pseudos.focused,
             scroll_offset: element.scroll_offset,
             font_size: style.font_size,
             label_padding: style.label_padding,
@@ -415,7 +426,7 @@ impl<'a> SceneBuilder<'a> {
         }
 
         match element.kind {
-            ElementKind::Button => style.height.max(0.0),
+            ElementKind::Button | ElementKind::TextInput => style.height.max(0.0),
             ElementKind::Spacer => 0.0,
             ElementKind::TextBlock => {
                 // Estimate wrapped text height from label length and available width.
@@ -501,7 +512,7 @@ impl<'a> SceneBuilder<'a> {
             _ => None,
         };
         let height_key = match element.kind {
-            ElementKind::Button => Some(ThemeKeys::BUTTON_HEIGHT),
+            ElementKind::Button | ElementKind::TextInput => Some(ThemeKeys::BUTTON_HEIGHT),
             _ => None,
         };
 
@@ -638,11 +649,16 @@ impl ResolvedStyle {
     fn flags_for(&self, kind: ElementKind) -> NodeFlags {
         let mut flags = NodeFlags::VISIBLE;
         if self.pickable
-            || matches!(kind, ElementKind::Button | ElementKind::ScrollView)
+            || matches!(
+                kind,
+                ElementKind::Button | ElementKind::ScrollView | ElementKind::TextInput
+            )
         {
             flags |= NodeFlags::PICKABLE;
         }
-        if self.focusable || matches!(kind, ElementKind::Button) {
+        if self.focusable
+            || matches!(kind, ElementKind::Button | ElementKind::TextInput)
+        {
             flags |= NodeFlags::FOCUSABLE;
         }
         flags
@@ -672,6 +688,9 @@ fn build_pseudos(element: &Element) -> Vec<understory_style::PseudoClassId> {
     }
     if element.pseudos.disabled {
         pseudos.push(PSEUDO_DISABLED);
+    }
+    if element.pseudos.focused {
+        pseudos.push(PSEUDO_FOCUSED);
     }
     pseudos
 }
@@ -717,6 +736,7 @@ fn background_resource_for(element: &Element) -> Option<ResourceKey> {
             }
         }
         ElementKind::ScrollView => Some(ThemeKeys::PANEL_BACKGROUND),
+        ElementKind::TextInput => Some(ThemeKeys::PANEL_BACKGROUND),
         ElementKind::Row | ElementKind::Column | ElementKind::Spacer | ElementKind::TextBlock => {
             None
         }

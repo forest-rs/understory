@@ -24,6 +24,10 @@ pub enum Interaction {
     Clicked(ElementId),
     /// Scroll position changed on a `ScrollView` element.
     Scrolled(ElementId),
+    /// A `TextInput` element was submitted (Enter pressed).
+    Submitted(ElementId),
+    /// Keyboard focus changed to an element.
+    FocusChanged(ElementId),
 }
 
 /// Batch of high-level interactions emitted during one event.
@@ -56,6 +60,7 @@ pub(crate) struct RuntimeState {
     pub(crate) hover: HoverState<ElementId>,
     pub(crate) clicks: ClickState<ElementId>,
     pub(crate) pressed_target: Option<ElementId>,
+    pub(crate) focused: Option<ElementId>,
 }
 
 impl RuntimeState {
@@ -64,6 +69,7 @@ impl RuntimeState {
             hover: HoverState::new(),
             clicks: ClickState::new(),
             pressed_target: None,
+            focused: None,
         }
     }
 }

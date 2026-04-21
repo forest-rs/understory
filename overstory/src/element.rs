@@ -3,7 +3,7 @@
 
 //! Retained element tree primitives.
 
-use alloc::{boxed::Box, vec::Vec};
+use alloc::{boxed::Box, string::String, vec::Vec};
 
 use understory_property::{DependencyObject, PropertyStore};
 use understory_style::{ClassId, IdSet, PseudoClassId, SelectorInputs, StyleCascade, TypeTag};
@@ -41,6 +41,8 @@ pub enum ElementKind {
     ScrollView,
     /// Multiline wrapped text block.
     TextBlock,
+    /// Single-line text input.
+    TextInput,
 }
 
 /// Type selector for [`ElementKind::Root`].
@@ -59,6 +61,8 @@ pub const TYPE_SPACER: TypeTag = TypeTag(6);
 pub const TYPE_SCROLL_VIEW: TypeTag = TypeTag(7);
 /// Type selector for [`ElementKind::TextBlock`].
 pub const TYPE_TEXT_BLOCK: TypeTag = TypeTag(8);
+/// Type selector for [`ElementKind::TextInput`].
+pub const TYPE_TEXT_INPUT: TypeTag = TypeTag(9);
 
 /// Small class vocabulary for common button styling.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -104,6 +108,8 @@ pub struct PseudoState {
     pub pressed: bool,
     /// The element is disabled.
     pub disabled: bool,
+    /// The element has keyboard focus.
+    pub focused: bool,
 }
 
 /// Hover pseudo selector id.
@@ -112,6 +118,8 @@ pub const PSEUDO_HOVER: PseudoClassId = PseudoClassId(1);
 pub const PSEUDO_PRESSED: PseudoClassId = PseudoClassId(2);
 /// Disabled pseudo selector id.
 pub const PSEUDO_DISABLED: PseudoClassId = PseudoClassId(3);
+/// Focused pseudo selector id.
+pub const PSEUDO_FOCUSED: PseudoClassId = PseudoClassId(4);
 
 /// One retained element in the Overstory tree.
 #[derive(Clone, Debug)]
@@ -129,6 +137,8 @@ pub struct Element {
     pub(crate) scroll_offset: f64,
     /// Measured content height from last layout (`ScrollView` only).
     pub(crate) content_height: f64,
+    /// Text buffer for `TextInput` elements.
+    pub(crate) text_buffer: String,
 }
 
 impl Element {
@@ -145,6 +155,7 @@ impl Element {
             pseudos: PseudoState::default(),
             scroll_offset: 0.0,
             content_height: 0.0,
+            text_buffer: String::new(),
         }
     }
 
@@ -187,6 +198,7 @@ impl ElementKind {
             Self::Spacer => TYPE_SPACER,
             Self::ScrollView => TYPE_SCROLL_VIEW,
             Self::TextBlock => TYPE_TEXT_BLOCK,
+            Self::TextInput => TYPE_TEXT_INPUT,
         }
     }
 }

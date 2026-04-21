@@ -213,6 +213,78 @@ impl Ui {
             .map_or(0.0, |e| e.scroll_offset)
     }
 
+    /// Sets keyboard focus to an element.
+    pub fn set_focus(&mut self, id: ElementId) {
+        if self.runtime.focused == Some(id) {
+            return;
+        }
+        if let Some(prev) = self.runtime.focused.take()
+            && let Some(element) = self.elements.get_mut(prev.index())
+        {
+            element.pseudos.focused = false;
+        }
+        self.runtime.focused = Some(id);
+        if let Some(element) = self.elements.get_mut(id.index()) {
+            element.pseudos.focused = true;
+        }
+        self.mark_dirty(DirtyChannels::PAINT.into_set());
+    }
+
+    /// Returns the current text buffer for a `TextInput` element.
+    #[must_use]
+    pub fn text_buffer(&self, id: ElementId) -> &str {
+        self.elements
+            .get(id.index())
+            .map_or("", |e| &e.text_buffer)
+    }
+
+    /// Clears the text buffer for a `TextInput` element.
+    pub fn clear_text_buffer(&mut self, id: ElementId) {
+        if let Some(element) = self.elements.get_mut(id.index()) {
+            element.text_buffer.clear();
+            self.mark_dirty(DirtyChannels::LAYOUT.into_set() | DirtyChannels::PAINT.into_set());
+        }
+    }
+
+    /// Handles one keyboard event from `ui-events`.
+    pub fn handle_keyboard_event(
+        &mut self,
+        event: &ui_events::keyboard::KeyboardEvent,
+    ) -> InteractionBatch {
+        let mut batch = InteractionBatch::default();
+        let Some(focused) = self.runtime.focused else {
+            return batch;
+        };
+        if !event.state.is_down() {
+            return batch;
+        }
+        match &event.key {
+            ui_events::keyboard::Key::Character(ch) => {
+                if let Some(element) = self.elements.get_mut(focused.index()) {
+                    element.text_buffer.push_str(ch);
+                    self.mark_dirty(
+                        DirtyChannels::LAYOUT.into_set() | DirtyChannels::PAINT.into_set(),
+                    );
+                }
+            }
+            ui_events::keyboard::Key::Named(named) => match named {
+                ui_events::keyboard::NamedKey::Backspace => {
+                    if let Some(element) = self.elements.get_mut(focused.index()) {
+                        element.text_buffer.pop();
+                        self.mark_dirty(
+                            DirtyChannels::LAYOUT.into_set() | DirtyChannels::PAINT.into_set(),
+                        );
+                    }
+                }
+                ui_events::keyboard::NamedKey::Enter => {
+                    batch.push(Interaction::Submitted(focused));
+                }
+                _ => {}
+            },
+        }
+        batch
+    }
+
     /// Rebuilds the resolved scene if needed and returns the current snapshot.
     pub fn rebuild(&mut self) -> &SceneSnapshot {
         if self.scene.is_none() || !self.dirty.is_empty() {
@@ -289,6 +361,12 @@ impl Ui {
                     ) {
                         understory_event_state::click::ClickResult::Click(id) => {
                             batch.push(Interaction::Clicked(id));
+                            if let Some(element) = self.elements.get(id.index())
+                                && matches!(element.kind, ElementKind::TextInput)
+                            {
+                                self.set_focus(id);
+                                batch.push(Interaction::FocusChanged(id));
+                            }
                         }
                         understory_event_state::click::ClickResult::Suppressed(_) => {}
                     }
