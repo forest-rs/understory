@@ -115,7 +115,7 @@ fn display_node_for(parent_origin: Point, node: &ElementDisplayTree<'_>, widget_
 
 #[cfg(test)]
 mod tests {
-    use crate::{ElementKind, Ui, default_theme};
+    use crate::{Ui, default_theme};
 
     #[test]
     fn display_tree_preserves_scene_parent_child_structure() {
@@ -124,19 +124,19 @@ mod tests {
         ui.set_local(ui.root(), ui.properties().padding, 0.0);
         ui.set_local(ui.root(), ui.properties().gap, 10.0);
 
-        let shell = ui.append_child(ui.root(), ElementKind::Row);
+        let shell = ui.append_child(ui.root(), crate::TYPE_ROW);
         ui.set_local(shell, ui.properties().padding, 0.0);
         ui.set_local(shell, ui.properties().gap, 10.0);
 
-        let left = ui.append_child(shell, ElementKind::Panel);
+        let left = ui.append_child(shell, crate::TYPE_PANEL);
         ui.set_local(left, ui.properties().width, 80.0);
         ui.set_local(left, ui.properties().padding, 8.0);
 
-        let child = ui.append_child(left, ElementKind::Button);
+        let child = ui.append_child(left, crate::TYPE_BUTTON);
         ui.set_label(child, "Child");
         ui.set_local(child, ui.properties().height, 28.0);
 
-        let right = ui.append_child(shell, ElementKind::Panel);
+        let right = ui.append_child(shell, crate::TYPE_PANEL);
         ui.set_local(right, ui.properties().padding, 8.0);
 
         let tree = ui.scene().display_tree(ui.widget_arena());

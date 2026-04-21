@@ -12,7 +12,9 @@ use peniko::Brush;
 use understory_display::{DisplayNode, Insets, TextEngine};
 use ui_events::keyboard::{Key, KeyboardEvent, Modifiers, NamedKey};
 
-use crate::{ElementId, Interaction, InteractionBatch, ResolvedElement, Widget};
+use understory_style::ResourceKey;
+
+use crate::{ElementId, Interaction, InteractionBatch, ResolvedElement, ThemeKeys, Widget};
 
 impl core::fmt::Debug for TextInputWidget {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -236,6 +238,22 @@ impl Widget for TextInputWidget {
         } else {
             Some(text)
         }
+    }
+
+    fn background_key(&self, _element: &crate::Element) -> Option<ResourceKey> {
+        Some(ThemeKeys::PANEL_BACKGROUND)
+    }
+
+    fn height_key(&self) -> Option<ResourceKey> {
+        Some(ThemeKeys::BUTTON_HEIGHT)
+    }
+
+    fn default_pickable(&self) -> bool {
+        true
+    }
+
+    fn default_focusable(&self) -> bool {
+        true
     }
 
     fn as_any(&self) -> &dyn Any {

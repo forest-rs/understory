@@ -13,7 +13,7 @@ use understory_responder::adapters::box_tree::top_hit_for_point;
 use understory_style::{ResolveCx, ResourceKey, Theme};
 
 use crate::{
-    BuiltInProperties, ButtonClass, Color, Element, ElementId, ElementKind, LayoutClass,
+    BuiltInProperties, Color, Element, ElementId, LayoutClass,
     PSEUDO_DISABLED, PSEUDO_FOCUSED, PSEUDO_HOVER, PSEUDO_PRESSED, ThemeKeys,
 };
 
@@ -40,8 +40,8 @@ impl Default for BorderStyle {
 pub struct ResolvedElement {
     /// Retained element id.
     pub id: ElementId,
-    /// Element kind.
-    pub kind: ElementKind,
+    /// Style type tag.
+    pub type_tag: understory_style::TypeTag,
     /// Depth in the retained tree.
     pub depth: u16,
     /// Final rectangle in view space.
@@ -220,7 +220,7 @@ impl<'a> SceneBuilder<'a> {
         }
 
         let measured_height = self.measure_height(id, available_rect.width());
-        let is_root = matches!(element.kind, ElementKind::Root);
+        let is_root = element.is_root;
         let width = if is_root {
             available_rect.width()
         } else {
@@ -235,7 +235,10 @@ impl<'a> SceneBuilder<'a> {
         };
 
         let rect = Rect::new(origin.x, origin.y, origin.x + width, origin.y + height);
-        let flags = style.flags_for(element.kind);
+        let widget_ref = element
+            .widget
+            .and_then(|h| self.widget_arena.get(h));
+        let flags = style.flags_for(widget_ref);
         let z_index = self.alloc_z();
         let node = self.tree.insert(
             parent_node,
@@ -252,7 +255,7 @@ impl<'a> SceneBuilder<'a> {
 
         self.resolved.push(ResolvedElement {
             id,
-            kind: element.kind,
+            type_tag: element.type_tag,
             depth,
             rect,
             background: style.background,
@@ -277,8 +280,8 @@ impl<'a> SceneBuilder<'a> {
             label_padding: style.label_padding,
             font_family: style.font_family.clone(),
             text_align: style.text_align,
-            clips_content: matches!(element.kind, ElementKind::ScrollView),
-            scroll_offset: if matches!(element.kind, ElementKind::ScrollView) {
+            clips_content: element.widget.is_some() && element.type_tag == crate::TYPE_SCROLL_VIEW,
+            scroll_offset: if element.widget.is_some() && element.type_tag == crate::TYPE_SCROLL_VIEW {
                 element
                     .widget
                     .and_then(|h| self.widget_arena.get(h))
@@ -293,7 +296,7 @@ impl<'a> SceneBuilder<'a> {
             widget: element.widget,
         });
 
-        let is_scroll_view = matches!(element.kind, ElementKind::ScrollView);
+        let is_scroll_view = element.widget.is_some() && element.type_tag == crate::TYPE_SCROLL_VIEW;
         if is_scroll_view {
             use kurbo::RoundedRect;
             self.tree.set_local_clip(
@@ -302,16 +305,9 @@ impl<'a> SceneBuilder<'a> {
             );
         }
 
-        if matches!(
-            element.kind,
-            ElementKind::Root
-                | ElementKind::Panel
-                | ElementKind::Row
-                | ElementKind::Column
-                | ElementKind::ScrollView
-        ) {
+        if element.is_container {
             let content = inset_rect(rect, style.padding);
-            let horizontal = matches!(element.kind, ElementKind::Row);
+            let horizontal = element.horizontal;
             let total_extent = if horizontal {
                 content.width()
             } else {
@@ -440,7 +436,7 @@ impl<'a> SceneBuilder<'a> {
             return 0.0;
         }
 
-        if matches!(element.kind, ElementKind::Root) {
+        if element.is_root {
             return 0.0;
         }
 
@@ -463,39 +459,33 @@ impl<'a> SceneBuilder<'a> {
             }
         }
 
-        match element.kind {
-            ElementKind::Spacer | ElementKind::Button | ElementKind::TextInput => 0.0,
-            ElementKind::TextBlock => 0.0, // handled by widget above
-            ElementKind::Row
-            | ElementKind::Panel
-            | ElementKind::Column
-            | ElementKind::Root
-            | ElementKind::ScrollView => {
-                let child_width = (resolve_dim(style.width, available_width)
-                    - style.padding * 2.0)
-                    .max(0.0);
-                if matches!(element.kind, ElementKind::Row) {
-                    let mut max_height: f64 = 0.0;
-                    for &child in &element.children {
-                        max_height = max_height.max(self.measure_height(child, child_width));
+        if !element.is_container {
+            return 0.0;
+        }
+
+        let child_width = (resolve_dim(style.width, available_width)
+            - style.padding * 2.0)
+            .max(0.0);
+        if element.horizontal {
+            let mut max_height: f64 = 0.0;
+            for &child in &element.children {
+                max_height = max_height.max(self.measure_height(child, child_width));
+            }
+            (style.padding * 2.0 + max_height).max(0.0)
+        } else {
+            let mut total = style.padding * 2.0;
+            let mut visible_children = 0_u32;
+            for &child in &element.children {
+                let height = self.measure_height(child, child_width);
+                if height > 0.0 {
+                    if visible_children > 0 {
+                        total += style.gap;
                     }
-                    (style.padding * 2.0 + max_height).max(0.0)
-                } else {
-                    let mut total = style.padding * 2.0;
-                    let mut visible_children = 0_u32;
-                    for &child in &element.children {
-                        let height = self.measure_height(child, child_width);
-                        if height > 0.0 {
-                            if visible_children > 0 {
-                                total += style.gap;
-                            }
-                            total += height;
-                            visible_children += 1;
-                        }
-                    }
-                    total.max(0.0)
+                    total += height;
+                    visible_children += 1;
                 }
             }
+            total.max(0.0)
         }
     }
 
@@ -508,30 +498,26 @@ impl<'a> SceneBuilder<'a> {
         let cx = ResolveCx::new(self.registry, self.theme, lookup);
         let pseudos = build_pseudos(element);
         let inputs = element.selector_inputs(&pseudos);
-        let background_key = background_resource_for(element);
+        let widget_ref = element
+            .widget
+            .and_then(|h| self.widget_arena.get(h));
+        let background_key = widget_ref
+            .and_then(|w| w.background_key(element))
+            .or_else(|| default_background_key(element));
         let foreground_key = Some(ThemeKeys::FOREGROUND);
         let border_key = Some(ThemeKeys::BORDER_COLOR);
         let radius_key = Some(ThemeKeys::CORNER_RADIUS);
-        let padding_key = match element.kind {
-            ElementKind::Root
-            | ElementKind::Panel
-            | ElementKind::Row
-            | ElementKind::Column
-            | ElementKind::ScrollView => Some(ThemeKeys::PADDING),
-            _ => None,
+        let padding_key = if element.is_container {
+            Some(ThemeKeys::PADDING)
+        } else {
+            None
         };
-        let gap_key = match element.kind {
-            ElementKind::Root
-            | ElementKind::Panel
-            | ElementKind::Row
-            | ElementKind::Column
-            | ElementKind::ScrollView => Some(ThemeKeys::GAP),
-            _ => None,
+        let gap_key = if element.is_container {
+            Some(ThemeKeys::GAP)
+        } else {
+            None
         };
-        let height_key = match element.kind {
-            ElementKind::Button | ElementKind::TextInput => Some(ThemeKeys::BUTTON_HEIGHT),
-            _ => None,
-        };
+        let height_key = widget_ref.and_then(|w| w.height_key());
 
         ResolvedStyle {
             width: cx.get_value(element, &inputs, self.props.width, element.style.as_ref()),
@@ -663,19 +649,12 @@ struct ResolvedStyle {
 }
 
 impl ResolvedStyle {
-    fn flags_for(&self, kind: ElementKind) -> NodeFlags {
+    fn flags_for(&self, widget: Option<&dyn crate::Widget>) -> NodeFlags {
         let mut flags = NodeFlags::VISIBLE;
-        if self.pickable
-            || matches!(
-                kind,
-                ElementKind::Button | ElementKind::ScrollView | ElementKind::TextInput
-            )
-        {
+        if self.pickable || widget.is_some_and(|w| w.default_pickable()) {
             flags |= NodeFlags::PICKABLE;
         }
-        if self.focusable
-            || matches!(kind, ElementKind::Button | ElementKind::TextInput)
-        {
+        if self.focusable || widget.is_some_and(|w| w.default_focusable()) {
             flags |= NodeFlags::FOCUSABLE;
         }
         flags
@@ -731,31 +710,17 @@ fn inset_rect(rect: Rect, inset: f64) -> Rect {
     )
 }
 
-fn background_resource_for(element: &Element) -> Option<ResourceKey> {
-    match element.kind {
-        ElementKind::Root => Some(ThemeKeys::ROOT_BACKGROUND),
-        ElementKind::Panel => {
-            if element.classes.contains(LayoutClass::Sidebar.class_id()) {
-                Some(ThemeKeys::SIDEBAR_BACKGROUND)
-            } else {
-                Some(ThemeKeys::PANEL_BACKGROUND)
-            }
+/// Default background resource key for elements without a widget-provided one.
+fn default_background_key(element: &Element) -> Option<ResourceKey> {
+    if element.is_root {
+        Some(ThemeKeys::ROOT_BACKGROUND)
+    } else if element.type_tag == crate::TYPE_PANEL {
+        if element.classes.contains(LayoutClass::Sidebar.class_id()) {
+            Some(ThemeKeys::SIDEBAR_BACKGROUND)
+        } else {
+            Some(ThemeKeys::PANEL_BACKGROUND)
         }
-        ElementKind::Button => {
-            let primary = element.classes.contains(ButtonClass::Primary.class_id());
-            match (primary, element.pseudos.pressed, element.pseudos.hovered) {
-                (true, true, _) => Some(ThemeKeys::PRIMARY_PRESSED_BACKGROUND),
-                (true, false, true) => Some(ThemeKeys::PRIMARY_HOVER_BACKGROUND),
-                (true, false, false) => Some(ThemeKeys::PRIMARY_BACKGROUND),
-                (false, true, _) => Some(ThemeKeys::BUTTON_PRESSED_BACKGROUND),
-                (false, false, true) => Some(ThemeKeys::BUTTON_HOVER_BACKGROUND),
-                (false, false, false) => Some(ThemeKeys::BUTTON_BACKGROUND),
-            }
-        }
-        ElementKind::ScrollView => Some(ThemeKeys::PANEL_BACKGROUND),
-        ElementKind::TextInput => Some(ThemeKeys::PANEL_BACKGROUND),
-        ElementKind::Row | ElementKind::Column | ElementKind::Spacer | ElementKind::TextBlock => {
-            None
-        }
+    } else {
+        None
     }
 }

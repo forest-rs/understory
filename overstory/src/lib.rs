@@ -61,9 +61,9 @@ mod widget;
 pub mod widgets;
 
 pub use element::{
-    ButtonClass, Element, ElementId, ElementKind, LayoutClass, PSEUDO_DISABLED, PSEUDO_HOVER,
+    ButtonClass, Element, ElementId, LayoutClass, PSEUDO_DISABLED, PSEUDO_FOCUSED, PSEUDO_HOVER,
     PSEUDO_PRESSED, PseudoState, TYPE_BUTTON, TYPE_COLUMN, TYPE_PANEL, TYPE_ROOT, TYPE_ROW,
-    PSEUDO_FOCUSED, TYPE_SCROLL_VIEW, TYPE_SPACER, TYPE_TEXT_BLOCK, TYPE_TEXT_INPUT,
+    TYPE_SCROLL_VIEW, TYPE_SPACER, TYPE_TEXT_BLOCK, TYPE_TEXT_INPUT,
 };
 /// Re-export `peniko` so Overstory callers can use the shared color vocabulary
 /// and palettes without adding another direct dependency for basic styling.

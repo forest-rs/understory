@@ -13,6 +13,7 @@ use core::any::Any;
 
 use kurbo::Point;
 use understory_display::{DisplayNode, TextEngine};
+use understory_style::ResourceKey;
 
 use crate::{ElementId, InteractionBatch, ResolvedElement};
 
@@ -83,6 +84,30 @@ pub trait Widget {
     /// widgets that generate their own text content (e.g., text input buffers).
     fn label(&self) -> Option<&str> {
         None
+    }
+
+    /// Return the theme resource key for this widget's background color.
+    ///
+    /// Called during style resolution. Return `None` for no theme background.
+    fn background_key(&self, _element: &crate::Element) -> Option<ResourceKey> {
+        None
+    }
+
+    /// Return the theme resource key for this widget's height.
+    ///
+    /// Called during style resolution. Return `None` for no theme height.
+    fn height_key(&self) -> Option<ResourceKey> {
+        None
+    }
+
+    /// Whether this widget makes its element pickable by default.
+    fn default_pickable(&self) -> bool {
+        false
+    }
+
+    /// Whether this widget makes its element focusable by default.
+    fn default_focusable(&self) -> bool {
+        false
     }
 
     /// Downcast to a concrete type for typed accessors.

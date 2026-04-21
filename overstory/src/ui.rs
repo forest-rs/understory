@@ -14,7 +14,7 @@ use understory_property::{DependencyObjectExt, Property, PropertyRegistry};
 use understory_style::{ClassId, IdSet, StyleCascade, Theme, ThemeBuilder};
 
 use crate::{
-    BuiltInProperties, ButtonClass, DirtyChannels, Element, ElementId, ElementKind, Interaction,
+    BuiltInProperties, ButtonClass, DirtyChannels, Element, ElementId, Interaction,
     InteractionBatch, LayoutClass, RuntimeState, SceneSnapshot, ThemeKeys, WidgetArena,
 };
 
@@ -41,8 +41,10 @@ impl Ui {
         let props = BuiltInProperties::register(&mut registry);
         let root = ElementId::new(0);
         let mut elements = Vec::new();
-        let mut root_element = Element::new(root, None, ElementKind::Root);
+        let mut root_element = Element::new(root, None, crate::TYPE_ROOT);
         root_element.store.set_local(props.visible, true);
+        root_element.is_root = true;
+        root_element.is_container = true;
         elements.push(root_element);
         Self {
             registry,
@@ -110,21 +112,24 @@ impl Ui {
         self.mark_dirty(DirtyChannels::LAYOUT.into_set() | DirtyChannels::PAINT.into_set());
     }
 
-    /// Appends a child element under the given parent.
-    pub fn append_child(&mut self, parent: ElementId, kind: ElementKind) -> ElementId {
+    /// Appends a child element under the given parent with a type tag and
+    /// optional widget.
+    pub fn append_child_with(
+        &mut self,
+        parent: ElementId,
+        type_tag: understory_style::TypeTag,
+        widget: Option<Box<dyn crate::Widget>>,
+    ) -> ElementId {
         let id = ElementId::new(self.elements.len());
-        let mut element = Element::new(id, Some(parent), kind);
-        if matches!(kind, ElementKind::Button) {
-            element.store.set_local(self.props.pickable, true);
-            element.store.set_local(self.props.focusable, true);
+        let mut element = Element::new(id, Some(parent), type_tag);
+        if let Some(w) = &widget {
+            if w.default_pickable() {
+                element.store.set_local(self.props.pickable, true);
+            }
+            if w.default_focusable() {
+                element.store.set_local(self.props.focusable, true);
+            }
         }
-        let widget: Option<Box<dyn crate::Widget>> = match kind {
-            ElementKind::Button => Some(Box::new(crate::widgets::ButtonWidget::new())),
-            ElementKind::TextBlock => Some(Box::new(crate::widgets::TextBlockWidget::new())),
-            ElementKind::TextInput => Some(Box::new(crate::widgets::TextInputWidget::new(16.0))),
-            ElementKind::ScrollView => Some(Box::new(crate::widgets::ScrollViewWidget::new())),
-            _ => None,
-        };
         if let Some(w) = widget {
             let handle = self.widget_arena.insert(w);
             element.widget = Some(handle);
@@ -139,6 +144,67 @@ impl Ui {
                 | DirtyChannels::PAINT.into_set(),
         );
         id
+    }
+
+    /// Appends a container child (Panel, Column, Row, etc.) with no widget.
+    pub fn append_container(
+        &mut self,
+        parent: ElementId,
+        type_tag: understory_style::TypeTag,
+        horizontal: bool,
+    ) -> ElementId {
+        let id = self.append_child_with(parent, type_tag, None);
+        if let Some(element) = self.elements.get_mut(id.index()) {
+            element.is_container = true;
+            element.horizontal = horizontal;
+        }
+        id
+    }
+
+    /// Appends a child element with a built-in element type.
+    ///
+    /// This is a convenience wrapper that creates the appropriate widget and
+    /// sets structural flags based on the type tag.
+    pub fn append_child(
+        &mut self,
+        parent: ElementId,
+        type_tag: understory_style::TypeTag,
+    ) -> ElementId {
+        use crate::{
+            TYPE_BUTTON, TYPE_COLUMN, TYPE_PANEL, TYPE_ROOT, TYPE_ROW, TYPE_SCROLL_VIEW,
+            TYPE_SPACER, TYPE_TEXT_BLOCK, TYPE_TEXT_INPUT,
+        };
+
+        match type_tag {
+            TYPE_ROOT | TYPE_PANEL | TYPE_COLUMN => self.append_container(parent, type_tag, false),
+            TYPE_ROW => self.append_container(parent, type_tag, true),
+            TYPE_SCROLL_VIEW => {
+                let widget = crate::widgets::ScrollViewWidget::new();
+                let id = self.append_container(parent, type_tag, false);
+                let handle = self.widget_arena.insert(Box::new(widget));
+                if let Some(element) = self.elements.get_mut(id.index()) {
+                    element.widget = Some(handle);
+                }
+                id
+            }
+            TYPE_BUTTON => self.append_child_with(
+                parent,
+                type_tag,
+                Some(Box::new(crate::widgets::ButtonWidget::new())),
+            ),
+            TYPE_TEXT_BLOCK => self.append_child_with(
+                parent,
+                type_tag,
+                Some(Box::new(crate::widgets::TextBlockWidget::new())),
+            ),
+            TYPE_TEXT_INPUT => self.append_child_with(
+                parent,
+                type_tag,
+                Some(Box::new(crate::widgets::TextInputWidget::new(16.0))),
+            ),
+            TYPE_SPACER => self.append_child_with(parent, type_tag, None),
+            _ => self.append_child_with(parent, type_tag, None),
+        }
     }
 
     /// Sets the label text for an element.
@@ -411,7 +477,11 @@ impl Ui {
                         understory_event_state::click::ClickResult::Click(id) => {
                             batch.push(Interaction::Clicked(id));
                             if let Some(element) = self.elements.get(id.index())
-                                && matches!(element.kind, ElementKind::TextInput)
+                                && element.widget.is_some()
+                                && element
+                                    .widget
+                                    .and_then(|h| self.widget_arena.get(h))
+                                    .is_some_and(|w| w.default_focusable())
                             {
                                 self.set_focus(id);
                                 batch.push(Interaction::FocusChanged(id));
@@ -444,8 +514,9 @@ impl Ui {
                     && let Some(path) = self.rebuild().hit_path(point)
                 {
                     for &ancestor in path.iter().rev() {
-                        if let Some(element) = self.elements.get(ancestor.index())
-                            && matches!(element.kind, ElementKind::ScrollView)
+                        if self
+                            .widget::<crate::widgets::ScrollViewWidget>(ancestor)
+                            .is_some()
                         {
                             self.scroll_by(ancestor, -dy);
                             batch.push(Interaction::Scrolled(ancestor));
@@ -677,13 +748,13 @@ mod tests {
         ui.set_local(ui.root(), ui.properties().padding, 0.0);
         ui.set_local(ui.root(), ui.properties().gap, 0.0);
 
-        let column = ui.append_child(ui.root(), ElementKind::Column);
+        let column = ui.append_child(ui.root(), crate::TYPE_COLUMN);
         ui.set_local(column, ui.properties().padding, 0.0);
         ui.set_local(column, ui.properties().gap, 8.0);
 
-        let first = ui.append_child(column, ElementKind::Button);
+        let first = ui.append_child(column, crate::TYPE_BUTTON);
         ui.set_local(first, ui.properties().height, 20.0);
-        let second = ui.append_child(column, ElementKind::Button);
+        let second = ui.append_child(column, crate::TYPE_BUTTON);
         ui.set_local(second, ui.properties().height, 30.0);
 
         let scene = ui.rebuild();
@@ -701,7 +772,7 @@ mod tests {
         ui.set_local(ui.root(), ui.properties().padding, 0.0);
         ui.set_local(ui.root(), ui.properties().gap, 0.0);
 
-        let button = ui.append_child(ui.root(), ElementKind::Button);
+        let button = ui.append_child(ui.root(), crate::TYPE_BUTTON);
         ui.add_button_class(button, ButtonClass::Primary);
 
         let base = StyleBuilder::new()
@@ -744,7 +815,7 @@ mod tests {
         ui.set_local(ui.root(), ui.properties().padding, 0.0);
         ui.set_local(ui.root(), ui.properties().gap, 0.0);
 
-        let button = ui.append_child(ui.root(), ElementKind::Button);
+        let button = ui.append_child(ui.root(), crate::TYPE_BUTTON);
         ui.set_label(button, "Launch");
 
         let move_batch = ui.handle_pointer_event(&PointerEvent::Move(PointerUpdate {
@@ -786,15 +857,15 @@ mod tests {
         ui.set_local(ui.root(), ui.properties().padding, 0.0);
         ui.set_local(ui.root(), ui.properties().gap, 0.0);
 
-        let row = ui.append_child(ui.root(), ElementKind::Row);
+        let row = ui.append_child(ui.root(), crate::TYPE_ROW);
         ui.set_local(row, ui.properties().padding, 0.0);
         ui.set_local(row, ui.properties().gap, 12.0);
 
-        let left = ui.append_child(row, ElementKind::Panel);
+        let left = ui.append_child(row, crate::TYPE_PANEL);
         ui.set_local(left, ui.properties().width, 100.0);
         ui.set_local(left, ui.properties().height, 80.0);
 
-        let right = ui.append_child(row, ElementKind::Panel);
+        let right = ui.append_child(row, crate::TYPE_PANEL);
         ui.set_local(right, ui.properties().height, 80.0);
 
         let scene = ui.rebuild();

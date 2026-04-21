@@ -24,46 +24,23 @@ impl ElementId {
     }
 }
 
-/// Built-in retained element kinds for the first Overstory slice.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum ElementKind {
-    /// Root viewport element.
-    Root,
-    /// Decorative/padded container.
-    Panel,
-    /// Horizontal stack container.
-    Row,
-    /// Vertical stack container.
-    Column,
-    /// Interactive push button.
-    Button,
-    /// Non-interactive spacing element.
-    Spacer,
-    /// Scrollable vertical container.
-    ScrollView,
-    /// Multiline wrapped text block.
-    TextBlock,
-    /// Single-line text input.
-    TextInput,
-}
-
-/// Type selector for [`ElementKind::Root`].
+/// Type tag for root viewport elements.
 pub const TYPE_ROOT: TypeTag = TypeTag(1);
-/// Type selector for [`ElementKind::Panel`].
+/// Type tag for decorative/padded containers.
 pub const TYPE_PANEL: TypeTag = TypeTag(2);
-/// Type selector for [`ElementKind::Row`].
+/// Type tag for horizontal stack containers.
 pub const TYPE_ROW: TypeTag = TypeTag(3);
-/// Type selector for [`ElementKind::Column`].
+/// Type tag for vertical stack containers.
 pub const TYPE_COLUMN: TypeTag = TypeTag(4);
-/// Type selector for [`ElementKind::Button`].
+/// Type tag for interactive push buttons.
 pub const TYPE_BUTTON: TypeTag = TypeTag(5);
-/// Type selector for [`ElementKind::Spacer`].
+/// Type tag for non-interactive spacing elements.
 pub const TYPE_SPACER: TypeTag = TypeTag(6);
-/// Type selector for [`ElementKind::ScrollView`].
+/// Type tag for scrollable vertical containers.
 pub const TYPE_SCROLL_VIEW: TypeTag = TypeTag(7);
-/// Type selector for [`ElementKind::TextBlock`].
+/// Type tag for multiline wrapped text blocks.
 pub const TYPE_TEXT_BLOCK: TypeTag = TypeTag(8);
-/// Type selector for [`ElementKind::TextInput`].
+/// Type tag for single-line text inputs.
 pub const TYPE_TEXT_INPUT: TypeTag = TypeTag(9);
 
 /// Small class vocabulary for common button styling.
@@ -129,7 +106,14 @@ pub struct Element {
     pub(crate) id: ElementId,
     pub(crate) parent: Option<ElementId>,
     pub(crate) children: Vec<ElementId>,
-    pub(crate) kind: ElementKind,
+    /// Style type tag for selector matching.
+    pub(crate) type_tag: TypeTag,
+    /// Whether this element is a container that lays out children.
+    pub(crate) is_container: bool,
+    /// Whether this container lays out children horizontally (Row).
+    pub(crate) horizontal: bool,
+    /// Whether this element is the root viewport element.
+    pub(crate) is_root: bool,
     pub(crate) label: Option<Box<str>>,
     pub(crate) store: PropertyStore<ElementId>,
     pub(crate) classes: IdSet<ClassId>,
@@ -143,19 +127,22 @@ impl core::fmt::Debug for Element {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Element")
             .field("id", &self.id)
-            .field("kind", &self.kind)
+            .field("type_tag", &self.type_tag)
             .field("children", &self.children.len())
             .finish_non_exhaustive()
     }
 }
 
 impl Element {
-    pub(crate) fn new(id: ElementId, parent: Option<ElementId>, kind: ElementKind) -> Self {
+    pub(crate) fn new(id: ElementId, parent: Option<ElementId>, type_tag: TypeTag) -> Self {
         Self {
             id,
             parent,
             children: Vec::new(),
-            kind,
+            type_tag,
+            is_container: false,
+            horizontal: false,
+            is_root: false,
             label: None,
             store: PropertyStore::new(id),
             classes: IdSet::default(),
@@ -171,10 +158,10 @@ impl Element {
         self.id
     }
 
-    /// Returns the element kind.
+    /// Returns the element's style type tag.
     #[must_use]
-    pub const fn kind(&self) -> ElementKind {
-        self.kind
+    pub const fn type_tag(&self) -> TypeTag {
+        self.type_tag
     }
 
     /// Returns the optional label text.
@@ -187,27 +174,10 @@ impl Element {
         &'a self,
         pseudos: &'a [PseudoClassId],
     ) -> SelectorInputs<'a> {
-        SelectorInputs::new(Some(self.kind.type_tag()), self.classes.as_slice(), pseudos)
+        SelectorInputs::new(Some(self.type_tag), self.classes.as_slice(), pseudos)
     }
 }
 
-impl ElementKind {
-    /// Returns the built-in style type tag.
-    #[must_use]
-    pub const fn type_tag(self) -> TypeTag {
-        match self {
-            Self::Root => TYPE_ROOT,
-            Self::Panel => TYPE_PANEL,
-            Self::Row => TYPE_ROW,
-            Self::Column => TYPE_COLUMN,
-            Self::Button => TYPE_BUTTON,
-            Self::Spacer => TYPE_SPACER,
-            Self::ScrollView => TYPE_SCROLL_VIEW,
-            Self::TextBlock => TYPE_TEXT_BLOCK,
-            Self::TextInput => TYPE_TEXT_INPUT,
-        }
-    }
-}
 
 impl DependencyObject<ElementId> for Element {
     fn property_store(&self) -> &PropertyStore<ElementId> {

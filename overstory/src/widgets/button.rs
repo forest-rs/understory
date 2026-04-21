@@ -9,7 +9,9 @@ use core::any::Any;
 use peniko::Brush;
 use understory_display::{DisplayNode, Insets};
 
-use crate::{ElementId, ResolvedElement, Widget};
+use understory_style::ResourceKey;
+
+use crate::{ButtonClass, Element, ElementId, ResolvedElement, ThemeKeys, Widget};
 
 /// Default font size fallback.
 const DEFAULT_FONT_SIZE: f64 = 16.0;
@@ -85,6 +87,30 @@ impl Widget for ButtonWidget {
             understory_display::DisplayAlign::Center,
             DisplayNode::padding(Insets::symmetric(label_padding, 0.0), text_node),
         ));
+    }
+
+    fn background_key(&self, element: &Element) -> Option<ResourceKey> {
+        let primary = element.classes.contains(ButtonClass::Primary.class_id());
+        Some(match (primary, element.pseudos.pressed, element.pseudos.hovered) {
+            (true, true, _) => ThemeKeys::PRIMARY_PRESSED_BACKGROUND,
+            (true, false, true) => ThemeKeys::PRIMARY_HOVER_BACKGROUND,
+            (true, false, false) => ThemeKeys::PRIMARY_BACKGROUND,
+            (false, true, _) => ThemeKeys::BUTTON_PRESSED_BACKGROUND,
+            (false, false, true) => ThemeKeys::BUTTON_HOVER_BACKGROUND,
+            (false, false, false) => ThemeKeys::BUTTON_BACKGROUND,
+        })
+    }
+
+    fn height_key(&self) -> Option<ResourceKey> {
+        Some(ThemeKeys::BUTTON_HEIGHT)
+    }
+
+    fn default_pickable(&self) -> bool {
+        true
+    }
+
+    fn default_focusable(&self) -> bool {
+        true
     }
 
     fn as_any(&self) -> &dyn Any {

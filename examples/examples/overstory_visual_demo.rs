@@ -21,7 +21,7 @@ use imaging_vello_hybrid::VelloHybridRenderer;
 use kurbo::Rect;
 use overstory::peniko::color::palette;
 use overstory::{
-    ButtonClass, ElementId, ElementKind, Interaction, LayoutClass, ThemeKeys, Ui, default_theme,
+    ButtonClass, ElementId, Interaction, LayoutClass, ThemeKeys, Ui, default_theme,
 };
 use ui_events_winit::{WindowEventReducer, WindowEventTranslation};
 use understory_display::{BoxConstraints, TextEngine};
@@ -294,7 +294,7 @@ impl DemoApp {
                 let is_user = msg.role == MessageRole::User;
                 let block = self
                     .ui
-                    .append_child(self.ids.messages, ElementKind::TextBlock);
+                    .append_child(self.ids.messages, overstory::TYPE_TEXT_BLOCK);
                 self.ui.set_label(block, text);
                 self.ui
                     .set_local(block, self.ui.properties().label_padding, 8.0);
@@ -746,17 +746,17 @@ fn build_demo_ui() -> (Ui, DemoIds) {
 
     let button_cascade = make_button_cascade(&ui);
 
-    let shell = ui.append_child(ui.root(), ElementKind::Row);
+    let shell = ui.append_child(ui.root(), overstory::TYPE_ROW);
     ui.set_local(shell, ui.properties().padding, 0.0);
     ui.set_local(shell, ui.properties().gap, 16.0);
 
-    let sidebar = ui.append_child(shell, ElementKind::Panel);
+    let sidebar = ui.append_child(shell, overstory::TYPE_PANEL);
     ui.add_layout_class(sidebar, LayoutClass::Sidebar);
     ui.set_local(sidebar, ui.properties().width, 176.0);
     ui.set_local(sidebar, ui.properties().padding, 16.0);
     ui.set_local(sidebar, ui.properties().gap, 10.0);
 
-    let sidebar_column = ui.append_child(sidebar, ElementKind::Column);
+    let sidebar_column = ui.append_child(sidebar, overstory::TYPE_COLUMN);
     ui.set_local(sidebar_column, ui.properties().padding, 0.0);
     ui.set_local(sidebar_column, ui.properties().gap, 10.0);
 
@@ -777,17 +777,17 @@ fn build_demo_ui() -> (Ui, DemoIds) {
     let roomy = append_button(&mut ui, sidebar_column, &button_cascade, "Roomy", false);
     let compact = append_button(&mut ui, sidebar_column, &button_cascade, "Compact", false);
 
-    let content = ui.append_child(shell, ElementKind::Panel);
+    let content = ui.append_child(shell, overstory::TYPE_PANEL);
     ui.set_local(content, ui.properties().padding, 18.0);
     ui.set_local(content, ui.properties().gap, 12.0);
 
-    let content_column = ui.append_child(content, ElementKind::Column);
+    let content_column = ui.append_child(content, overstory::TYPE_COLUMN);
     ui.set_local(content_column, ui.properties().padding, 0.0);
     ui.set_local(content_column, ui.properties().gap, 12.0);
     ui.set_local(content_column, ui.properties().fill, true);
 
     // Action button row at the top of the content area.
-    let button_row = ui.append_child(content_column, ElementKind::Row);
+    let button_row = ui.append_child(content_column, overstory::TYPE_ROW);
     ui.set_local(button_row, ui.properties().padding, 0.0);
     ui.set_local(button_row, ui.properties().gap, 8.0);
 
@@ -800,7 +800,7 @@ fn build_demo_ui() -> (Ui, DemoIds) {
     ui.set_local(deploy, ui.properties().foreground, palette::css::WHITE);
 
     // Scrollable message area demonstrating ScrollView + TextBlock.
-    let messages = ui.append_child(content_column, ElementKind::ScrollView);
+    let messages = ui.append_child(content_column, overstory::TYPE_SCROLL_VIEW);
     ui.set_local(messages, ui.properties().fill, true);
     ui.set_local(messages, ui.properties().padding, 12.0);
     ui.set_local(messages, ui.properties().gap, 10.0);
@@ -813,7 +813,7 @@ fn build_demo_ui() -> (Ui, DemoIds) {
     // Messages are populated from the transcript via DemoApp::sync_messages.
 
     // Text input at the bottom.
-    let input = ui.append_child(content_column, ElementKind::TextInput);
+    let input = ui.append_child(content_column, overstory::TYPE_TEXT_INPUT);
     ui.set_local(input, ui.properties().height, 40.0);
     ui.set_local(input, ui.properties().padding, 8.0);
     ui.set_local(input, ui.properties().border_width, 1.0);
@@ -942,18 +942,18 @@ mod tests {
         ui.set_local(ui.root(), ui.properties().padding, 0.0);
         ui.set_local(ui.root(), ui.properties().gap, 0.0);
 
-        let column = ui.append_child(ui.root(), ElementKind::Column);
+        let column = ui.append_child(ui.root(), overstory::TYPE_COLUMN);
         ui.set_local(column, ui.properties().padding, 0.0);
         ui.set_local(column, ui.properties().gap, 0.0);
         ui.set_local(column, ui.properties().height, 400.0);
 
-        let top = ui.append_child(column, ElementKind::Button);
+        let top = ui.append_child(column, overstory::TYPE_BUTTON);
         ui.set_local(top, ui.properties().height, 50.0);
 
-        let middle = ui.append_child(column, ElementKind::Panel);
+        let middle = ui.append_child(column, overstory::TYPE_PANEL);
         ui.set_local(middle, ui.properties().fill, true);
 
-        let bottom = ui.append_child(column, ElementKind::Button);
+        let bottom = ui.append_child(column, overstory::TYPE_BUTTON);
         ui.set_local(bottom, ui.properties().height, 50.0);
 
         let scene = ui.scene();
@@ -976,15 +976,15 @@ mod tests {
         ui.set_local(ui.root(), ui.properties().padding, 0.0);
         ui.set_local(ui.root(), ui.properties().gap, 0.0);
 
-        let column = ui.append_child(ui.root(), ElementKind::Column);
+        let column = ui.append_child(ui.root(), overstory::TYPE_COLUMN);
         ui.set_local(column, ui.properties().padding, 0.0);
         ui.set_local(column, ui.properties().gap, 0.0);
         ui.set_local(column, ui.properties().height, 300.0);
 
-        let first = ui.append_child(column, ElementKind::Panel);
+        let first = ui.append_child(column, overstory::TYPE_PANEL);
         ui.set_local(first, ui.properties().fill, true);
 
-        let second = ui.append_child(column, ElementKind::Panel);
+        let second = ui.append_child(column, overstory::TYPE_PANEL);
         ui.set_local(second, ui.properties().fill, true);
 
         let scene = ui.scene();
@@ -1006,16 +1006,16 @@ mod tests {
         ui.set_local(ui.root(), ui.properties().padding, 0.0);
         ui.set_local(ui.root(), ui.properties().gap, 0.0);
 
-        let scroll = ui.append_child(ui.root(), ElementKind::ScrollView);
+        let scroll = ui.append_child(ui.root(), overstory::TYPE_SCROLL_VIEW);
         ui.set_local(scroll, ui.properties().padding, 0.0);
         ui.set_local(scroll, ui.properties().gap, 0.0);
         ui.set_local(scroll, ui.properties().height, 200.0);
 
-        let a = ui.append_child(scroll, ElementKind::Button);
+        let a = ui.append_child(scroll, overstory::TYPE_BUTTON);
         ui.set_local(a, ui.properties().height, 100.0);
-        let b = ui.append_child(scroll, ElementKind::Button);
+        let b = ui.append_child(scroll, overstory::TYPE_BUTTON);
         ui.set_local(b, ui.properties().height, 100.0);
-        let c = ui.append_child(scroll, ElementKind::Button);
+        let c = ui.append_child(scroll, overstory::TYPE_BUTTON);
         ui.set_local(c, ui.properties().height, 100.0);
 
         // No scroll: first child at y=0
@@ -1036,16 +1036,16 @@ mod tests {
         ui.set_local(ui.root(), ui.properties().padding, 0.0);
         ui.set_local(ui.root(), ui.properties().gap, 0.0);
 
-        let scroll = ui.append_child(ui.root(), ElementKind::ScrollView);
+        let scroll = ui.append_child(ui.root(), overstory::TYPE_SCROLL_VIEW);
         ui.set_local(scroll, ui.properties().padding, 0.0);
         ui.set_local(scroll, ui.properties().gap, 0.0);
         ui.set_local(scroll, ui.properties().height, 200.0);
 
-        let a = ui.append_child(scroll, ElementKind::Button);
+        let a = ui.append_child(scroll, overstory::TYPE_BUTTON);
         ui.set_local(a, ui.properties().height, 100.0);
-        let b = ui.append_child(scroll, ElementKind::Button);
+        let b = ui.append_child(scroll, overstory::TYPE_BUTTON);
         ui.set_local(b, ui.properties().height, 100.0);
-        let c = ui.append_child(scroll, ElementKind::Button);
+        let c = ui.append_child(scroll, overstory::TYPE_BUTTON);
         ui.set_local(c, ui.properties().height, 100.0);
 
         let _ = ui.scene();
@@ -1058,7 +1058,7 @@ mod tests {
         ui.set_view_rect(Rect::new(0.0, 0.0, 200.0, 200.0));
         ui.set_local(ui.root(), ui.properties().padding, 0.0);
 
-        let scroll = ui.append_child(ui.root(), ElementKind::ScrollView);
+        let scroll = ui.append_child(ui.root(), overstory::TYPE_SCROLL_VIEW);
         ui.set_local(scroll, ui.properties().height, 200.0);
 
         ui.set_scroll_offset(scroll, -50.0);
@@ -1071,7 +1071,7 @@ mod tests {
         ui.set_view_rect(Rect::new(0.0, 0.0, 200.0, 100.0));
         ui.set_local(ui.root(), ui.properties().padding, 0.0);
 
-        let button = ui.append_child(ui.root(), ElementKind::Button);
+        let button = ui.append_child(ui.root(), overstory::TYPE_BUTTON);
         ui.set_label(button, "Big");
         ui.set_local(button, ui.properties().font_size, 32.0);
 
@@ -1086,7 +1086,7 @@ mod tests {
         ui.set_view_rect(Rect::new(0.0, 0.0, 200.0, 100.0));
         ui.set_local(ui.root(), ui.properties().padding, 0.0);
 
-        let button = ui.append_child(ui.root(), ElementKind::Button);
+        let button = ui.append_child(ui.root(), overstory::TYPE_BUTTON);
         ui.set_label(button, "Normal");
 
         let scene = ui.scene();
@@ -1102,14 +1102,14 @@ mod tests {
         ui.set_local(ui.root(), ui.properties().padding, 0.0);
         ui.set_local(ui.root(), ui.properties().gap, 0.0);
 
-        let column = ui.append_child(ui.root(), ElementKind::Column);
+        let column = ui.append_child(ui.root(), overstory::TYPE_COLUMN);
         ui.set_local(column, ui.properties().padding, 0.0);
         ui.set_local(column, ui.properties().gap, 8.0);
 
-        let short = ui.append_child(column, ElementKind::TextBlock);
+        let short = ui.append_child(column, overstory::TYPE_TEXT_BLOCK);
         ui.set_label(short, "Hello");
 
-        let long = ui.append_child(column, ElementKind::TextBlock);
+        let long = ui.append_child(column, overstory::TYPE_TEXT_BLOCK);
         ui.set_label(
             long,
             "This is a much longer message that should wrap to multiple lines in a narrow container",
@@ -1135,14 +1135,14 @@ mod tests {
         ui.set_local(ui.root(), ui.properties().padding, 0.0);
         ui.set_local(ui.root(), ui.properties().gap, 0.0);
 
-        let column = ui.append_child(ui.root(), ElementKind::Column);
+        let column = ui.append_child(ui.root(), overstory::TYPE_COLUMN);
         ui.set_local(column, ui.properties().padding, 0.0);
         ui.set_local(column, ui.properties().gap, 0.0);
 
-        let a = ui.append_child(column, ElementKind::TextBlock);
+        let a = ui.append_child(column, overstory::TYPE_TEXT_BLOCK);
         ui.set_label(a, "First message");
 
-        let b = ui.append_child(column, ElementKind::TextBlock);
+        let b = ui.append_child(column, overstory::TYPE_TEXT_BLOCK);
         ui.set_label(b, "Second message");
 
         let scene = ui.scene();
@@ -1246,7 +1246,7 @@ mod tests {
         ui.set_view_rect(Rect::new(0.0, 0.0, 400.0, 200.0));
         ui.set_local(ui.root(), ui.properties().padding, 0.0);
 
-        let input = ui.append_child(ui.root(), ElementKind::TextInput);
+        let input = ui.append_child(ui.root(), overstory::TYPE_TEXT_INPUT);
         ui.set_local(input, ui.properties().height, 40.0);
         ui.set_focus(input);
 
@@ -1335,7 +1335,7 @@ fn append_button(
     label: &str,
     primary: bool,
 ) -> ElementId {
-    let button = ui.append_child(parent, ElementKind::Button);
+    let button = ui.append_child(parent, overstory::TYPE_BUTTON);
     ui.set_label(button, label);
     ui.set_style(button, cascade.clone());
     ui.set_local(button, ui.properties().height, 42.0);
