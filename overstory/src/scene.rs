@@ -265,14 +265,12 @@ impl<'a> SceneBuilder<'a> {
                 width: style.border_width,
             },
             corner_radius: style.corner_radius,
-            label: if let Some(handle) = element.widget {
-                self.widget_arena
-                    .get(handle)
-                    .and_then(|w| w.label())
-                    .map(Box::from)
-            } else {
-                element.label.clone()
-            },
+            label: element
+                .widget
+                .and_then(|h| self.widget_arena.get(h))
+                .and_then(|w| w.label())
+                .map(Box::from)
+                .or_else(|| element.label.clone()),
             hovered: element.pseudos.hovered,
             pressed: element.pseudos.pressed,
             focused: element.pseudos.focused,
