@@ -266,6 +266,22 @@ impl DemoApp {
         app
     }
 
+    fn auto_scroll_if_tailed(&mut self) {
+        // Rebuild to get current content_height and viewport after sync_messages.
+        let scene = self.ui.scene();
+        let viewport_h = scene
+            .resolved_element(self.ids.messages)
+            .map_or(0.0, |e| e.rect.height());
+        let offset = self.ui.scroll_offset(self.ids.messages);
+        let content_h = self.ui.content_height(self.ids.messages);
+        let was_at_tail = content_h <= viewport_h || offset + viewport_h >= content_h - 1.0;
+
+        if was_at_tail {
+            let new_offset = (content_h - viewport_h).max(0.0);
+            self.ui.set_scroll_offset(self.ids.messages, new_offset);
+        }
+    }
+
     fn sync_messages(&mut self) {
         let entries: Vec<_> = self.transcript.entries().to_vec();
         for entry in entries.iter().skip(self.message_count) {
@@ -356,6 +372,7 @@ impl DemoApp {
                     self.transcript
                         .append(NewEntry::message(MessageRole::User, text.as_str()));
                     self.sync_messages();
+                    self.auto_scroll_if_tailed();
                     self.ui.clear_text_buffer(self.ids.input);
                 }
             }
