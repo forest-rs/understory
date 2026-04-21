@@ -420,10 +420,12 @@ impl<'a> SceneBuilder<'a> {
             }
 
             // Record measured content extent for ScrollView write-back.
+            // Include padding on both sides so scrolling reveals the full
+            // content area.
             if is_scroll_view {
                 let content_start = if horizontal { content.x0 } else { content.y0 };
-                self.scroll_metrics
-                    .push((id, (cursor - content_start).max(0.0), height));
+                let content_extent = (cursor - content_start + style.padding).max(0.0);
+                self.scroll_metrics.push((id, content_extent, height));
             }
         }
 
