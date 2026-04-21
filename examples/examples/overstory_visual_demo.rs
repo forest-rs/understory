@@ -30,6 +30,7 @@ use understory_style::{
     IdSet, Selector, StyleBuilder, StyleCascade, StyleCascadeBuilder, StyleOrigin,
     StyleSheetBuilder, Theme, ThemeBuilder,
 };
+use understory_transcript::{EntryKind, MessageRole, NewEntry, Transcript};
 use wgpu::TextureFormat;
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
@@ -224,11 +225,30 @@ struct DemoApp {
     reducer: WindowEventReducer,
     text: TextEngine,
     render_state: RenderState,
+    transcript: Transcript,
+    message_count: usize,
 }
 
 impl DemoApp {
     fn new() -> Self {
         let (ui, ids) = build_demo_ui();
+        let mut transcript = Transcript::new();
+        let sample_messages = [
+            (MessageRole::Assistant, "Welcome to the Overstory demo. This message area is driven by understory_transcript."),
+            (MessageRole::User, "Can I type messages?"),
+            (MessageRole::Assistant, "Each message is a TextBlock element that wraps its text within the available width."),
+            (MessageRole::Assistant, "The message list is a ScrollView with fill layout, so it stretches to fill the space between the button row and the bottom of the content panel."),
+            (MessageRole::User, "What about scrolling?"),
+            (MessageRole::Assistant, "Try scrolling with the mouse wheel or trackpad to see the scroll offset in action."),
+            (MessageRole::Assistant, "You can also switch between Warm and Cool themes using the sidebar buttons. The text properties cascade through the style system."),
+            (MessageRole::Assistant, "Switching between Roomy and Compact density adjusts padding, gaps, and button sizes throughout the UI."),
+            (MessageRole::Assistant, "This is a longer message to demonstrate text wrapping. When a message exceeds the available width, Parley shapes the text with a max advance constraint and the glyphs wrap onto multiple lines."),
+            (MessageRole::User, "Nice."),
+        ];
+        for (role, text) in &sample_messages {
+            transcript.append(NewEntry::message(*role, *text));
+        }
+
         let mut app = Self {
             ui,
             ids,
@@ -236,9 +256,43 @@ impl DemoApp {
             reducer: WindowEventReducer::default(),
             text: TextEngine::new(),
             render_state: RenderState::Suspended,
+            transcript,
+            message_count: 0,
         };
+        app.sync_messages();
         app.apply_density(true);
         app
+    }
+
+    fn sync_messages(&mut self) {
+        let entries: Vec<_> = self.transcript.entries().to_vec();
+        for entry in entries.iter().skip(self.message_count) {
+            if let EntryKind::Message(msg) = &entry.kind {
+                let text = msg.body.as_text().unwrap_or("");
+                let is_user = msg.role == MessageRole::User;
+                let block = self
+                    .ui
+                    .append_child(self.ids.messages, ElementKind::TextBlock);
+                self.ui.set_label(block, text);
+                self.ui
+                    .set_local(block, self.ui.properties().label_padding, 8.0);
+                self.ui
+                    .set_local(block, self.ui.properties().padding, 8.0);
+                if is_user {
+                    self.ui.set_local(
+                        block,
+                        self.ui.properties().background,
+                        overstory::Color::from_rgba8(220, 235, 220, 255),
+                    );
+                    self.ui.set_local(
+                        block,
+                        self.ui.properties().corner_radius,
+                        8.0,
+                    );
+                }
+            }
+        }
+        self.message_count = entries.len();
     }
 
     fn process_pointer_translation(
@@ -712,23 +766,7 @@ fn build_demo_ui() -> (Ui, DemoIds) {
         overstory::Color::TRANSPARENT,
     );
 
-    let sample_messages = [
-        "Welcome to the Overstory demo. This message area demonstrates ScrollView and TextBlock working together.",
-        "Each message is a TextBlock element that wraps its text within the available width.",
-        "The message list is a ScrollView with fill layout, so it stretches to fill the space between the button row and the bottom of the content panel.",
-        "Try scrolling with the mouse wheel to see the scroll offset in action.",
-        "You can also switch between Warm and Cool themes using the sidebar buttons. The text properties cascade through the style system.",
-        "Switching between Roomy and Compact density adjusts padding, gaps, and button sizes throughout the UI.",
-        "This is a longer message to demonstrate text wrapping. When a message exceeds the available width, Parley shapes the text with a max advance constraint and the glyphs wrap onto multiple lines. The TextBlock's estimated height in the scene layout accounts for this wrapping.",
-        "Short one.",
-        "Another message to make the content tall enough to scroll. The ScrollView clips its content to its assigned rectangle and offsets child positions by the scroll amount.",
-        "The box tree applies a scroll transform to children so that hit testing works correctly inside the scrolled content area.",
-    ];
-    for msg in &sample_messages {
-        let block = ui.append_child(messages, ElementKind::TextBlock);
-        ui.set_label(block, *msg);
-        ui.set_local(block, ui.properties().label_padding, 0.0);
-    }
+    // Messages are populated from the transcript via DemoApp::sync_messages.
 
     (
         ui,
