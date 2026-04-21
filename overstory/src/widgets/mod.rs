@@ -7,8 +7,10 @@ mod button;
 mod scroll_view;
 mod text_block;
 mod text_input;
+mod tooltip;
 
 pub use button::ButtonWidget;
 pub use scroll_view::ScrollViewWidget;
 pub use text_block::TextBlockWidget;
 pub use text_input::TextInputWidget;
+pub use tooltip::TooltipWidget;

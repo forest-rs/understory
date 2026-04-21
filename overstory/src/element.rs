@@ -42,6 +42,8 @@ pub const TYPE_SCROLL_VIEW: TypeTag = TypeTag(7);
 pub const TYPE_TEXT_BLOCK: TypeTag = TypeTag(8);
 /// Type tag for single-line text inputs.
 pub const TYPE_TEXT_INPUT: TypeTag = TypeTag(9);
+/// Type tag for tooltip overlays.
+pub const TYPE_TOOLTIP: TypeTag = TypeTag(10);
 
 /// Small class vocabulary for common button styling.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]

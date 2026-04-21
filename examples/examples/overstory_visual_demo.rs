@@ -543,6 +543,7 @@ impl DemoApp {
 
         let scale_factor = window.scale_factor();
         self.ui.refresh_editors(&mut self.text);
+        self.ui.update_tooltips(&mut self.text);
         let plan = self.ui.surface_plan(&mut self.text);
         let (mut display_tree, view_rect) = plan
             .flatten_to_display_tree()
@@ -795,6 +796,18 @@ fn build_demo_ui() -> (Ui, DemoIds) {
     let deploy = append_button(&mut ui, button_row, &button_cascade, "Deploy", true);
     ui.set_local(deploy, ui.properties().fill, true);
     ui.set_local(deploy, ui.properties().foreground, palette::css::WHITE);
+
+    // Tooltip on the Deploy button — shows on hover, positioned below trigger.
+    let tooltip = ui.append_child_with(
+        ui.root(),
+        overstory::TYPE_TOOLTIP,
+        Some(Box::new(overstory::widgets::TooltipWidget::new(deploy))),
+    );
+    ui.set_label(tooltip, "Ships to production");
+    ui.set_local(tooltip, ui.properties().height, 28.0);
+    ui.set_local(tooltip, ui.properties().width, 150.0);
+    ui.set_local(tooltip, ui.properties().corner_radius, 4.0);
+    ui.set_local(tooltip, ui.properties().border_width, 1.0);
 
     // Scrollable message area demonstrating ScrollView + TextBlock.
     let messages = ui.append_child(content_column, overstory::TYPE_SCROLL_VIEW);

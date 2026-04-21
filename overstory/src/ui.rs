@@ -376,6 +376,62 @@ impl Ui {
         batch
     }
 
+    /// Updates tooltip visibility and positioning based on current hover state.
+    ///
+    /// Tooltips become visible when their trigger element is hovered and
+    /// are positioned below the trigger's resolved rect.
+    pub fn update_tooltips(&mut self, text: &mut TextEngine) {
+        // Collect tooltip info: (tooltip_id, trigger_id).
+        let tooltips: Vec<(ElementId, ElementId)> = self
+            .elements
+            .iter()
+            .filter_map(|el| {
+                let handle = el.widget?;
+                let widget = self.widget_arena.get(handle)?;
+                let tw = widget.as_any().downcast_ref::<crate::widgets::TooltipWidget>()?;
+                Some((el.id, tw.trigger()))
+            })
+            .collect();
+
+        if tooltips.is_empty() {
+            return;
+        }
+
+        // Rebuild to get current hover state.
+        let _ = self.rebuild(text);
+        let snapshot = self.scene.as_ref().expect("scene rebuilt");
+
+        // Collect trigger state before mutating widgets.
+        let trigger_state: Vec<(ElementId, bool, Option<Rect>)> = tooltips
+            .iter()
+            .map(|(tooltip_id, trigger_id)| {
+                let resolved = snapshot.resolved_element(*trigger_id);
+                let hovered = resolved.is_some_and(|r| r.hovered);
+                let rect = resolved.map(|r| r.rect);
+                (*tooltip_id, hovered, rect)
+            })
+            .collect();
+
+        // Apply visibility and positioning.
+        let mut changed = false;
+        for (tooltip_id, hovered, trigger_rect) in &trigger_state {
+            if let Some(tw) = self.widget_mut::<crate::widgets::TooltipWidget>(*tooltip_id) {
+                if tw.is_visible() != *hovered {
+                    tw.set_visible(*hovered);
+                    changed = true;
+                }
+                if *hovered
+                    && let Some(rect) = trigger_rect
+                {
+                    tw.set_position(Point::new(rect.x0, rect.y1 + 4.0));
+                }
+            }
+        }
+        if changed {
+            self.mark_dirty(DirtyChannels::LAYOUT.into_set() | DirtyChannels::PAINT.into_set());
+        }
+    }
+
     /// Refreshes widget layouts (e.g., text editor glyph positions) before
     /// cursor/selection geometry.
     pub fn refresh_editors(&mut self, text: &mut TextEngine) {
@@ -487,9 +543,22 @@ impl Ui {
         // Build overlay surfaces for promoted elements.
         for (id, role) in &promoted {
             if let Some(tree) = snapshot.display_tree_for(&self.widget_arena, *id) {
-                let bounds = snapshot
+                let layout_rect = snapshot
                     .resolved_element(*id)
                     .map_or(Rect::ZERO, |r| r.rect);
+                // Use the widget's desired position if set (e.g., tooltip
+                // positioning relative to trigger), otherwise use layout rect.
+                let bounds = self
+                    .widget::<crate::widgets::TooltipWidget>(*id)
+                    .and_then(|tw| {
+                        tw.position().map(|pos| {
+                            Rect::from_origin_size(
+                                pos,
+                                layout_rect.size(),
+                            )
+                        })
+                    })
+                    .unwrap_or(layout_rect);
                 plan.push(crate::SurfaceEntry {
                     element_id: *id,
                     role: *role,
