@@ -453,8 +453,23 @@ impl Ui {
     pub fn surface_plan(&mut self, text: &mut TextEngine) -> crate::SurfacePlan {
         let _ = self.rebuild(text);
         let snapshot = self.scene.as_ref().expect("scene just rebuilt");
-        let display_tree = snapshot.display_tree(&self.widget_arena);
         let view_rect = snapshot.view_rect();
+
+        // Find elements whose widgets request surface promotion.
+        let mut promoted = Vec::new();
+        for element in &self.elements {
+            if let Some(handle) = element.widget
+                && let Some(widget) = self.widget_arena.get(handle)
+                && let Some(role) = widget.surface_role()
+            {
+                promoted.push((element.id, role));
+            }
+        }
+
+        let promoted_ids: Vec<_> = promoted.iter().map(|(id, _)| *id).collect();
+
+        // Build root surface excluding promoted elements.
+        let root_tree = snapshot.display_tree_excluding(&self.widget_arena, &promoted_ids);
 
         let mut plan = crate::SurfacePlan::new();
         plan.push(crate::SurfaceEntry {
@@ -466,8 +481,29 @@ impl Ui {
             opacity: 1.0,
             blend: crate::BlendModeHint::Normal,
             anchor: None,
-            content: crate::SurfaceContent::Display(Box::new(display_tree)),
+            content: crate::SurfaceContent::Display(Box::new(root_tree)),
         });
+
+        // Build overlay surfaces for promoted elements.
+        for (id, role) in &promoted {
+            if let Some(tree) = snapshot.display_tree_for(&self.widget_arena, *id) {
+                let bounds = snapshot
+                    .resolved_element(*id)
+                    .map_or(Rect::ZERO, |r| r.rect);
+                plan.push(crate::SurfaceEntry {
+                    element_id: *id,
+                    role: *role,
+                    transform: kurbo::Affine::IDENTITY,
+                    bounds,
+                    clip: None,
+                    opacity: 1.0,
+                    blend: crate::BlendModeHint::Normal,
+                    anchor: None,
+                    content: crate::SurfaceContent::Display(Box::new(tree)),
+                });
+            }
+        }
+
         plan
     }
 

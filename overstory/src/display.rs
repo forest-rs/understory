@@ -27,15 +27,49 @@ impl SceneSnapshot {
     pub fn display_tree(&self, widget_arena: &WidgetArena) -> DisplayTree {
         let root_origin = Point::new(self.view_rect().x0, self.view_rect().y0);
         let mut index = 0;
-        let display_root = build_element_tree(self.resolved(), &mut index)
+        let display_root = build_element_tree(self.resolved(), &mut index, &[])
             .expect("scene snapshot should contain a root resolved element");
         DisplayTree::new(display_node_for(root_origin, &display_root, widget_arena))
+    }
+
+    /// Builds a display tree for the root surface, excluding promoted elements.
+    #[must_use]
+    pub fn display_tree_excluding(
+        &self,
+        widget_arena: &WidgetArena,
+        skip_ids: &[crate::ElementId],
+    ) -> DisplayTree {
+        let root_origin = Point::new(self.view_rect().x0, self.view_rect().y0);
+        let mut index = 0;
+        let display_root = build_element_tree(self.resolved(), &mut index, skip_ids)
+            .expect("scene snapshot should contain a root resolved element");
+        DisplayTree::new(display_node_for(root_origin, &display_root, widget_arena))
+    }
+
+    /// Builds a display tree for a single promoted element subtree.
+    #[must_use]
+    pub fn display_tree_for(
+        &self,
+        widget_arena: &WidgetArena,
+        element_id: crate::ElementId,
+    ) -> Option<DisplayTree> {
+        let resolved = self.resolved();
+        let pos = resolved.iter().position(|r| r.id == element_id)?;
+        let mut index = pos;
+        let element_tree = build_element_tree(resolved, &mut index, &[])?;
+        let origin = Point::new(element_tree.element.rect.x0, element_tree.element.rect.y0);
+        Some(DisplayTree::new(display_node_for(
+            origin,
+            &element_tree,
+            widget_arena,
+        )))
     }
 }
 
 fn build_element_tree<'a>(
     resolved: &'a [ResolvedElement],
     index: &mut usize,
+    skip_ids: &[crate::ElementId],
 ) -> Option<ElementDisplayTree<'a>> {
     let element = resolved.get(*index)?;
     let depth = element.depth;
@@ -49,11 +83,30 @@ fn build_element_tree<'a>(
         if next.depth != depth + 1 {
             panic!("resolved scene depth should advance one level at a time");
         }
-        let child = build_element_tree(resolved, index).expect("child subtree should parse");
+        // Skip promoted elements and their entire subtrees.
+        if skip_ids.contains(&next.id) {
+            skip_subtree(resolved, index);
+            continue;
+        }
+        let child =
+            build_element_tree(resolved, index, skip_ids).expect("child subtree should parse");
         children.push(child);
     }
 
     Some(ElementDisplayTree { element, children })
+}
+
+/// Advances `index` past an element and all its descendants.
+fn skip_subtree(resolved: &[ResolvedElement], index: &mut usize) {
+    let element = &resolved[*index];
+    let depth = element.depth;
+    *index += 1;
+    while let Some(next) = resolved.get(*index) {
+        if next.depth <= depth {
+            break;
+        }
+        *index += 1;
+    }
 }
 
 fn display_node_for(parent_origin: Point, node: &ElementDisplayTree<'_>, widget_arena: &WidgetArena) -> DisplayNode {

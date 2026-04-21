@@ -141,6 +141,15 @@ pub trait Widget {
         false
     }
 
+    /// Request that this element be promoted to a separate compositor surface.
+    ///
+    /// Return `Some(role)` to promote the element out of the root surface
+    /// into its own overlay/popup/tooltip surface. Return `None` for normal
+    /// inline rendering.
+    fn surface_role(&self) -> Option<crate::SurfaceRole> {
+        None
+    }
+
     /// Downcast to a concrete type for typed accessors.
     fn as_any(&self) -> &dyn Any;
 

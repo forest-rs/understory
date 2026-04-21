@@ -15,8 +15,8 @@
 
 use alloc::vec::Vec;
 
-use kurbo::{Affine, Rect};
-use understory_display::DisplayTree;
+use kurbo::{Affine, Rect, Vec2};
+use understory_display::{DisplayNode, DisplayTree};
 
 use crate::ElementId;
 
@@ -82,13 +82,40 @@ impl SurfacePlan {
     /// on top of the root surface in painter order.
     #[must_use]
     pub fn flatten_to_display_tree(&self) -> Option<(DisplayTree, Rect)> {
-        // For now, return the root surface's display tree directly.
-        // When overlays are added, this will composite them on top.
         let root = self.root_surface()?;
-        match &root.content {
-            SurfaceContent::Display(tree) => Some(((**tree).clone(), root.bounds)),
-            SurfaceContent::External(_) => None,
+        let root_tree = match &root.content {
+            SurfaceContent::Display(tree) => tree,
+            SurfaceContent::External(_) => return None,
+        };
+
+        // Collect overlay display trees.
+        let overlays: Vec<_> = self
+            .overlay_surfaces()
+            .filter_map(|s| match &s.content {
+                SurfaceContent::Display(tree) => Some((s, tree)),
+                SurfaceContent::External(_) => None,
+            })
+            .collect();
+
+        if overlays.is_empty() {
+            return Some(((**root_tree).clone(), root.bounds));
         }
+
+        // Composite overlays on top of the root by wrapping everything
+        // in a Stack. Each overlay is positioned at its bounds origin.
+        let mut stack_children = Vec::with_capacity(1 + overlays.len());
+        stack_children.push(root_tree.root().clone());
+        for (surface, tree) in &overlays {
+            stack_children.push(DisplayNode::offset(
+                Vec2::new(surface.bounds.x0, surface.bounds.y0),
+                DisplayNode::fixed_frame(surface.bounds.size(), tree.root().clone()),
+            ));
+        }
+        let composited = DisplayNode::fixed_frame(
+            root.bounds.size(),
+            DisplayNode::stack(stack_children),
+        );
+        Some((DisplayTree::new(composited), root.bounds))
     }
 }
 
