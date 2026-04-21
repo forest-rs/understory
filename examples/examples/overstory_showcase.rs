@@ -31,7 +31,7 @@ fn main() {
 
     let compose = find_by_label(&ui, "Compose").expect("compose button");
     let compose_rect = ui
-        .scene()
+        .scene(&mut text)
         .resolved_element(compose)
         .expect("compose resolved")
         .rect;
@@ -154,7 +154,7 @@ fn make_button_cascade(ui: &Ui) -> understory_style::StyleCascade {
 }
 
 fn print_scene(ui: &mut Ui) {
-    for element in ui.scene().resolved() {
+    for element in ui.scene(&mut text).resolved() {
         let indent = "  ".repeat(element.depth as usize);
         let background = element.background.to_rgba8();
         println!(

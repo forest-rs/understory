@@ -107,6 +107,40 @@ impl TextEngine {
 
         runs
     }
+
+    /// Measures the size of a text string with given font properties and max width.
+    ///
+    /// Returns the bounding size after Parley text shaping and line breaking.
+    /// This is the accurate measurement primitive for layout — no heuristics.
+    #[must_use]
+    pub fn measure_text(
+        &mut self,
+        text: &str,
+        font_size: f32,
+        font_family: &str,
+        max_width: Option<f32>,
+    ) -> kurbo::Size {
+        let mut builder = self
+            .layout_cx
+            .ranged_builder(&mut self.font_cx, text, 1.0, true);
+        builder.push_default(StyleProperty::FontFamily(FontFamily::Source(
+            Cow::Borrowed(font_family),
+        )));
+        builder.push_default(StyleProperty::FontSize(font_size));
+        builder.push_default(StyleProperty::Brush(Brush::Solid(peniko::Color::BLACK)));
+
+        let mut layout = builder.build(text);
+        layout.break_all_lines(max_width);
+        layout.align(
+            max_width,
+            Alignment::Start,
+            AlignmentOptions::default(),
+        );
+
+        let width = layout.full_width() as f64;
+        let height = layout.height() as f64;
+        kurbo::Size::new(width, height)
+    }
 }
 
 /// Simple text shaping request for one retained label or line of text.

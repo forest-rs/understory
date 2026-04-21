@@ -277,7 +277,7 @@ impl DemoApp {
 
     /// Scrolls the messages ScrollView to the bottom.
     fn scroll_to_tail(&mut self) {
-        let _ = self.ui.scene(); // rebuild to get updated content_height
+        let _ = self.ui.scene(&mut self.text); // rebuild to get updated content_height
         let content_h = self.ui.content_height(self.ids.messages);
         let viewport_h = self.ui.viewport_height(self.ids.messages);
         self.ui.set_scroll_offset(
@@ -549,7 +549,7 @@ impl DemoApp {
 
         let scale_factor = window.scale_factor();
         self.ui.refresh_editors(&mut self.text);
-        let (mut display_tree, view_rect) = self.ui.display_tree();
+        let (mut display_tree, view_rect) = self.ui.display_tree(&mut self.text);
         display_tree.layout(
             &mut self.text,
             view_rect.origin(),
@@ -851,7 +851,7 @@ mod tests {
         let mut app = DemoApp::new();
         app.resize_ui(PhysicalSize::new(960, 640), 1.0);
 
-        let scene = app.ui.scene();
+        let scene = app.ui.scene(&mut app.text);
         let expected_width = 960.0 - current_root_padding(true) * 2.0;
         let expected_height = 640.0 - current_root_padding(true) * 2.0;
 
@@ -884,7 +884,7 @@ mod tests {
         app.apply_density(false);
 
         let compact_height = 640.0 - current_root_padding(false) * 2.0;
-        let compact_scene = app.ui.scene();
+        let compact_scene = app.ui.scene(&mut app.text);
         let compact_shell = compact_scene
             .resolved_element(app.ids.shell)
             .expect("resolved element")
@@ -912,7 +912,7 @@ mod tests {
 
         app.apply_density(true);
         let roomy_height = 640.0 - current_root_padding(true) * 2.0;
-        let roomy_scene = app.ui.scene();
+        let roomy_scene = app.ui.scene(&mut app.text);
         let roomy_shell = roomy_scene
             .resolved_element(app.ids.shell)
             .expect("resolved element")
@@ -938,6 +938,7 @@ mod tests {
     #[test]
     fn fill_child_takes_remaining_space() {
         let mut ui = Ui::new(default_theme());
+        let mut text = TextEngine::new();
         ui.set_view_rect(Rect::new(0.0, 0.0, 200.0, 400.0));
         ui.set_local(ui.root(), ui.properties().padding, 0.0);
         ui.set_local(ui.root(), ui.properties().gap, 0.0);
@@ -956,7 +957,7 @@ mod tests {
         let bottom = ui.append_child(column, overstory::TYPE_BUTTON);
         ui.set_local(bottom, ui.properties().height, 50.0);
 
-        let scene = ui.scene();
+        let scene = ui.scene(&mut text);
         assert_eq!(scene.resolved_element(top).unwrap().rect.height(), 50.0);
         assert_eq!(
             scene.resolved_element(middle).unwrap().rect.height(),
@@ -972,6 +973,7 @@ mod tests {
     #[test]
     fn multiple_fill_children_share_space() {
         let mut ui = Ui::new(default_theme());
+        let mut text = TextEngine::new();
         ui.set_view_rect(Rect::new(0.0, 0.0, 200.0, 300.0));
         ui.set_local(ui.root(), ui.properties().padding, 0.0);
         ui.set_local(ui.root(), ui.properties().gap, 0.0);
@@ -987,7 +989,7 @@ mod tests {
         let second = ui.append_child(column, overstory::TYPE_PANEL);
         ui.set_local(second, ui.properties().fill, true);
 
-        let scene = ui.scene();
+        let scene = ui.scene(&mut text);
         assert_eq!(
             scene.resolved_element(first).unwrap().rect.height(),
             150.0
@@ -1002,6 +1004,7 @@ mod tests {
     #[test]
     fn scroll_view_offsets_children() {
         let mut ui = Ui::new(default_theme());
+        let mut text = TextEngine::new();
         ui.set_view_rect(Rect::new(0.0, 0.0, 200.0, 200.0));
         ui.set_local(ui.root(), ui.properties().padding, 0.0);
         ui.set_local(ui.root(), ui.properties().gap, 0.0);
@@ -1019,7 +1022,7 @@ mod tests {
         ui.set_local(c, ui.properties().height, 100.0);
 
         // No scroll: first child at y=0
-        let scene = ui.scene();
+        let scene = ui.scene(&mut text);
         assert_eq!(scene.resolved_element(a).unwrap().rect.y0, 0.0);
         assert_eq!(scene.resolved_element(c).unwrap().rect.y0, 200.0);
 
@@ -1032,6 +1035,7 @@ mod tests {
     #[test]
     fn scroll_view_tracks_content_height() {
         let mut ui = Ui::new(default_theme());
+        let mut text = TextEngine::new();
         ui.set_view_rect(Rect::new(0.0, 0.0, 200.0, 200.0));
         ui.set_local(ui.root(), ui.properties().padding, 0.0);
         ui.set_local(ui.root(), ui.properties().gap, 0.0);
@@ -1048,7 +1052,7 @@ mod tests {
         let c = ui.append_child(scroll, overstory::TYPE_BUTTON);
         ui.set_local(c, ui.properties().height, 100.0);
 
-        let _ = ui.scene();
+        let _ = ui.scene(&mut text);
         assert_eq!(ui.content_height(scroll), 300.0);
     }
 
@@ -1068,6 +1072,7 @@ mod tests {
     #[test]
     fn custom_font_size_in_resolved_element() {
         let mut ui = Ui::new(default_theme());
+        let mut text = TextEngine::new();
         ui.set_view_rect(Rect::new(0.0, 0.0, 200.0, 100.0));
         ui.set_local(ui.root(), ui.properties().padding, 0.0);
 
@@ -1075,7 +1080,7 @@ mod tests {
         ui.set_label(button, "Big");
         ui.set_local(button, ui.properties().font_size, 32.0);
 
-        let scene = ui.scene();
+        let scene = ui.scene(&mut text);
         let resolved = scene.resolved_element(button).unwrap();
         assert_eq!(resolved.font_size, 32.0);
     }
@@ -1083,13 +1088,14 @@ mod tests {
     #[test]
     fn theme_font_size_used_as_default() {
         let mut ui = Ui::new(default_theme());
+        let mut text = TextEngine::new();
         ui.set_view_rect(Rect::new(0.0, 0.0, 200.0, 100.0));
         ui.set_local(ui.root(), ui.properties().padding, 0.0);
 
         let button = ui.append_child(ui.root(), overstory::TYPE_BUTTON);
         ui.set_label(button, "Normal");
 
-        let scene = ui.scene();
+        let scene = ui.scene(&mut text);
         let resolved = scene.resolved_element(button).unwrap();
         assert_eq!(resolved.font_size, 16.0);
         assert_eq!(resolved.label_padding, 12.0);
@@ -1098,6 +1104,7 @@ mod tests {
     #[test]
     fn text_block_measures_height_from_label() {
         let mut ui = Ui::new(default_theme());
+        let mut text = TextEngine::new();
         ui.set_view_rect(Rect::new(0.0, 0.0, 200.0, 400.0));
         ui.set_local(ui.root(), ui.properties().padding, 0.0);
         ui.set_local(ui.root(), ui.properties().gap, 0.0);
@@ -1115,7 +1122,7 @@ mod tests {
             "This is a much longer message that should wrap to multiple lines in a narrow container",
         );
 
-        let scene = ui.scene();
+        let scene = ui.scene(&mut text);
         let short_rect = scene.resolved_element(short).unwrap().rect;
         let long_rect = scene.resolved_element(long).unwrap().rect;
 
@@ -1131,6 +1138,7 @@ mod tests {
     #[test]
     fn text_block_stacks_in_column() {
         let mut ui = Ui::new(default_theme());
+        let mut text = TextEngine::new();
         ui.set_view_rect(Rect::new(0.0, 0.0, 300.0, 600.0));
         ui.set_local(ui.root(), ui.properties().padding, 0.0);
         ui.set_local(ui.root(), ui.properties().gap, 0.0);
@@ -1145,7 +1153,7 @@ mod tests {
         let b = ui.append_child(column, overstory::TYPE_TEXT_BLOCK);
         ui.set_label(b, "Second message");
 
-        let scene = ui.scene();
+        let scene = ui.scene(&mut text);
         let a_rect = scene.resolved_element(a).unwrap().rect;
         let b_rect = scene.resolved_element(b).unwrap().rect;
 
@@ -1158,7 +1166,7 @@ mod tests {
         let mut app = DemoApp::new();
         app.resize_ui(PhysicalSize::new(960, 640), 1.0);
 
-        let scene = app.ui.scene();
+        let scene = app.ui.scene(&mut app.text);
         let content_rect = scene
             .resolved_element(app.ids.content)
             .expect("content panel")
@@ -1191,7 +1199,7 @@ mod tests {
         app.resize_ui(PhysicalSize::new(960, 640), 1.0);
 
         // Find where the messages scroll view is.
-        let scene = app.ui.scene();
+        let scene = app.ui.scene(&mut app.text);
         let msg_rect = scene
             .resolved_element(app.ids.messages)
             .expect("messages scroll view")
@@ -1304,7 +1312,7 @@ mod tests {
             .get(ThemeKeys::PRIMARY_BACKGROUND)
             .expect("primary background in theme");
 
-        let scene = app.ui.scene();
+        let scene = app.ui.scene(&mut app.text);
         let roomy = scene
             .resolved_element(app.ids.roomy)
             .expect("roomy resolved element");
@@ -1315,7 +1323,7 @@ mod tests {
         assert_eq!(compact.background, theme_button);
 
         app.apply_density(false);
-        let scene = app.ui.scene();
+        let scene = app.ui.scene(&mut app.text);
         let roomy = scene
             .resolved_element(app.ids.roomy)
             .expect("roomy resolved element");

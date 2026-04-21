@@ -15,6 +15,42 @@ use kurbo::{Point, Size};
 use understory_display::{DisplayNode, TextEngine};
 use understory_style::ResourceKey;
 
+/// Context provided to widgets during measurement.
+///
+/// Exposes text measurement without leaking `TextEngine` or Parley
+/// directly into the widget interface.
+pub struct MeasureCtx<'a> {
+    text: &'a mut TextEngine,
+}
+
+impl core::fmt::Debug for MeasureCtx<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("MeasureCtx").finish_non_exhaustive()
+    }
+}
+
+impl<'a> MeasureCtx<'a> {
+    /// Creates a measurement context wrapping a text engine.
+    pub fn new(text: &'a mut TextEngine) -> Self {
+        Self { text }
+    }
+
+    /// Measures a text string and returns its rendered size.
+    ///
+    /// `font_size` is in logical display units. `font_family` is a CSS-like
+    /// family string. `max_width` constrains line breaking.
+    #[must_use]
+    pub fn measure_text(
+        &mut self,
+        text: &str,
+        font_size: f32,
+        font_family: &str,
+        max_width: Option<f32>,
+    ) -> Size {
+        self.text.measure_text(text, font_size, font_family, max_width)
+    }
+}
+
 use crate::{ElementId, InteractionBatch, ResolvedElement};
 
 /// Thin behavioral interface for element-attached widgets.
@@ -27,10 +63,10 @@ use crate::{ElementId, InteractionBatch, ResolvedElement};
 pub trait Widget {
     /// Measure the widget's desired size given available space.
     ///
-    /// Return `Some(size)` to provide a measured size. The layout system
-    /// uses this for both width and height. Return `None` to fall through
-    /// to the standard container layout.
-    fn measure(&self, _available: Size) -> Option<Size> {
+    /// `ctx` provides text measurement and other layout capabilities.
+    /// Return `Some(size)` to provide a measured size. Return `None` to
+    /// fall through to the standard container layout.
+    fn measure(&self, _available: Size, _ctx: &mut MeasureCtx<'_>) -> Option<Size> {
         None
     }
 

@@ -385,7 +385,7 @@ impl Ui {
     }
 
     /// Rebuilds the resolved scene if needed and returns the current snapshot.
-    pub fn rebuild(&mut self) -> &SceneSnapshot {
+    pub fn rebuild(&mut self, text: &mut TextEngine) -> &SceneSnapshot {
         if self.scene.is_none() || !self.dirty.is_empty() {
             let (snapshot, scroll_metrics) = SceneSnapshot::build(
                 &self.elements,
@@ -395,6 +395,7 @@ impl Ui {
                 &self.props,
                 &self.theme,
                 &self.widget_arena,
+                text,
             );
             let mut needs_rebuild = false;
             for (id, content_h, viewport_h) in &scroll_metrics {
@@ -407,7 +408,6 @@ impl Ui {
                 }
             }
             if needs_rebuild {
-                // Scroll offset was reclamped — rebuild to get a consistent snapshot.
                 let (snapshot, _) = SceneSnapshot::build(
                     &self.elements,
                     self.root,
@@ -416,6 +416,7 @@ impl Ui {
                     &self.props,
                     &self.theme,
                     &self.widget_arena,
+                    text,
                 );
                 self.scene = Some(snapshot);
             } else {
@@ -427,14 +428,14 @@ impl Ui {
     }
 
     /// Returns the current resolved scene, rebuilding first if necessary.
-    pub fn scene(&mut self) -> &SceneSnapshot {
-        self.rebuild()
+    pub fn scene(&mut self, text: &mut TextEngine) -> &SceneSnapshot {
+        self.rebuild(text)
     }
 
     /// Rebuilds the scene if needed and returns a display tree with widget
     /// rendering applied.
-    pub fn display_tree(&mut self) -> (understory_display::DisplayTree, Rect) {
-        let _ = self.rebuild();
+    pub fn display_tree(&mut self, text: &mut TextEngine) -> (understory_display::DisplayTree, Rect) {
+        let _ = self.rebuild(text);
         let snapshot = self.scene.as_ref().expect("scene just rebuilt");
         let tree = snapshot.display_tree(&self.widget_arena);
         let view_rect = snapshot.view_rect();
@@ -448,7 +449,7 @@ impl Ui {
         text: &mut TextEngine,
     ) -> InteractionBatch {
         let mut batch = InteractionBatch::default();
-        let _ = self.rebuild();
+        let _ = self.rebuild(text);
 
         match event {
             PointerEvent::Enter(_) => {}
@@ -461,12 +462,12 @@ impl Ui {
                     .runtime
                     .clicks
                     .on_move(pointer_id(update.pointer), point);
-                self.update_hover(point, &mut batch);
+                self.update_hover(point, &mut batch, text);
             }
             PointerEvent::Down(button) if is_primary_button(button.button) => {
                 let point = point_from_state(&button.state);
-                self.update_hover(point, &mut batch);
-                if let Some(target) = self.rebuild().top_hit(point) {
+                self.update_hover(point, &mut batch, text);
+                if let Some(target) = self.rebuild(text).top_hit(point) {
                     if self.runtime.pressed_target != Some(target) {
                         self.set_pressed_target(Some(target), &mut batch);
                     }
@@ -481,8 +482,8 @@ impl Ui {
             }
             PointerEvent::Up(button) if is_primary_button(button.button) => {
                 let point = point_from_state(&button.state);
-                self.update_hover(point, &mut batch);
-                let current_target = self.rebuild().top_hit(point);
+                self.update_hover(point, &mut batch, text);
+                let current_target = self.rebuild(text).top_hit(point);
                 self.set_pressed_target(None, &mut batch);
                 if let Some(target) = current_target {
                     match self.runtime.clicks.on_up(
@@ -494,7 +495,7 @@ impl Ui {
                     ) {
                         understory_event_state::click::ClickResult::Click(id) => {
                             batch.push(Interaction::Clicked(id));
-                            let scene = self.rebuild();
+                            let scene = self.rebuild(text);
                             let is_focusable = scene
                                 .node_for(id)
                                 .and_then(|node| scene.box_tree().flags(node))
@@ -505,7 +506,7 @@ impl Ui {
                                 self.set_focus(id);
                                 batch.push(Interaction::FocusChanged(id));
                                 // Delegate click-to-position to widget.
-                                if let Some(resolved) = self.rebuild().resolved_element(id).cloned()
+                                if let Some(resolved) = self.rebuild(text).resolved_element(id).cloned()
                                     && let Some(handle) =
                                         self.elements.get(id.index()).and_then(|e| e.widget)
                                     && let Some(widget) = self.widget_arena.get_mut(handle)
@@ -530,7 +531,7 @@ impl Ui {
                 let point = point_from_state(&scroll.state);
                 let dy = scroll_delta_y(scroll.delta);
                 if dy != 0.0
-                    && let Some(path) = self.rebuild().hit_path(point)
+                    && let Some(path) = self.rebuild(text).hit_path(point)
                 {
                     for &ancestor in path.iter().rev() {
                         if self
@@ -549,7 +550,7 @@ impl Ui {
         }
 
         if !self.dirty.is_empty() {
-            let _ = self.rebuild();
+            let _ = self.rebuild(text);
         }
         batch
     }
@@ -572,8 +573,8 @@ impl Ui {
         self.mark_dirty(DirtyChannels::LAYOUT.into_set() | DirtyChannels::PAINT.into_set());
     }
 
-    fn update_hover(&mut self, point: Point, batch: &mut InteractionBatch) {
-        let path = self.rebuild().hit_path(point).unwrap_or_default();
+    fn update_hover(&mut self, point: Point, batch: &mut InteractionBatch, text: &mut TextEngine) {
+        let path = self.rebuild(text).hit_path(point).unwrap_or_default();
         let transitions = self.runtime.hover.update_path(&path);
         let mut changed = false;
         for transition in transitions {
@@ -765,6 +766,7 @@ mod tests {
     #[test]
     fn layout_stacks_children_in_column() {
         let mut ui = Ui::new(default_theme());
+        let mut text = TextEngine::new();
         ui.set_view_rect(Rect::new(0.0, 0.0, 240.0, 200.0));
         ui.set_local(ui.root(), ui.properties().padding, 0.0);
         ui.set_local(ui.root(), ui.properties().gap, 0.0);
@@ -778,7 +780,7 @@ mod tests {
         let second = ui.append_child(column, TYPE_BUTTON);
         ui.set_local(second, ui.properties().height, 30.0);
 
-        let scene = ui.rebuild();
+        let scene = ui.rebuild(&mut text);
         let first_rect = scene.resolved_element(first).unwrap().rect;
         let second_rect = scene.resolved_element(second).unwrap().rect;
 
@@ -789,6 +791,7 @@ mod tests {
     #[test]
     fn class_and_hover_style_change_resolved_snapshot() {
         let mut ui = Ui::new(default_theme());
+        let mut text = TextEngine::new();
         ui.set_view_rect(Rect::new(0.0, 0.0, 240.0, 120.0));
         ui.set_local(ui.root(), ui.properties().padding, 0.0);
         ui.set_local(ui.root(), ui.properties().gap, 0.0);
@@ -814,7 +817,7 @@ mod tests {
             .build();
         ui.set_style(button, cascade);
 
-        let before = ui.rebuild().resolved_element(button).unwrap().border.width;
+        let before = ui.rebuild(&mut text).resolved_element(button).unwrap().border.width;
         assert_eq!(before, 1.0);
 
         let move_event = PointerEvent::Move(PointerUpdate {
@@ -826,7 +829,7 @@ mod tests {
         let mut text = TextEngine::new();
         let _ = ui.handle_pointer_event(&move_event, &mut text);
 
-        let after = ui.rebuild().resolved_element(button).unwrap().border.width;
+        let after = ui.rebuild(&mut text).resolved_element(button).unwrap().border.width;
         assert_eq!(after, 4.0);
     }
 
@@ -877,6 +880,7 @@ mod tests {
     #[test]
     fn row_places_children_left_to_right() {
         let mut ui = Ui::new(default_theme());
+        let mut text = TextEngine::new();
         ui.set_view_rect(Rect::new(0.0, 0.0, 320.0, 120.0));
         ui.set_local(ui.root(), ui.properties().padding, 0.0);
         ui.set_local(ui.root(), ui.properties().gap, 0.0);
@@ -892,7 +896,7 @@ mod tests {
         let right = ui.append_child(row, TYPE_PANEL);
         ui.set_local(right, ui.properties().height, 80.0);
 
-        let scene = ui.rebuild();
+        let scene = ui.rebuild(&mut text);
         let left_rect = scene.resolved_element(left).unwrap().rect;
         let right_rect = scene.resolved_element(right).unwrap().rect;
 

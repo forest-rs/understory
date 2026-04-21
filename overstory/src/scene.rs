@@ -10,7 +10,7 @@ use kurbo::{Affine, Point, Rect};
 use understory_box_tree::{LocalNode, NodeFlags, NodeId, QueryFilter, Tree};
 use understory_property::{PropertyRegistry, PropertyStore};
 use understory_responder::adapters::box_tree::top_hit_for_point;
-use understory_display::TextAlign;
+use understory_display::{TextAlign, TextEngine};
 use understory_style::{PseudoClassId, ResolveCx, ResourceKey, Theme, TypeTag};
 
 use crate::{
@@ -99,6 +99,7 @@ impl SceneSnapshot {
         props: &BuiltInProperties,
         theme: &Theme,
         widget_arena: &WidgetArena,
+        text: &mut TextEngine,
     ) -> (Self, Vec<(ElementId, f64, f64)>) {
         let mut tree = Tree::new();
         let mut resolved = Vec::new();
@@ -111,6 +112,7 @@ impl SceneSnapshot {
             props,
             theme,
             widget_arena,
+            text,
             tree: &mut tree,
             resolved: &mut resolved,
             element_to_node: &mut element_to_node,
@@ -196,6 +198,7 @@ struct SceneBuilder<'a> {
     props: &'a BuiltInProperties,
     theme: &'a Theme,
     widget_arena: &'a WidgetArena,
+    text: &'a mut TextEngine,
     tree: &'a mut Tree,
     resolved: &'a mut Vec<ResolvedElement>,
     element_to_node: &'a mut [Option<NodeId>],
@@ -427,7 +430,7 @@ impl<'a> SceneBuilder<'a> {
         LayoutSize { width, height }
     }
 
-    fn measure_height(&self, id: ElementId, available_width: f64) -> f64 {
+    fn measure_height(&mut self, id: ElementId, available_width: f64) -> f64 {
         let Some(element) = self.elements.get(id.index()) else {
             return 0.0;
         };
@@ -450,26 +453,33 @@ impl<'a> SceneBuilder<'a> {
         {
             let width = resolve_dim(style.width, available_width);
             let available = kurbo::Size::new(width, f64::INFINITY);
-            if let Some(measured) = widget.measure(available) {
+            let mut ctx = crate::MeasureCtx::new(self.text);
+            if let Some(measured) = widget.measure(available, &mut ctx) {
                 return measured.height;
             }
         }
 
         if !element.is_container {
-            // Estimate text block height from label length for leaf elements.
+            // Measure text height for leaf elements with labels using Parley.
             if let Some(label) = element.label.as_deref() {
                 let font_size = if style.font_size > 0.0 {
                     style.font_size
                 } else {
                     16.0
                 };
-                let line_height = font_size * 1.4;
                 let width = resolve_dim(style.width, available_width);
                 let content_width = (width - style.padding * 2.0).max(1.0);
-                let avg_char_width = font_size * 0.55;
-                let estimated_text_width = label.len() as f64 * avg_char_width;
-                let lines = (estimated_text_width / content_width).ceil().max(1.0);
-                return (lines * line_height + style.padding * 2.0).max(0.0);
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    reason = "Font size and width are small display values."
+                )]
+                let text_size = self.text.measure_text(
+                    label,
+                    font_size as f32,
+                    &style.font_family,
+                    Some(content_width as f32),
+                );
+                return (text_size.height + style.padding * 2.0).max(0.0);
             }
             return 0.0;
         }

@@ -73,7 +73,7 @@ pub use runtime::{Interaction, InteractionBatch};
 pub(crate) use runtime::RuntimeState;
 pub use scene::{BorderStyle, ResolvedElement, SceneSnapshot};
 pub use ui::{Ui, default_theme};
-pub use widget::{Widget, WidgetArena, WidgetHandle};
+pub use widget::{MeasureCtx, Widget, WidgetArena, WidgetHandle};
 
 /// Re-export the transport-agnostic event vocabulary used by Overstory.
 pub use ui_events;
