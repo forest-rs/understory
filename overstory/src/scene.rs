@@ -397,10 +397,6 @@ impl<'a> SceneBuilder<'a> {
             return 0.0;
         }
 
-        if style.fill && style.height <= 0.0 {
-            return 0.0;
-        }
-
         if style.height > 0.0 {
             return style.height;
         }
@@ -628,7 +624,9 @@ struct ResolvedStyle {
 impl ResolvedStyle {
     fn flags_for(&self, kind: ElementKind) -> NodeFlags {
         let mut flags = NodeFlags::VISIBLE;
-        if self.pickable || matches!(kind, ElementKind::Button) {
+        if self.pickable
+            || matches!(kind, ElementKind::Button | ElementKind::ScrollView)
+        {
             flags |= NodeFlags::PICKABLE;
         }
         if self.focusable || matches!(kind, ElementKind::Button) {

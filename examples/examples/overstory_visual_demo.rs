@@ -58,6 +58,7 @@ struct DemoIds {
     search: ElementId,
     settings: ElementId,
     deploy: ElementId,
+    messages: ElementId,
 }
 
 #[derive(Debug)]
@@ -477,12 +478,49 @@ fn build_demo_ui() -> (Ui, DemoIds) {
     let content_column = ui.append_child(content, ElementKind::Column);
     ui.set_local(content_column, ui.properties().padding, 0.0);
     ui.set_local(content_column, ui.properties().gap, 12.0);
+    ui.set_local(content_column, ui.properties().fill, true);
 
-    let search = append_button(&mut ui, content_column, &button_cascade, "Search", false);
-    let settings = append_button(&mut ui, content_column, &button_cascade, "Settings", false);
-    let deploy = append_button(&mut ui, content_column, &button_cascade, "Deploy", true);
+    // Action button row at the top of the content area.
+    let button_row = ui.append_child(content_column, ElementKind::Row);
+    ui.set_local(button_row, ui.properties().padding, 0.0);
+    ui.set_local(button_row, ui.properties().gap, 8.0);
 
+    let search = append_button(&mut ui, button_row, &button_cascade, "Search", false);
+    ui.set_local(search, ui.properties().fill, true);
+    let settings = append_button(&mut ui, button_row, &button_cascade, "Settings", false);
+    ui.set_local(settings, ui.properties().fill, true);
+    let deploy = append_button(&mut ui, button_row, &button_cascade, "Deploy", true);
+    ui.set_local(deploy, ui.properties().fill, true);
     ui.set_local(deploy, ui.properties().foreground, palette::css::WHITE);
+
+    // Scrollable message area demonstrating ScrollView + TextBlock.
+    let messages = ui.append_child(content_column, ElementKind::ScrollView);
+    ui.set_local(messages, ui.properties().fill, true);
+    ui.set_local(messages, ui.properties().padding, 12.0);
+    ui.set_local(messages, ui.properties().gap, 10.0);
+    ui.set_local(
+        messages,
+        ui.properties().background,
+        overstory::Color::TRANSPARENT,
+    );
+
+    let sample_messages = [
+        "Welcome to the Overstory demo. This message area demonstrates ScrollView and TextBlock working together.",
+        "Each message is a TextBlock element that wraps its text within the available width.",
+        "The message list is a ScrollView with fill layout, so it stretches to fill the space between the button row and the bottom of the content panel.",
+        "Try scrolling with the mouse wheel to see the scroll offset in action.",
+        "You can also switch between Warm and Cool themes using the sidebar buttons. The text properties cascade through the style system.",
+        "Switching between Roomy and Compact density adjusts padding, gaps, and button sizes throughout the UI.",
+        "This is a longer message to demonstrate text wrapping. When a message exceeds the available width, Parley shapes the text with a max advance constraint and the glyphs wrap onto multiple lines. The TextBlock's estimated height in the scene layout accounts for this wrapping.",
+        "Short one.",
+        "Another message to make the content tall enough to scroll. The ScrollView clips its content to its assigned rectangle and offsets child positions by the scroll amount.",
+        "The box tree applies a scroll transform to children so that hit testing works correctly inside the scrolled content area.",
+    ];
+    for msg in &sample_messages {
+        let block = ui.append_child(messages, ElementKind::TextBlock);
+        ui.set_label(block, *msg);
+        ui.set_local(block, ui.properties().label_padding, 0.0);
+    }
 
     (
         ui,
@@ -497,6 +535,7 @@ fn build_demo_ui() -> (Ui, DemoIds) {
             search,
             settings,
             deploy,
+            messages,
         },
     )
 }
@@ -791,6 +830,88 @@ mod tests {
 
         assert_eq!(a_rect.y0, 0.0);
         assert_eq!(b_rect.y0, a_rect.y1, "second block should start where first ends");
+    }
+
+    #[test]
+    fn message_scroll_view_fills_content_area() {
+        let mut app = DemoApp::new();
+        app.resize_ui(PhysicalSize::new(960, 640));
+
+        let scene = app.ui.scene();
+        let content_rect = scene
+            .resolved_element(app.ids.content)
+            .expect("content panel")
+            .rect;
+        let messages_rect = scene
+            .resolved_element(app.ids.messages)
+            .expect("messages scroll view")
+            .rect;
+
+        // The messages ScrollView should be inside the content panel.
+        assert!(messages_rect.y0 >= content_rect.y0);
+        assert!(messages_rect.y1 <= content_rect.y1 + 1.0);
+        // It should fill most of the content height (below the button row).
+        assert!(
+            messages_rect.height() > content_rect.height() * 0.5,
+            "messages should fill most of content: messages_h={} content_h={}",
+            messages_rect.height(),
+            content_rect.height()
+        );
+    }
+
+    #[test]
+    fn scroll_event_over_messages_updates_offset() {
+        use overstory::ui_events::pointer::{
+            PointerButtons, PointerId, PointerInfo, PointerScrollEvent, PointerState, PointerType,
+        };
+        use overstory::ui_events::ScrollDelta;
+
+        let mut app = DemoApp::new();
+        app.resize_ui(PhysicalSize::new(960, 640));
+
+        // Find where the messages scroll view is.
+        let scene = app.ui.scene();
+        let msg_rect = scene
+            .resolved_element(app.ids.messages)
+            .expect("messages scroll view")
+            .rect;
+        let mid_x = (msg_rect.x0 + msg_rect.x1) / 2.0;
+        let mid_y = (msg_rect.y0 + msg_rect.y1) / 2.0;
+
+        assert_eq!(app.ui.scroll_offset(app.ids.messages), 0.0);
+
+        // Synthesize a scroll event over the messages area.
+        let mut state = PointerState::default();
+        state.position.x = mid_x;
+        state.position.y = mid_y;
+        state.buttons = PointerButtons::new();
+        state.count = 0;
+        state.scale_factor = 1.0;
+        state.time = 100;
+
+        let scroll_event = overstory::ui_events::pointer::PointerEvent::Scroll(PointerScrollEvent {
+            pointer: PointerInfo {
+                pointer_id: Some(PointerId::PRIMARY),
+                persistent_device_id: None,
+                pointer_type: PointerType::Mouse,
+            },
+            delta: ScrollDelta::LineDelta(0.0, -3.0),
+            state,
+        });
+
+        let batch = app.ui.handle_pointer_event(&scroll_event);
+        assert!(
+            app.ui.scroll_offset(app.ids.messages) > 0.0,
+            "scroll offset should have changed, got {}",
+            app.ui.scroll_offset(app.ids.messages)
+        );
+        assert!(
+            batch
+                .events()
+                .iter()
+                .any(|e| matches!(e, Interaction::Scrolled(_))),
+            "should emit Scrolled interaction"
+        );
     }
 
     #[test]

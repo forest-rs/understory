@@ -300,7 +300,7 @@ impl Ui {
                         if let Some(element) = self.elements.get(ancestor.index())
                             && matches!(element.kind, ElementKind::ScrollView)
                         {
-                            self.scroll_by(ancestor, dy);
+                            self.scroll_by(ancestor, -dy);
                             batch.push(Interaction::Scrolled(ancestor));
                             break;
                         }
