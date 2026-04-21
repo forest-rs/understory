@@ -77,6 +77,23 @@ impl LayoutClass {
     }
 }
 
+/// Class vocabulary for message styling.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum MessageClass {
+    /// User-authored message.
+    User,
+}
+
+impl MessageClass {
+    /// Returns the matching style class identifier.
+    #[must_use]
+    pub const fn class_id(self) -> ClassId {
+        match self {
+            Self::User => ClassId(20),
+        }
+    }
+}
+
 /// Dynamic pseudo-state used during runtime interaction.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct PseudoState {

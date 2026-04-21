@@ -21,7 +21,7 @@ use imaging_vello_hybrid::VelloHybridRenderer;
 use kurbo::Rect;
 use overstory::peniko::color::palette;
 use overstory::{
-    ButtonClass, ElementId, Interaction, LayoutClass, ThemeKeys, Ui, default_theme,
+    ButtonClass, Color, ElementId, Interaction, LayoutClass, ThemeKeys, Ui, default_theme,
 };
 use ui_events_winit::{WindowEventReducer, WindowEventTranslation};
 use understory_display::{BoxConstraints, TextEngine};
@@ -48,8 +48,8 @@ fn main() {
 #[derive(Debug)]
 struct DemoIds {
     shell: ElementId,
-    warm: ElementId,
-    cool: ElementId,
+    light: ElementId,
+    dark: ElementId,
     roomy: ElementId,
     compact: ElementId,
     sidebar: ElementId,
@@ -241,7 +241,7 @@ impl DemoApp {
             (MessageRole::Assistant, "The message list is a ScrollView with fill layout, so it stretches to fill the space between the button row and the bottom of the content panel."),
             (MessageRole::User, "What about scrolling?"),
             (MessageRole::Assistant, "Try scrolling with the mouse wheel or trackpad to see the scroll offset in action."),
-            (MessageRole::Assistant, "You can also switch between Warm and Cool themes using the sidebar buttons. The text properties cascade through the style system."),
+            (MessageRole::Assistant, "You can also switch between Light and Dark themes using the sidebar buttons. The text properties cascade through the style system."),
             (MessageRole::Assistant, "Switching between Roomy and Compact density adjusts padding, gaps, and button sizes throughout the UI."),
             (MessageRole::Assistant, "This is a longer message to demonstrate text wrapping. When a message exceeds the available width, Parley shapes the text with a max advance constraint and the glyphs wrap onto multiple lines."),
             (MessageRole::User, "Nice."),
@@ -300,17 +300,11 @@ impl DemoApp {
                     .set_local(block, self.ui.properties().label_padding, 8.0);
                 self.ui
                     .set_local(block, self.ui.properties().padding, 8.0);
+                self.ui
+                    .set_local(block, self.ui.properties().corner_radius, 8.0);
                 if is_user {
-                    self.ui.set_local(
-                        block,
-                        self.ui.properties().background,
-                        overstory::Color::from_rgba8(220, 235, 220, 255),
-                    );
-                    self.ui.set_local(
-                        block,
-                        self.ui.properties().corner_radius,
-                        8.0,
-                    );
+                    self.ui
+                        .add_class(block, overstory::MessageClass::User.class_id());
                 }
             }
         }
@@ -334,12 +328,12 @@ impl DemoApp {
         for interaction in interactions.events() {
             if let Interaction::Clicked(target) = *interaction {
                 match target {
-                    id if id == self.ids.warm => {
-                        self.ui.set_theme(warm_theme());
+                    id if id == self.ids.light => {
+                        self.ui.set_theme(light_theme());
                         self.sync_density_selection();
                     }
-                    id if id == self.ids.cool => {
-                        self.ui.set_theme(cool_theme());
+                    id if id == self.ids.dark => {
+                        self.ui.set_theme(dark_theme());
                         self.sync_density_selection();
                     }
                     id if id == self.ids.roomy => self.apply_density(true),
@@ -348,21 +342,21 @@ impl DemoApp {
                         self.ui.set_local(
                             self.ids.content,
                             self.ui.properties().background,
-                            overstory::Color::from_rgba8(248, 249, 252, 255),
+                            Color::from_rgba8(248, 249, 252, 255),
                         );
                     }
                     id if id == self.ids.settings => {
                         self.ui.set_local(
                             self.ids.content,
                             self.ui.properties().background,
-                            overstory::Color::from_rgba8(245, 243, 239, 255),
+                            Color::from_rgba8(245, 243, 239, 255),
                         );
                     }
                     id if id == self.ids.deploy => {
                         self.ui.set_local(
                             self.ids.content,
                             self.ui.properties().background,
-                            overstory::Color::from_rgba8(235, 245, 241, 255),
+                            Color::from_rgba8(235, 245, 241, 255),
                         );
                     }
                     _ => {}
@@ -418,8 +412,8 @@ impl DemoApp {
             .set_local(self.ids.content, self.ui.properties().gap, panel_gap);
 
         for id in [
-            self.ids.warm,
-            self.ids.cool,
+            self.ids.light,
+            self.ids.dark,
             self.ids.search,
             self.ids.settings,
             self.ids.deploy,
@@ -731,7 +725,7 @@ impl ApplicationHandler for DemoApp {
                 self.ui.set_local(
                     self.ids.content,
                     self.ui.properties().background,
-                    overstory::Color::from_rgba8(255, 252, 246, 255),
+                    Color::from_rgba8(255, 252, 246, 255),
                 );
                 window.request_redraw();
             }
@@ -760,18 +754,18 @@ fn build_demo_ui() -> (Ui, DemoIds) {
     ui.set_local(sidebar_column, ui.properties().padding, 0.0);
     ui.set_local(sidebar_column, ui.properties().gap, 10.0);
 
-    let warm = append_button(
+    let light = append_button(
         &mut ui,
         sidebar_column,
         &button_cascade,
-        "Warm theme",
+        "Light theme",
         false,
     );
-    let cool = append_button(
+    let dark = append_button(
         &mut ui,
         sidebar_column,
         &button_cascade,
-        "Cool theme",
+        "Dark theme",
         false,
     );
     let roomy = append_button(&mut ui, sidebar_column, &button_cascade, "Roomy", false);
@@ -807,7 +801,7 @@ fn build_demo_ui() -> (Ui, DemoIds) {
     ui.set_local(
         messages,
         ui.properties().background,
-        overstory::Color::TRANSPARENT,
+        Color::TRANSPARENT,
     );
 
     // Messages are populated from the transcript via DemoApp::sync_messages.
@@ -823,8 +817,8 @@ fn build_demo_ui() -> (Ui, DemoIds) {
         ui,
         DemoIds {
             shell,
-            warm,
-            cool,
+            light,
+            dark,
             roomy,
             compact,
             sidebar,
@@ -1385,55 +1379,55 @@ fn make_button_cascade(ui: &Ui) -> StyleCascade {
         .build()
 }
 
-fn warm_theme() -> Theme {
+fn light_theme() -> Theme {
     default_theme()
 }
 
-fn cool_theme() -> Theme {
+fn dark_theme() -> Theme {
     ThemeBuilder::new()
         .set(
             ThemeKeys::ROOT_BACKGROUND,
-            overstory::Color::from_rgba8(232, 239, 247, 255),
+            Color::from_rgba8(22, 22, 24, 255),
         )
         .set(
             ThemeKeys::PANEL_BACKGROUND,
-            overstory::Color::from_rgba8(244, 248, 252, 255),
+            Color::from_rgba8(32, 32, 35, 255),
         )
         .set(
             ThemeKeys::SIDEBAR_BACKGROUND,
-            overstory::Color::from_rgba8(214, 227, 240, 255),
+            Color::from_rgba8(26, 26, 29, 255),
         )
         .set(
             ThemeKeys::BUTTON_BACKGROUND,
-            overstory::Color::from_rgba8(229, 237, 245, 255),
+            Color::from_rgba8(44, 44, 48, 255),
         )
         .set(
             ThemeKeys::BUTTON_HOVER_BACKGROUND,
-            overstory::Color::from_rgba8(220, 231, 242, 255),
+            Color::from_rgba8(54, 54, 58, 255),
         )
         .set(
             ThemeKeys::BUTTON_PRESSED_BACKGROUND,
-            overstory::Color::from_rgba8(202, 218, 232, 255),
+            Color::from_rgba8(38, 38, 42, 255),
         )
         .set(
             ThemeKeys::PRIMARY_BACKGROUND,
-            overstory::Color::from_rgba8(36, 82, 138, 255),
+            Color::from_rgba8(36, 140, 106, 255),
         )
         .set(
             ThemeKeys::PRIMARY_HOVER_BACKGROUND,
-            overstory::Color::from_rgba8(48, 101, 165, 255),
+            Color::from_rgba8(42, 158, 120, 255),
         )
         .set(
             ThemeKeys::PRIMARY_PRESSED_BACKGROUND,
-            overstory::Color::from_rgba8(28, 66, 112, 255),
+            Color::from_rgba8(28, 115, 86, 255),
         )
         .set(
             ThemeKeys::FOREGROUND,
-            overstory::Color::from_rgba8(25, 33, 42, 255),
+            Color::from_rgba8(210, 212, 216, 255),
         )
         .set(
             ThemeKeys::BORDER_COLOR,
-            overstory::Color::from_rgba8(123, 141, 160, 255),
+            Color::from_rgba8(58, 58, 62, 255),
         )
         .set(ThemeKeys::CORNER_RADIUS, 10.0_f64)
         .set(ThemeKeys::PADDING, 16.0_f64)

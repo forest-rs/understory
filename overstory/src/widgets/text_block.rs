@@ -9,7 +9,9 @@ use core::any::Any;
 use peniko::Brush;
 use understory_display::{DisplayNode, Insets};
 
-use crate::{ElementId, ResolvedElement, Widget};
+use understory_style::ResourceKey;
+
+use crate::{Element, ElementId, MessageClass, ResolvedElement, ThemeKeys, Widget};
 
 /// Default font size fallback.
 const DEFAULT_FONT_SIZE: f64 = 16.0;
@@ -33,6 +35,14 @@ impl TextBlockWidget {
 }
 
 impl Widget for TextBlockWidget {
+    fn background_key(&self, element: &Element) -> Option<ResourceKey> {
+        if element.classes.contains(MessageClass::User.class_id()) {
+            Some(ThemeKeys::BUTTON_BACKGROUND)
+        } else {
+            None
+        }
+    }
+
     fn display(
         &self,
         _id: ElementId,
