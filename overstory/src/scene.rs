@@ -367,7 +367,7 @@ impl<'a> SceneBuilder<'a> {
                     let child_w = if child_style.fill {
                         fill_extent
                     } else {
-                        content.width()
+                        (content.x1 - cursor).max(0.0)
                     };
                     (
                         Point::new(cursor, content.y0),

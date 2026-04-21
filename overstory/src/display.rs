@@ -139,7 +139,7 @@ mod tests {
         let right = ui.append_child(shell, crate::TYPE_PANEL);
         ui.set_local(right, ui.properties().padding, 8.0);
 
-        let tree = ui.scene().display_tree(ui.widget_arena());
+        let (tree, _) = ui.display_tree();
         let root = tree.root();
         let understory_display::DisplayNodeKind::Offset { child, .. } = root.kind() else {
             panic!("expected root offset node");

@@ -17,13 +17,14 @@ use overstory::ui_events::pointer::{
     PointerButton, PointerButtonEvent, PointerButtons, PointerEvent, PointerId, PointerInfo,
     PointerState, PointerType, PointerUpdate,
 };
-use overstory::{ButtonClass, ElementId, ElementKind, LayoutClass, Ui, default_theme};
+use overstory::{ButtonClass, ElementId, LayoutClass, Ui, default_theme};
 use understory_style::{
     IdSet, Selector, StyleBuilder, StyleCascadeBuilder, StyleOrigin, StyleSheetBuilder,
 };
 
 fn main() {
     let mut ui = build_showcase_ui();
+    let mut text = understory_display::TextEngine::new();
 
     println!("== Initial Scene ==");
     print_scene(&mut ui);
@@ -42,7 +43,7 @@ fn main() {
         current: pointer_state(compose_center.x, compose_center.y, 1),
         coalesced: Vec::new(),
         predicted: Vec::new(),
-    }));
+    }), &mut text);
     print_interactions(&move_batch);
     print_scene(&mut ui);
 
@@ -51,7 +52,7 @@ fn main() {
         button: Some(PointerButton::Primary),
         pointer: primary_pointer(),
         state: pointer_state(compose_center.x, compose_center.y, 2),
-    }));
+    }), &mut text);
     print_interactions(&down_batch);
     print_scene(&mut ui);
 
@@ -60,12 +61,12 @@ fn main() {
         button: Some(PointerButton::Primary),
         pointer: primary_pointer(),
         state: pointer_state(compose_center.x, compose_center.y, 3),
-    }));
+    }), &mut text);
     print_interactions(&up_batch);
     print_scene(&mut ui);
 
     println!("\n== Pointer leaves the UI ==");
-    let leave_batch = ui.handle_pointer_event(&PointerEvent::Leave(primary_pointer()));
+    let leave_batch = ui.handle_pointer_event(&PointerEvent::Leave(primary_pointer()), &mut text);
     print_interactions(&leave_batch);
     print_scene(&mut ui);
 }
@@ -78,43 +79,43 @@ fn build_showcase_ui() -> Ui {
 
     let button_cascade = make_button_cascade(&ui);
 
-    let shell = ui.append_child(ui.root(), ElementKind::Row);
+    let shell = ui.append_child(ui.root(), overstory::TYPE_ROW);
     ui.set_local(shell, ui.properties().padding, 0.0);
     ui.set_local(shell, ui.properties().gap, 16.0);
 
-    let sidebar = ui.append_child(shell, ElementKind::Panel);
+    let sidebar = ui.append_child(shell, overstory::TYPE_PANEL);
     ui.add_layout_class(sidebar, LayoutClass::Sidebar);
     ui.set_local(sidebar, ui.properties().width, 150.0);
     ui.set_local(sidebar, ui.properties().padding, 18.0);
     ui.set_local(sidebar, ui.properties().gap, 10.0);
 
-    let actions = ui.append_child(sidebar, ElementKind::Column);
+    let actions = ui.append_child(sidebar, overstory::TYPE_COLUMN);
     ui.set_local(actions, ui.properties().padding, 0.0);
     ui.set_local(actions, ui.properties().gap, 10.0);
 
-    let compose = ui.append_child(actions, ElementKind::Button);
+    let compose = ui.append_child(actions, overstory::TYPE_BUTTON);
     ui.set_label(compose, "Compose");
     ui.add_button_class(compose, ButtonClass::Primary);
     ui.set_style(compose, button_cascade.clone());
 
-    let archive = ui.append_child(actions, ElementKind::Button);
+    let archive = ui.append_child(actions, overstory::TYPE_BUTTON);
     ui.set_label(archive, "Archive");
     ui.set_style(archive, button_cascade.clone());
 
-    let content = ui.append_child(shell, ElementKind::Panel);
+    let content = ui.append_child(shell, overstory::TYPE_PANEL);
     ui.set_local(content, ui.properties().padding, 18.0);
     ui.set_local(content, ui.properties().gap, 12.0);
 
-    let content_column = ui.append_child(content, ElementKind::Column);
+    let content_column = ui.append_child(content, overstory::TYPE_COLUMN);
     ui.set_local(content_column, ui.properties().padding, 0.0);
     ui.set_local(content_column, ui.properties().gap, 12.0);
 
-    let search = ui.append_child(content_column, ElementKind::Button);
+    let search = ui.append_child(content_column, overstory::TYPE_BUTTON);
     ui.set_label(search, "Search");
     ui.set_style(search, button_cascade.clone());
     ui.set_local(search, ui.properties().height, 52.0);
 
-    let settings = ui.append_child(content_column, ElementKind::Button);
+    let settings = ui.append_child(content_column, overstory::TYPE_BUTTON);
     ui.set_label(settings, "Settings");
     ui.set_style(settings, button_cascade);
 
@@ -159,7 +160,7 @@ fn print_scene(ui: &mut Ui) {
         println!(
             "{}{:?} {:?} rect=({:.0},{:.0})-({:.0},{:.0}) bg=rgba({:02x},{:02x},{:02x},{:02x}) border={} hover={} pressed={} label={}",
             indent,
-            element.kind,
+            element.type_tag,
             element.id,
             element.rect.x0,
             element.rect.y0,

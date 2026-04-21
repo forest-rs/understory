@@ -397,12 +397,31 @@ impl Ui {
                 &self.theme,
                 &self.widget_arena,
             );
-            for (id, content_h, viewport_h) in scroll_metrics {
-                if let Some(w) = self.widget_mut::<crate::widgets::ScrollViewWidget>(id) {
-                    w.set_layout_metrics(content_h, viewport_h);
+            let mut needs_rebuild = false;
+            for (id, content_h, viewport_h) in &scroll_metrics {
+                if let Some(w) = self.widget_mut::<crate::widgets::ScrollViewWidget>(*id) {
+                    let old_offset = w.scroll_offset();
+                    w.set_layout_metrics(*content_h, *viewport_h);
+                    if (w.scroll_offset() - old_offset).abs() > f64::EPSILON {
+                        needs_rebuild = true;
+                    }
                 }
             }
-            self.scene = Some(snapshot);
+            if needs_rebuild {
+                // Scroll offset was reclamped — rebuild to get a consistent snapshot.
+                let (snapshot, _) = SceneSnapshot::build(
+                    &self.elements,
+                    self.root,
+                    self.view_rect,
+                    &self.registry,
+                    &self.props,
+                    &self.theme,
+                    &self.widget_arena,
+                );
+                self.scene = Some(snapshot);
+            } else {
+                self.scene = Some(snapshot);
+            }
             self.dirty = ChannelSet::empty();
         }
         self.scene.as_ref().expect("scene just rebuilt")
@@ -476,13 +495,14 @@ impl Ui {
                     ) {
                         understory_event_state::click::ClickResult::Click(id) => {
                             batch.push(Interaction::Clicked(id));
-                            if let Some(element) = self.elements.get(id.index())
-                                && element.widget.is_some()
-                                && element
-                                    .widget
-                                    .and_then(|h| self.widget_arena.get(h))
-                                    .is_some_and(|w| w.default_focusable())
-                            {
+                            let scene = self.rebuild();
+                            let is_focusable = scene
+                                .node_for(id)
+                                .and_then(|node| scene.box_tree().flags(node))
+                                .is_some_and(|f| {
+                                    f.contains(understory_box_tree::NodeFlags::FOCUSABLE)
+                                });
+                            if is_focusable {
                                 self.set_focus(id);
                                 batch.push(Interaction::FocusChanged(id));
                                 // Delegate click-to-position to widget.
@@ -737,6 +757,7 @@ mod tests {
         PointerButtonEvent, PointerButtons, PointerId, PointerInfo, PointerState, PointerType,
         PointerUpdate,
     };
+    use understory_display::TextEngine;
     use understory_style::{
         IdSet, Selector, StyleBuilder, StyleCascadeBuilder, StyleOrigin, StyleSheetBuilder,
     };
@@ -802,7 +823,8 @@ mod tests {
             coalesced: Vec::new(),
             predicted: Vec::new(),
         });
-        let _ = ui.handle_pointer_event(&move_event);
+        let mut text = TextEngine::new();
+        let _ = ui.handle_pointer_event(&move_event, &mut text);
 
         let after = ui.rebuild().resolved_element(button).unwrap().border.width;
         assert_eq!(after, 4.0);
@@ -818,12 +840,14 @@ mod tests {
         let button = ui.append_child(ui.root(), crate::TYPE_BUTTON);
         ui.set_label(button, "Launch");
 
+        let mut text = TextEngine::new();
+
         let move_batch = ui.handle_pointer_event(&PointerEvent::Move(PointerUpdate {
             pointer: primary_pointer(),
             current: pointer_state(20.0, 20.0, 1),
             coalesced: Vec::new(),
             predicted: Vec::new(),
-        }));
+        }), &mut text);
         assert!(
             move_batch
                 .events()
@@ -834,7 +858,7 @@ mod tests {
             button: Some(PointerButton::Primary),
             pointer: primary_pointer(),
             state: pointer_state(20.0, 20.0, 2),
-        }));
+        }), &mut text);
         assert!(
             down_batch
                 .events()
@@ -845,7 +869,7 @@ mod tests {
             button: Some(PointerButton::Primary),
             pointer: primary_pointer(),
             state: pointer_state(20.0, 20.0, 3),
-        }));
+        }), &mut text);
         assert!(up_batch.events().contains(&Interaction::PressEnded(button)));
         assert!(up_batch.events().contains(&Interaction::Clicked(button)));
     }

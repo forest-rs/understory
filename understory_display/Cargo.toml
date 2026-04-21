@@ -14,9 +14,9 @@ default = []
 std = ["parley/std", "parley/system"]
 
 [dependencies]
-kurbo.workspace = true
-peniko.workspace = true
-parley.workspace = true
+kurbo = { workspace = true, features = ["libm"] }
+peniko = { workspace = true, features = ["libm"] }
+parley = { workspace = true, features = ["libm"] }
 
 [lints]
 workspace = true

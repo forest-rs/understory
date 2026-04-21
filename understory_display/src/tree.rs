@@ -539,6 +539,7 @@ impl DisplayText {
         &self.runs
     }
 
+    #[cfg(feature = "std")]
     fn ensure_shaped(&mut self, text: &mut TextEngine, max_advance: Option<f32>) {
         if self.cached_max_advance == max_advance {
             return;
@@ -558,6 +559,7 @@ impl DisplayText {
     }
 }
 
+#[cfg(feature = "std")]
 fn measure_node(
     node: &mut DisplayNode,
     text: &mut TextEngine,
