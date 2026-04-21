@@ -12,12 +12,20 @@ use peniko::BlendMode;
 use understory_display::{DisplayNode, DisplayNodeKind, DisplayTree};
 
 /// Lower one retained display tree into an imaging recording.
+///
+/// The `scale_factor` scales from logical display-tree coordinates to physical
+/// pixels. Pass `1.0` when logical and physical coordinates are the same.
 #[must_use]
-pub fn imaging_scene_from_display_tree(tree: &DisplayTree) -> record::Scene {
+pub fn imaging_scene_from_display_tree(tree: &DisplayTree, scale_factor: f64) -> record::Scene {
     let mut scene = record::Scene::new();
     {
         let mut painter = Painter::new(&mut scene);
-        record_node(&mut painter, tree.root(), Affine::IDENTITY);
+        let root_transform = if (scale_factor - 1.0).abs() < f64::EPSILON {
+            Affine::IDENTITY
+        } else {
+            Affine::scale(scale_factor)
+        };
+        record_node(&mut painter, tree.root(), root_transform);
     }
     scene
 }
@@ -155,7 +163,7 @@ mod tests {
             BoxConstraints::tight(kurbo::Size::new(160.0, 48.0)),
         );
 
-        let scene = imaging_scene_from_display_tree(&tree);
+        let scene = imaging_scene_from_display_tree(&tree, 1.0);
         assert!(
             !scene.commands().is_empty(),
             "expected retained imaging commands"
@@ -200,7 +208,7 @@ mod tests {
             BoxConstraints::tight(kurbo::Size::new(120.0, 40.0)),
         );
 
-        let scene = imaging_scene_from_display_tree(&tree);
+        let scene = imaging_scene_from_display_tree(&tree, 1.0);
         assert!(
             !scene.commands().is_empty(),
             "expected retained imaging commands"

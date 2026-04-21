@@ -586,7 +586,8 @@ fn is_primary_button(button: Option<PointerButton>) -> bool {
 }
 
 fn point_from_state(state: &ui_events::pointer::PointerState) -> Point {
-    Point::new(state.position.x, state.position.y)
+    let scale = state.scale_factor.max(1.0);
+    Point::new(state.position.x / scale, state.position.y / scale)
 }
 
 /// Line height in pixels used to convert line-based scroll deltas.

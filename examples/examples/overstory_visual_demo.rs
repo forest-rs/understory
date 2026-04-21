@@ -433,11 +433,10 @@ impl DemoApp {
         self.sync_density_selection();
     }
 
-    fn resize_ui(&mut self, size: PhysicalSize<u32>) {
-        let width = size.width.max(1);
-        let height = size.height.max(1);
-        self.ui
-            .set_view_rect(Rect::new(0.0, 0.0, f64::from(width), f64::from(height)));
+    fn resize_ui(&mut self, size: PhysicalSize<u32>, scale_factor: f64) {
+        let width = f64::from(size.width.max(1)) / scale_factor;
+        let height = f64::from(size.height.max(1)) / scale_factor;
+        self.ui.set_view_rect(Rect::new(0.0, 0.0, width, height));
         self.sync_shell_frame(current_root_padding(self.roomy));
     }
 
@@ -500,8 +499,8 @@ impl DemoApp {
         );
     }
 
-    fn resize_active_surface(&mut self, size: PhysicalSize<u32>) {
-        self.resize_ui(size);
+    fn resize_active_surface(&mut self, size: PhysicalSize<u32>, scale_factor: f64) {
+        self.resize_ui(size, scale_factor);
 
         let RenderState::Active {
             window,
@@ -541,6 +540,7 @@ impl DemoApp {
             return;
         }
 
+        let scale_factor = window.scale_factor();
         let snapshot = self.ui.scene();
         let mut display_tree = snapshot.display_tree();
         display_tree.layout(
@@ -548,7 +548,8 @@ impl DemoApp {
             snapshot.view_rect().origin(),
             BoxConstraints::tight(snapshot.view_rect().size()),
         );
-        let imaging_scene = imaging_scene_from_display_tree(&display_tree);
+        let imaging_scene = imaging_scene_from_display_tree(&display_tree, scale_factor);
+
         let width = u16::try_from(size.width).expect("window width exceeds u16");
         let height = u16::try_from(size.height).expect("window height exceeds u16");
         let native = renderer
@@ -601,7 +602,7 @@ impl ApplicationHandler for DemoApp {
 
         let attrs = Window::default_attributes()
             .with_title("Overstory + imaging")
-            .with_inner_size(PhysicalSize::new(960, 640));
+            .with_inner_size(winit::dpi::LogicalSize::new(960, 640));
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
         let size = window.inner_size();
 
@@ -646,7 +647,7 @@ impl ApplicationHandler for DemoApp {
         };
         surface.configure(&device, &surface_config);
 
-        self.resize_ui(size);
+        self.resize_ui(size, window.scale_factor());
         let blit = BlitPipeline::new(&device, surface_format);
         let renderer = VelloHybridRenderer::new(device.clone(), queue.clone());
         window.request_redraw();
@@ -706,7 +707,9 @@ impl ApplicationHandler for DemoApp {
 
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
-            WindowEvent::Resized(size) => self.resize_active_surface(size),
+            WindowEvent::Resized(size) => {
+                self.resize_active_surface(size, window.scale_factor());
+            }
             WindowEvent::KeyboardInput {
                 event:
                     KeyEvent {
@@ -839,7 +842,7 @@ mod tests {
     #[test]
     fn resize_sets_shell_and_panels_to_viewport_height() {
         let mut app = DemoApp::new();
-        app.resize_ui(PhysicalSize::new(960, 640));
+        app.resize_ui(PhysicalSize::new(960, 640), 1.0);
 
         let scene = app.ui.scene();
         let expected_width = 960.0 - current_root_padding(true) * 2.0;
@@ -870,7 +873,7 @@ mod tests {
     #[test]
     fn density_toggle_updates_shell_frame() {
         let mut app = DemoApp::new();
-        app.resize_ui(PhysicalSize::new(960, 640));
+        app.resize_ui(PhysicalSize::new(960, 640), 1.0);
         app.apply_density(false);
 
         let compact_height = 640.0 - current_root_padding(false) * 2.0;
@@ -1146,7 +1149,7 @@ mod tests {
     #[test]
     fn message_scroll_view_fills_content_area() {
         let mut app = DemoApp::new();
-        app.resize_ui(PhysicalSize::new(960, 640));
+        app.resize_ui(PhysicalSize::new(960, 640), 1.0);
 
         let scene = app.ui.scene();
         let content_rect = scene
@@ -1178,7 +1181,7 @@ mod tests {
         use overstory::ui_events::ScrollDelta;
 
         let mut app = DemoApp::new();
-        app.resize_ui(PhysicalSize::new(960, 640));
+        app.resize_ui(PhysicalSize::new(960, 640), 1.0);
 
         // Find where the messages scroll view is.
         let scene = app.ui.scene();
