@@ -752,6 +752,7 @@ fn scroll_delta_y(delta: ui_events::ScrollDelta) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::PSEUDO_HOVER;
     use ui_events::pointer::{
         PointerButtonEvent, PointerButtons, PointerId, PointerInfo, PointerState, PointerType,
         PointerUpdate,

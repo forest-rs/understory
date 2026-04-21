@@ -11,7 +11,7 @@
 use alloc::{boxed::Box, vec::Vec};
 use core::any::Any;
 
-use kurbo::Point;
+use kurbo::{Point, Size};
 use understory_display::{DisplayNode, TextEngine};
 use understory_style::ResourceKey;
 
@@ -25,17 +25,12 @@ use crate::{ElementId, InteractionBatch, ResolvedElement};
 /// All methods have default no-op implementations so widgets only need to
 /// override what they care about.
 pub trait Widget {
-    /// Measure the widget's natural height given available width and resolved style.
+    /// Measure the widget's desired size given available space.
     ///
-    /// Return `Some(height)` to override the default height calculation.
-    /// Return `None` to fall through to the standard container layout.
-    fn measure_height(
-        &self,
-        _available_width: f64,
-        _style_height: f64,
-        _style_padding: f64,
-        _label: Option<&str>,
-    ) -> Option<f64> {
+    /// Return `Some(size)` to provide a measured size. The layout system
+    /// uses this for both width and height. Return `None` to fall through
+    /// to the standard container layout.
+    fn measure(&self, _available: Size) -> Option<Size> {
         None
     }
 

@@ -444,22 +444,33 @@ impl<'a> SceneBuilder<'a> {
             return style.height;
         }
 
-        // Delegate to widget if it provides a measure_height.
+        // Delegate to widget if it provides a measure.
         if let Some(handle) = element.widget
             && let Some(widget) = self.widget_arena.get(handle)
         {
             let width = resolve_dim(style.width, available_width);
-            if let Some(h) = widget.measure_height(
-                width,
-                style.height,
-                style.padding,
-                element.label.as_deref(),
-            ) {
-                return h;
+            let available = kurbo::Size::new(width, f64::INFINITY);
+            if let Some(measured) = widget.measure(available) {
+                return measured.height;
             }
         }
 
         if !element.is_container {
+            // Estimate text block height from label length for leaf elements.
+            if let Some(label) = element.label.as_deref() {
+                let font_size = if style.font_size > 0.0 {
+                    style.font_size
+                } else {
+                    16.0
+                };
+                let line_height = font_size * 1.4;
+                let width = resolve_dim(style.width, available_width);
+                let content_width = (width - style.padding * 2.0).max(1.0);
+                let avg_char_width = font_size * 0.55;
+                let estimated_text_width = label.len() as f64 * avg_char_width;
+                let lines = (estimated_text_width / content_width).ceil().max(1.0);
+                return (lines * line_height + style.padding * 2.0).max(0.0);
+            }
             return 0.0;
         }
 
