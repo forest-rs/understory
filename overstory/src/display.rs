@@ -95,11 +95,12 @@ fn display_node_for(parent_origin: Point, node: &ElementDisplayTree<'_>, widget_
         .map(|child| display_node_for(element.rect.origin(), child, widget_arena))
         .collect();
 
-    let handled = element
-        .widget
-        .and_then(|h| widget_arena.get(h))
-        .is_some_and(|w| w.wrap_children(element, child_nodes.clone(), &mut children));
-    if !handled {
+    if element.clips_content && !child_nodes.is_empty() {
+        children.push(DisplayNode::clip_rect(DisplayNode::offset(
+            Vec2::new(0.0, -element.scroll_offset),
+            DisplayNode::stack(child_nodes),
+        )));
+    } else {
         children.extend(child_nodes);
     }
 

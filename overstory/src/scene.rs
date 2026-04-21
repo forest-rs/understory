@@ -70,6 +70,10 @@ pub struct ResolvedElement {
     pub font_family: Box<str>,
     /// Text alignment for label text.
     pub text_align: understory_display::TextAlign,
+    /// Whether this element clips its children to its bounds.
+    pub clips_content: bool,
+    /// Vertical scroll offset applied to children.
+    pub scroll_offset: f64,
     /// Widget handle for delegating display to the widget.
     pub widget: Option<crate::WidgetHandle>,
 }
@@ -273,6 +277,19 @@ impl<'a> SceneBuilder<'a> {
             label_padding: style.label_padding,
             font_family: style.font_family.clone(),
             text_align: style.text_align,
+            clips_content: matches!(element.kind, ElementKind::ScrollView),
+            scroll_offset: if matches!(element.kind, ElementKind::ScrollView) {
+                element
+                    .widget
+                    .and_then(|h| self.widget_arena.get(h))
+                    .and_then(|w| {
+                        w.as_any()
+                            .downcast_ref::<crate::widgets::ScrollViewWidget>()
+                    })
+                    .map_or(0.0, |w| w.scroll_offset())
+            } else {
+                0.0
+            },
             widget: element.widget,
         });
 

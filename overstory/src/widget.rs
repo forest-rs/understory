@@ -44,21 +44,6 @@ pub trait Widget {
     /// alongside the element's background, border, and label nodes.
     fn display(&self, _id: ElementId, _resolved: &ResolvedElement, _children: &mut Vec<DisplayNode>) {}
 
-    /// Transform the element's child display nodes before they are added to
-    /// the parent stack. Called with the child nodes; should push results
-    /// directly into `parent_children`. Return `true` if handled (children
-    /// were consumed), `false` to use the default (extend directly).
-    ///
-    /// `ScrollView` uses this to wrap children in clip + offset.
-    fn wrap_children(
-        &self,
-        _resolved: &ResolvedElement,
-        _child_nodes: Vec<DisplayNode>,
-        _parent_children: &mut Vec<DisplayNode>,
-    ) -> bool {
-        false
-    }
-
     /// Handle a keyboard event when this widget is focused.
     ///
     /// `text` provides font/layout contexts for text editing operations.
