@@ -450,6 +450,8 @@ impl<'a> SceneBuilder<'a> {
         }
 
         // Delegate to widget if it provides a measure.
+        // Pass the full element width — the widget is responsible for
+        // subtracting its own internal padding to match rendering.
         if let Some(handle) = element.widget
             && let Some(widget) = self.widget_arena.get(handle)
         {

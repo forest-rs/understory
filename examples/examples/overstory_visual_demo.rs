@@ -824,7 +824,6 @@ fn build_demo_ui() -> (Ui, DemoIds) {
 
     // Text input at the bottom.
     let input = ui.append_child(content_column, overstory::TYPE_TEXT_INPUT);
-    ui.set_local(input, ui.properties().height, 40.0);
     ui.set_local(input, ui.properties().padding, 8.0);
     ui.set_local(input, ui.properties().border_width, 1.0);
     ui.set_local(input, ui.properties().corner_radius, 6.0);

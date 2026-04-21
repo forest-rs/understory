@@ -5,6 +5,7 @@
 
 use alloc::vec::Vec;
 use core::any::Any;
+use core::cell::Cell;
 
 use kurbo::{Point, Rect, Vec2};
 use parley::PlainEditor;
@@ -38,6 +39,8 @@ pub struct TextInputWidget {
     cached_cursor_rect: Option<Rect>,
     cached_selection_rects: Vec<Rect>,
     placeholder: Option<alloc::string::String>,
+    /// Last measured content width, used to set editor wrap width in `refresh_layout`.
+    last_content_width: Cell<Option<f32>>,
 }
 
 impl TextInputWidget {
@@ -49,6 +52,7 @@ impl TextInputWidget {
             cached_cursor_rect: None,
             cached_selection_rects: Vec::new(),
             placeholder: None,
+            last_content_width: Cell::new(None),
         }
     }
 
@@ -71,7 +75,47 @@ impl TextInputWidget {
     }
 }
 
+/// Maximum content height before the input stops growing (padding added by scene).
+const MAX_HEIGHT: f64 = 100.0;
+
 impl Widget for TextInputWidget {
+    fn measure(
+        &self,
+        available: kurbo::Size,
+        ctx: &mut crate::MeasureCtx<'_>,
+    ) -> Option<kurbo::Size> {
+        // Subtract label_padding to match what display() uses for text wrapping.
+        // This must match the Insets::symmetric(label_padding, 0.0) in display().
+        let h_padding = DEFAULT_LABEL_PADDING;
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "Display coordinates are small positive values."
+        )]
+        let text_width = (available.width - h_padding * 2.0).max(1.0) as f32;
+        // Store for refresh_layout to set editor wrap width.
+        self.last_content_width.set(Some(text_width));
+
+        let text = self.editor.raw_text();
+        let font_size = self.editor.get_font_size();
+        let line_height = f64::from(font_size) * 1.4;
+        // Vertical padding matches the element's padding (applied by layout).
+        // Use line_height as minimum content height.
+        if text.is_empty() {
+            return Some(kurbo::Size::new(available.width, line_height + h_padding * 2.0));
+        }
+        let text_size = ctx.measure_text(text, font_size, "sans-serif", Some(text_width));
+        // If text ends with a newline, the cursor is on an empty line below
+        // the measured text. Add one line height for that cursor line.
+        let trailing_newline_extra = if text.ends_with('\n') {
+            line_height
+        } else {
+            0.0
+        };
+        let content_h = (text_size.height + trailing_newline_extra).max(line_height);
+        let height = (content_h + h_padding * 2.0).min(MAX_HEIGHT);
+        Some(kurbo::Size::new(available.width, height))
+    }
+
     fn display(
         &self,
         _id: ElementId,
@@ -273,6 +317,10 @@ impl Widget for TextInputWidget {
     }
 
     fn refresh_layout(&mut self, text: &mut TextEngine) {
+        // Apply the wrap width from the last measure pass.
+        if let Some(w) = self.last_content_width.get() {
+            self.editor.set_width(Some(w));
+        }
         let (font_cx, layout_cx) = text.contexts();
         self.editor.refresh_layout(font_cx, layout_cx);
         self.cached_cursor_rect = self
@@ -300,7 +348,8 @@ impl Widget for TextInputWidget {
     }
 
     fn height_key(&self) -> Option<ResourceKey> {
-        Some(ThemeKeys::BUTTON_HEIGHT)
+        // No theme height — TextInput uses Widget::measure() for dynamic sizing.
+        None
     }
 
     fn default_pickable(&self) -> bool {
