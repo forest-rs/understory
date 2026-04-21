@@ -203,6 +203,8 @@ impl<'a> SceneBuilder<'a> {
         };
         let height = if is_root {
             available_rect.height()
+        } else if style.fill && style.height <= 0.0 {
+            available_rect.height().max(0.0)
         } else {
             measured_height
         };
@@ -246,6 +248,48 @@ impl<'a> SceneBuilder<'a> {
         ) {
             let content = inset_rect(rect, style.padding);
             let horizontal = matches!(element.kind, ElementKind::Row);
+            let total_extent = if horizontal {
+                content.width()
+            } else {
+                content.height()
+            };
+
+            // Pass 1: measure non-fill children and count fill children.
+            let mut used = 0.0_f64;
+            let mut fill_count = 0_u32;
+            let mut visible_count = 0_u32;
+            for &child in &element.children {
+                let Some(child_element) = self.elements.get(child.index()) else {
+                    continue;
+                };
+                let child_style = self.resolve_style(child_element);
+                if !child_style.visible {
+                    continue;
+                }
+                visible_count += 1;
+                if child_style.fill {
+                    fill_count += 1;
+                } else {
+                    let extent = if horizontal {
+                        resolve_dim(child_style.width, content.width())
+                    } else {
+                        self.measure_height(child, content.width())
+                    };
+                    used += extent;
+                }
+            }
+            let gap_total = if visible_count > 1 {
+                style.gap * f64::from(visible_count - 1)
+            } else {
+                0.0
+            };
+            let fill_extent = if fill_count > 0 {
+                ((total_extent - used - gap_total) / f64::from(fill_count)).max(0.0)
+            } else {
+                0.0
+            };
+
+            // Pass 2: lay out all children with fill children using their share.
             let mut cursor = if horizontal { content.x0 } else { content.y0 };
             let mut previous_visible = false;
             for &child in &element.children {
@@ -260,16 +304,28 @@ impl<'a> SceneBuilder<'a> {
                     cursor += style.gap;
                 }
                 let (child_origin, child_rect) = if horizontal {
+                    let child_w = if child_style.fill {
+                        fill_extent
+                    } else {
+                        content.width()
+                    };
                     (
                         Point::new(cursor, content.y0),
-                        Rect::new(cursor, content.y0, content.x1, content.y1),
+                        Rect::new(cursor, content.y0, cursor + child_w, content.y1),
                     )
                 } else {
                     let cw = content.width().max(0.0);
-                    (
-                        Point::new(content.x0, cursor),
-                        Rect::new(content.x0, cursor, content.x0 + cw, content.y1),
-                    )
+                    if child_style.fill {
+                        (
+                            Point::new(content.x0, cursor),
+                            Rect::new(content.x0, cursor, content.x0 + cw, cursor + fill_extent),
+                        )
+                    } else {
+                        (
+                            Point::new(content.x0, cursor),
+                            Rect::new(content.x0, cursor, content.x0 + cw, content.y1),
+                        )
+                    }
                 };
                 let child_size = self.layout_element(
                     child,
@@ -300,6 +356,10 @@ impl<'a> SceneBuilder<'a> {
         }
 
         if matches!(element.kind, ElementKind::Root) {
+            return 0.0;
+        }
+
+        if style.fill && style.height <= 0.0 {
             return 0.0;
         }
 
@@ -439,6 +499,7 @@ impl<'a> SceneBuilder<'a> {
                 self.props.focusable,
                 element.style.as_ref(),
             ),
+            fill: cx.get_value(element, &inputs, self.props.fill, element.style.as_ref()),
         }
     }
     fn alloc_z(&mut self) -> i32 {
@@ -462,6 +523,7 @@ struct ResolvedStyle {
     visible: bool,
     pickable: bool,
     focusable: bool,
+    fill: bool,
 }
 
 impl ResolvedStyle {

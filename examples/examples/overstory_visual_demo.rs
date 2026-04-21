@@ -599,6 +599,70 @@ mod tests {
     }
 
     #[test]
+    fn fill_child_takes_remaining_space() {
+        let mut ui = Ui::new(default_theme());
+        ui.set_view_rect(Rect::new(0.0, 0.0, 200.0, 400.0));
+        ui.set_local(ui.root(), ui.properties().padding, 0.0);
+        ui.set_local(ui.root(), ui.properties().gap, 0.0);
+
+        let column = ui.append_child(ui.root(), ElementKind::Column);
+        ui.set_local(column, ui.properties().padding, 0.0);
+        ui.set_local(column, ui.properties().gap, 0.0);
+        ui.set_local(column, ui.properties().height, 400.0);
+
+        let top = ui.append_child(column, ElementKind::Button);
+        ui.set_local(top, ui.properties().height, 50.0);
+
+        let middle = ui.append_child(column, ElementKind::Panel);
+        ui.set_local(middle, ui.properties().fill, true);
+
+        let bottom = ui.append_child(column, ElementKind::Button);
+        ui.set_local(bottom, ui.properties().height, 50.0);
+
+        let scene = ui.scene();
+        assert_eq!(scene.resolved_element(top).unwrap().rect.height(), 50.0);
+        assert_eq!(
+            scene.resolved_element(middle).unwrap().rect.height(),
+            300.0
+        );
+        assert_eq!(
+            scene.resolved_element(bottom).unwrap().rect.height(),
+            50.0
+        );
+        assert_eq!(scene.resolved_element(bottom).unwrap().rect.y0, 350.0);
+    }
+
+    #[test]
+    fn multiple_fill_children_share_space() {
+        let mut ui = Ui::new(default_theme());
+        ui.set_view_rect(Rect::new(0.0, 0.0, 200.0, 300.0));
+        ui.set_local(ui.root(), ui.properties().padding, 0.0);
+        ui.set_local(ui.root(), ui.properties().gap, 0.0);
+
+        let column = ui.append_child(ui.root(), ElementKind::Column);
+        ui.set_local(column, ui.properties().padding, 0.0);
+        ui.set_local(column, ui.properties().gap, 0.0);
+        ui.set_local(column, ui.properties().height, 300.0);
+
+        let first = ui.append_child(column, ElementKind::Panel);
+        ui.set_local(first, ui.properties().fill, true);
+
+        let second = ui.append_child(column, ElementKind::Panel);
+        ui.set_local(second, ui.properties().fill, true);
+
+        let scene = ui.scene();
+        assert_eq!(
+            scene.resolved_element(first).unwrap().rect.height(),
+            150.0
+        );
+        assert_eq!(
+            scene.resolved_element(second).unwrap().rect.height(),
+            150.0
+        );
+        assert_eq!(scene.resolved_element(second).unwrap().rect.y0, 150.0);
+    }
+
+    #[test]
     fn density_selection_follows_current_mode() {
         let mut app = DemoApp::new();
 

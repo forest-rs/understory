@@ -87,6 +87,8 @@ pub struct BuiltInProperties {
     pub pickable: Property<bool>,
     /// Focusable toggle.
     pub focusable: Property<bool>,
+    /// Fill remaining space in the parent container.
+    pub fill: Property<bool>,
 }
 
 impl BuiltInProperties {
@@ -173,6 +175,12 @@ impl BuiltInProperties {
                 "Focusable",
                 PropertyMetadataBuilder::new(false)
                     .affects_channels(DirtyChannels::INTERACTION.into_set())
+                    .build(),
+            ),
+            fill: registry.register(
+                "Fill",
+                PropertyMetadataBuilder::new(false)
+                    .affects_channels(layout)
                     .build(),
             ),
         }
