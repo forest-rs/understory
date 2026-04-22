@@ -19,7 +19,9 @@ impl ElementId {
         Self(u32::try_from(index).expect("element index exceeds u32 range"))
     }
 
-    pub(crate) const fn index(self) -> usize {
+    /// Returns the numeric index of this element.
+    #[must_use]
+    pub const fn index(self) -> usize {
         self.0 as usize
     }
 }

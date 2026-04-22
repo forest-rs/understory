@@ -26,10 +26,12 @@ use overstory::{
 use ui_events_winit::{WindowEventReducer, WindowEventTranslation};
 use understory_display::{BoxConstraints, TextEngine};
 use understory_examples::llm_api::{self, ApiConfig, StreamEvent};
+use understory_inspector::{Inspector, InspectorConfig, InspectorModel};
+use understory_outline::OutlineModel;
 use understory_examples::overstory_display::imaging_scene_from_display_tree;
 use understory_style::{
     IdSet, Selector, StyleBuilder, StyleCascade, StyleCascadeBuilder, StyleOrigin,
-    StyleSheetBuilder, Theme, ThemeBuilder,
+    StyleSheetBuilder, Theme, ThemeBuilder, TypeTag,
 };
 use understory_transcript::{EntryId, EntryKind, EntryStatus, MessageRole, NewEntry, Transcript};
 use wgpu::TextureFormat;
@@ -46,6 +48,131 @@ fn main() {
     event_loop.run_app(&mut app).expect("run app");
 }
 
+// ---------------------------------------------------------------------------
+// Element tree model for the inspector
+// ---------------------------------------------------------------------------
+
+/// Snapshot of the element tree for use with `understory_inspector`.
+struct ElementTreeModel {
+    nodes: Vec<ElementNode>,
+    root: ElementId,
+    /// Subtree roots to exclude from the tree view.
+    excluded: Vec<ElementId>,
+}
+
+struct ElementNode {
+    parent: Option<ElementId>,
+    children: Vec<ElementId>,
+    type_tag: TypeTag,
+    label: Option<String>,
+}
+
+impl ElementTreeModel {
+    fn from_ui(ui: &Ui, excluded: Vec<ElementId>) -> Self {
+        let nodes = ui
+            .elements()
+            .iter()
+            .map(|e| ElementNode {
+                parent: e.parent(),
+                children: e.children().to_vec(),
+                type_tag: e.type_tag(),
+                label: e.label().map(String::from),
+            })
+            .collect();
+        Self {
+            nodes,
+            root: ui.root(),
+            excluded,
+        }
+    }
+
+    fn node(&self, key: &ElementId) -> Option<&ElementNode> {
+        self.nodes.get(key.index())
+    }
+
+    fn is_excluded(&self, id: ElementId) -> bool {
+        // Check if id is any excluded root or a descendant of one.
+        let mut cur = Some(id);
+        while let Some(c) = cur {
+            if self.excluded.contains(&c) {
+                return true;
+            }
+            cur = self.nodes.get(c.index()).and_then(|n| n.parent);
+        }
+        false
+    }
+}
+
+impl OutlineModel for ElementTreeModel {
+    type Key = ElementId;
+    type Item = String;
+
+    fn first_root_key(&self) -> Option<Self::Key> {
+        Some(self.root)
+    }
+
+    fn contains_key(&self, key: &Self::Key) -> bool {
+        key.index() < self.nodes.len() && !self.is_excluded(*key)
+    }
+
+    fn next_sibling_key(&self, key: &Self::Key) -> Option<Self::Key> {
+        let node = self.node(key)?;
+        let parent = self.node(&node.parent?)?;
+        let pos = parent.children.iter().position(|c| c == key)?;
+        parent.children[pos + 1..]
+            .iter()
+            .find(|c| !self.is_excluded(**c))
+            .copied()
+    }
+
+    fn first_child_key(&self, key: &Self::Key) -> Option<Self::Key> {
+        let node = self.node(key)?;
+        node.children
+            .iter()
+            .find(|c| !self.is_excluded(**c))
+            .copied()
+    }
+
+    fn item(&self, key: &Self::Key) -> Option<Self::Item> {
+        let node = self.node(key)?;
+        let name = type_tag_name(node.type_tag);
+        if let Some(label) = &node.label {
+            let short = if label.len() > 20 {
+                format!("{}...", &label[..20])
+            } else {
+                label.clone()
+            };
+            Some(format!("{name} \"{short}\""))
+        } else {
+            Some(name.to_string())
+        }
+    }
+}
+
+impl InspectorModel for ElementTreeModel {
+    fn parent_key(&self, key: &Self::Key) -> Option<Self::Key> {
+        self.node(key)?.parent
+    }
+}
+
+fn type_tag_name(tag: TypeTag) -> &'static str {
+    match tag {
+        overstory::TYPE_ROOT => "Root",
+        overstory::TYPE_PANEL => "Panel",
+        overstory::TYPE_ROW => "Row",
+        overstory::TYPE_COLUMN => "Column",
+        overstory::TYPE_BUTTON => "Button",
+        overstory::TYPE_SPACER => "Spacer",
+        overstory::TYPE_SCROLL_VIEW => "ScrollView",
+        overstory::TYPE_TEXT_BLOCK => "TextBlock",
+        overstory::TYPE_TEXT_INPUT => "TextInput",
+        overstory::TYPE_TOOLTIP => "Tooltip",
+        _ => "Unknown",
+    }
+}
+
+// ---------------------------------------------------------------------------
+
 #[derive(Debug)]
 struct DemoIds {
     shell: ElementId,
@@ -60,6 +187,8 @@ struct DemoIds {
     deploy: ElementId,
     messages: ElementId,
     input: ElementId,
+    inspector_tree: ElementId,
+    inspector_props: ElementId,
 }
 
 #[allow(
@@ -247,6 +376,14 @@ struct DemoApp {
     api_config: ApiConfig,
     /// Monotonic epoch for converting between Instant and u64 nanos.
     epoch: std::time::Instant,
+    /// Element tree inspector controller.
+    inspector: Inspector<ElementTreeModel>,
+    /// Currently selected element in the inspector.
+    selected_element: Option<ElementId>,
+    /// UI elements representing tree rows.
+    tree_row_elements: Vec<ElementId>,
+    /// UI elements representing property rows.
+    prop_row_elements: Vec<ElementId>,
 }
 
 impl DemoApp {
@@ -264,6 +401,15 @@ impl DemoApp {
             ),
         ));
 
+        let inspector_model = ElementTreeModel::from_ui(
+            &ui,
+            vec![ids.inspector_tree, ids.inspector_props],
+        );
+        let inspector = Inspector::new(
+            inspector_model,
+            InspectorConfig::fixed_rows(16.0, 200.0),
+        );
+
         let mut app = Self {
             ui,
             ids,
@@ -280,11 +426,16 @@ impl DemoApp {
             api_messages: Vec::new(),
             api_config: config,
             epoch: std::time::Instant::now(),
+            inspector,
+            selected_element: None,
+            tree_row_elements: Vec::new(),
+            prop_row_elements: Vec::new(),
         };
         app.sync_messages();
         app.apply_density(true);
         app.ui.set_now(app.now_nanos());
         app.ui.set_focus(app.ids.input);
+        app.sync_inspector();
         app
     }
 
@@ -601,6 +752,121 @@ impl DemoApp {
         self.message_count = entries.len();
     }
 
+    fn sync_inspector(&mut self) {
+        // Rebuild model from current UI state, excluding the inspector panels.
+        *self.inspector.model_mut() = ElementTreeModel::from_ui(
+            &self.ui,
+            vec![self.ids.inspector_tree, self.ids.inspector_props],
+        );
+        self.inspector.mark_dirty();
+        self.inspector.sync();
+
+        let rows = self.inspector.visible_rows().to_vec();
+
+        // Ensure we have enough TextBlock elements for the visible rows.
+        while self.tree_row_elements.len() < rows.len() {
+            let block = self
+                .ui
+                .append_child(self.ids.inspector_tree, overstory::TYPE_TEXT_BLOCK);
+            self.ui
+                .set_local(block, self.ui.properties().label_padding, 2.0);
+            self.ui.set_local(block, self.ui.properties().padding, 1.0);
+            self.ui
+                .set_local(block, self.ui.properties().font_size, 11.0);
+            self.tree_row_elements.push(block);
+        }
+
+        // Update labels and hide excess rows.
+        for (i, block) in self.tree_row_elements.iter().enumerate() {
+            if let Some(row) = rows.get(i) {
+                let item = self.inspector.item(&row.key).unwrap_or_default();
+                let indent = "  ".repeat(row.depth);
+                let disclosure = match (row.has_children, row.is_expanded) {
+                    (true, true) => "▾ ",
+                    (true, false) => "▸ ",
+                    (false, _) => "  ",
+                };
+                let selected = self.selected_element == Some(row.key);
+                let marker = if selected { "● " } else { "" };
+                let label = format!("{indent}{disclosure}{marker}{item}");
+                self.ui.set_label(*block, label);
+                self.ui
+                    .set_local(*block, self.ui.properties().visible, true);
+            } else {
+                self.ui.set_label(*block, "");
+                self.ui
+                    .set_local(*block, self.ui.properties().visible, false);
+            }
+        }
+    }
+
+    fn sync_property_grid(&mut self) {
+        let props: Vec<(String, String)> = if let Some(sel) = self.selected_element {
+            let scene = self.ui.scene(&mut self.text);
+            if let Some(resolved) = scene.resolved_element(sel) {
+                let name = type_tag_name(resolved.type_tag);
+                let mut p = vec![
+                    ("type".into(), name.into()),
+                    ("id".into(), format!("{sel:?}")),
+                ];
+                if let Some(label) = &resolved.label {
+                    p.push(("label".into(), label.to_string()));
+                }
+                let r = resolved.rect;
+                p.push(("rect".into(), format!("{:.0}x{:.0} @ ({:.0},{:.0})", r.width(), r.height(), r.x0, r.y0)));
+                p.push(("background".into(), format!("{:?}", resolved.background)));
+                p.push(("foreground".into(), format!("{:?}", resolved.foreground)));
+                p.push(("font_size".into(), format!("{:.1}", resolved.font_size)));
+                p.push(("corner_radius".into(), format!("{:.1}", resolved.corner_radius)));
+                if resolved.border.width > 0.0 {
+                    p.push(("border".into(), format!("{:.1}", resolved.border.width)));
+                }
+                if resolved.hovered { p.push(("hovered".into(), "true".into())); }
+                if resolved.pressed { p.push(("pressed".into(), "true".into())); }
+                if resolved.focused { p.push(("focused".into(), "true".into())); }
+                if resolved.clips_content { p.push(("clips".into(), "true".into())); }
+                if resolved.scroll_offset != 0.0 {
+                    p.push(("scroll".into(), format!("{:.1}", resolved.scroll_offset)));
+                }
+                p
+            } else {
+                vec![("(not visible)".into(), String::new())]
+            }
+        } else {
+            vec![("(no selection)".into(), String::new())]
+        };
+
+        // Ensure enough TextBlock rows.
+        while self.prop_row_elements.len() < props.len() {
+            let block = self
+                .ui
+                .append_child(self.ids.inspector_props, overstory::TYPE_TEXT_BLOCK);
+            self.ui
+                .set_local(block, self.ui.properties().label_padding, 2.0);
+            self.ui.set_local(block, self.ui.properties().padding, 1.0);
+            self.ui
+                .set_local(block, self.ui.properties().font_size, 11.0);
+            self.prop_row_elements.push(block);
+        }
+
+        for (i, block) in self.prop_row_elements.iter().enumerate() {
+            if let Some((name, value)) = props.get(i) {
+                let label = if value.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{name}: {value}")
+                };
+                self.ui.set_label(*block, label);
+                self.ui
+                    .set_local(*block, self.ui.properties().visible, true);
+            } else {
+                self.ui.set_label(*block, "");
+                self.ui
+                    .set_local(*block, self.ui.properties().visible, false);
+            }
+        }
+    }
+
     fn process_pointer_translation(
         &mut self,
         pointer: ui_events_winit::WindowEventTranslation,
@@ -649,7 +915,25 @@ impl DemoApp {
                             Color::from_rgba8(235, 245, 241, 255),
                         );
                     }
-                    _ => {}
+                    _ => {
+                        // Check if it's an inspector tree row click.
+                        if let Some(row_index) = self
+                            .tree_row_elements
+                            .iter()
+                            .position(|el| *el == target)
+                        {
+                            let rows = self.inspector.visible_rows().to_vec();
+                            if let Some(row) = rows.get(row_index) {
+                                let key = row.key;
+                                if row.has_children {
+                                    let _ = self.inspector.toggle(key);
+                                }
+                                self.selected_element = Some(key);
+                                self.sync_inspector();
+                                self.sync_property_grid();
+                            }
+                        }
+                    }
                 }
             }
             if let Interaction::Submitted(target) = *interaction
@@ -1104,6 +1388,30 @@ fn build_demo_ui() -> (Ui, DemoIds) {
     let roomy = append_button(&mut ui, sidebar_column, &button_cascade, "Roomy", false);
     let compact = append_button(&mut ui, sidebar_column, &button_cascade, "Compact", false);
 
+    // --- Inspector: element tree ---
+    let tree_label = ui.append_child(sidebar_column, overstory::TYPE_TEXT_BLOCK);
+    ui.set_label(tree_label, "Element Tree");
+    ui.set_local(tree_label, ui.properties().font_size, 11.0);
+    ui.set_local(tree_label, ui.properties().label_padding, 2.0);
+
+    let inspector_tree = ui.append_child(sidebar_column, overstory::TYPE_SCROLL_VIEW);
+    ui.set_local(inspector_tree, ui.properties().fill, true);
+    ui.set_local(inspector_tree, ui.properties().padding, 4.0);
+    ui.set_local(inspector_tree, ui.properties().gap, 0.0);
+    ui.set_local(inspector_tree, ui.properties().background, Color::TRANSPARENT);
+
+    // --- Inspector: property grid ---
+    let props_label = ui.append_child(sidebar_column, overstory::TYPE_TEXT_BLOCK);
+    ui.set_label(props_label, "Properties");
+    ui.set_local(props_label, ui.properties().font_size, 11.0);
+    ui.set_local(props_label, ui.properties().label_padding, 2.0);
+
+    let inspector_props = ui.append_child(sidebar_column, overstory::TYPE_SCROLL_VIEW);
+    ui.set_local(inspector_props, ui.properties().height, 180.0);
+    ui.set_local(inspector_props, ui.properties().padding, 4.0);
+    ui.set_local(inspector_props, ui.properties().gap, 0.0);
+    ui.set_local(inspector_props, ui.properties().background, Color::TRANSPARENT);
+
     let content = ui.append_child(shell, overstory::TYPE_PANEL);
     ui.set_local(content, ui.properties().padding, 18.0);
     ui.set_local(content, ui.properties().gap, 12.0);
@@ -1171,6 +1479,8 @@ fn build_demo_ui() -> (Ui, DemoIds) {
             deploy,
             messages,
             input,
+            inspector_tree,
+            inspector_props,
         },
     )
 }
