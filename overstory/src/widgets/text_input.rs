@@ -19,9 +19,9 @@ use crate::{
     Element, ElementId, Interaction, InteractionBatch, ResolvedElement, ThemeKeys, Widget,
 };
 
-const DEFAULT_FONT_SIZE: f64 = 16.0;
-const DEFAULT_LABEL_PADDING: f64 = 12.0;
-const DEFAULT_FONT_FAMILY: &str = "sans-serif";
+/// Label padding used for content box calculation in `measure`.
+/// Must match the resolved `label_padding` for consistent geometry.
+const CONTENT_PADDING: f64 = 12.0;
 
 impl core::fmt::Debug for TextInputWidget {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -89,7 +89,7 @@ impl Widget for TextInputWidget {
         // Subtract internal padding to match the text content box used by
         // display() and click(). Text input uses one top-left aligned content
         // box for measurement, painting, and hit-testing.
-        let padding = DEFAULT_LABEL_PADDING;
+        let padding = CONTENT_PADDING;
         #[allow(
             clippy::cast_possible_truncation,
             reason = "Display coordinates are small positive values."
@@ -127,23 +127,7 @@ impl Widget for TextInputWidget {
         if let Some(label) = display_text
             && !label.is_empty()
         {
-            let font_size = if resolved.font_size > 0.0 {
-                resolved.font_size
-            } else {
-                DEFAULT_FONT_SIZE
-            };
-            let label_padding = if resolved.label_padding > 0.0 {
-                resolved.label_padding
-            } else {
-                DEFAULT_LABEL_PADDING
-            };
-            let font_family = if resolved.font_family.is_empty() {
-                DEFAULT_FONT_FAMILY
-            } else {
-                &resolved.font_family
-            };
             let text_brush = if show_placeholder {
-                // Dim the placeholder text.
                 let fg = resolved.foreground.to_rgba8();
                 Brush::Solid(Color::from_rgba8(fg.r, fg.g, fg.b, 100))
             } else {
@@ -156,14 +140,14 @@ impl Widget for TextInputWidget {
             let text_node = DisplayNode::text(
                 label,
                 text_brush,
-                font_size as f32,
-                font_family,
+                resolved.font_size as f32,
+                &*resolved.font_family,
                 resolved.text_align,
             );
             children.push(DisplayNode::align(
                 DisplayAlign::Start,
                 DisplayAlign::Start,
-                DisplayNode::padding(Insets::uniform(label_padding), text_node),
+                DisplayNode::padding(Insets::uniform(resolved.label_padding), text_node),
             ));
         }
 
@@ -384,9 +368,9 @@ mod tests {
             hovered: false,
             pressed: false,
             focused: true,
-            font_size: DEFAULT_FONT_SIZE,
-            label_padding: DEFAULT_LABEL_PADDING,
-            font_family: Box::<str>::from(DEFAULT_FONT_FAMILY),
+            font_size: 16.0,
+            label_padding: CONTENT_PADDING,
+            font_family: Box::<str>::from("sans-serif"),
             text_align: TextAlign::Start,
             clips_content: false,
             scroll_offset: 0.0,
@@ -419,7 +403,7 @@ mod tests {
         let DisplayNodeKind::Padding { insets, .. } = child.kind() else {
             panic!("expected padded text");
         };
-        assert_eq!(*insets, Insets::uniform(DEFAULT_LABEL_PADDING));
+        assert_eq!(*insets, Insets::uniform(CONTENT_PADDING));
     }
 
     #[test]
@@ -453,8 +437,8 @@ mod tests {
 
         let line_height = f64::from(widget.editor.get_font_size()) * 1.4;
         let click_point = Point::new(
-            resolved.rect.x0 + DEFAULT_LABEL_PADDING + 4.0,
-            resolved.rect.y0 + DEFAULT_LABEL_PADDING + line_height + 1.0,
+            resolved.rect.x0 + CONTENT_PADDING + 4.0,
+            resolved.rect.y0 + CONTENT_PADDING + line_height + 1.0,
         );
         widget.click(resolved.id, click_point, &resolved, &mut text);
         widget.refresh_layout(&mut text);

@@ -13,11 +13,6 @@ use understory_style::ResourceKey;
 
 use crate::{Element, ElementId, MessageClass, ResolvedElement, ThemeKeys, Widget};
 
-/// Default font size fallback.
-const DEFAULT_FONT_SIZE: f64 = 16.0;
-/// Default font family fallback.
-const DEFAULT_FONT_FAMILY: &str = "sans-serif";
-
 /// Multiline wrapped text block widget.
 ///
 /// Renders its label as top-left aligned, uniformly padded text that wraps
@@ -50,16 +45,6 @@ impl Widget for TextBlockWidget {
         if label.is_empty() {
             return;
         }
-        let font_size = if resolved.font_size > 0.0 {
-            resolved.font_size
-        } else {
-            DEFAULT_FONT_SIZE
-        };
-        let font_family = if resolved.font_family.is_empty() {
-            DEFAULT_FONT_FAMILY
-        } else {
-            &resolved.font_family
-        };
         #[allow(
             clippy::cast_possible_truncation,
             reason = "Font size is a small positive value; f32 is sufficient."
@@ -67,12 +52,12 @@ impl Widget for TextBlockWidget {
         let text_node = DisplayNode::text(
             label,
             Brush::Solid(resolved.foreground),
-            font_size as f32,
-            font_family,
+            resolved.font_size as f32,
+            &*resolved.font_family,
             resolved.text_align,
         );
         children.push(DisplayNode::padding(
-            Insets::uniform(resolved.label_padding.max(0.0)),
+            Insets::uniform(resolved.label_padding),
             text_node,
         ));
     }

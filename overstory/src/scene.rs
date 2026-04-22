@@ -538,7 +538,7 @@ impl<'a> SceneBuilder<'a> {
         };
         let height_key = widget_ref.and_then(|w| w.height_key());
 
-        ResolvedStyle {
+        let mut resolved = ResolvedStyle {
             width: cx.get_value(element, &inputs, self.props.width, element.style.as_ref()),
             height: cx.get_value_with_theme(
                 element,
@@ -637,7 +637,19 @@ impl<'a> SceneBuilder<'a> {
                 element.style.as_ref(),
                 Some(ThemeKeys::TEXT_ALIGN),
             ),
+        };
+        // Guarantee that text properties are never zero/empty — widgets
+        // should be able to read them directly without fallback logic.
+        if resolved.font_size <= 0.0 {
+            resolved.font_size = 16.0;
         }
+        if resolved.label_padding <= 0.0 {
+            resolved.label_padding = 12.0;
+        }
+        if resolved.font_family.is_empty() {
+            resolved.font_family = Box::from("sans-serif");
+        }
+        resolved
     }
     fn alloc_z(&mut self) -> i32 {
         let value = self.next_z;

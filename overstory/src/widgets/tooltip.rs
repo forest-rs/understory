@@ -11,9 +11,10 @@ use understory_display::{DisplayAlign, DisplayNode, Insets};
 
 use crate::{ElementId, ResolvedElement, SurfaceRole, Widget};
 
-const DEFAULT_FONT_SIZE: f64 = 13.0;
-const DEFAULT_PADDING: f64 = 6.0;
-const DEFAULT_FONT_FAMILY: &str = "sans-serif";
+/// Tooltip-specific padding (tighter than the theme default).
+const TOOLTIP_PADDING: f64 = 6.0;
+/// Tooltip-specific font size (smaller than the theme default).
+const TOOLTIP_FONT_SIZE: f64 = 13.0;
 
 /// Tooltip widget that renders as a promoted overlay surface.
 ///
@@ -84,16 +85,6 @@ impl Widget for TooltipWidget {
         if label.is_empty() {
             return;
         }
-        let font_size = if resolved.font_size > 0.0 {
-            resolved.font_size
-        } else {
-            DEFAULT_FONT_SIZE
-        };
-        let font_family = if resolved.font_family.is_empty() {
-            DEFAULT_FONT_FAMILY
-        } else {
-            &resolved.font_family
-        };
         #[allow(
             clippy::cast_possible_truncation,
             reason = "Font size is a small positive value; f32 is sufficient."
@@ -101,14 +92,14 @@ impl Widget for TooltipWidget {
         let text_node = DisplayNode::text(
             label,
             Brush::Solid(resolved.foreground),
-            font_size as f32,
-            font_family,
+            TOOLTIP_FONT_SIZE as f32,
+            &*resolved.font_family,
             resolved.text_align,
         );
         children.push(DisplayNode::align(
             DisplayAlign::Start,
             DisplayAlign::Center,
-            DisplayNode::padding(Insets::uniform(DEFAULT_PADDING), text_node),
+            DisplayNode::padding(Insets::uniform(TOOLTIP_PADDING), text_node),
         ));
     }
 
