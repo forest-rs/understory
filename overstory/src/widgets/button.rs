@@ -4,7 +4,6 @@
 //! Button widget with centered label text.
 
 use alloc::vec::Vec;
-use core::any::Any;
 
 use peniko::Brush;
 use understory_display::{DisplayAlign, DisplayNode, Insets};
@@ -69,11 +68,5 @@ impl Widget for ButtonWidget {
         true
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
+    crate::impl_widget_any!();
 }

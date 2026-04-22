@@ -3,8 +3,6 @@
 
 //! Scroll view widget with vertical scroll offset and content tracking.
 
-use core::any::Any;
-
 use understory_display::TextEngine;
 
 use understory_style::ResourceKey;
@@ -77,11 +75,5 @@ impl Widget for ScrollViewWidget {
 
     fn refresh_layout(&mut self, _text: &mut TextEngine) {}
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
+    crate::impl_widget_any!();
 }

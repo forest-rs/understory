@@ -4,7 +4,6 @@
 //! Text input widget backed by Parley's `PlainEditor`.
 
 use alloc::vec::Vec;
-use core::any::Any;
 use core::cell::Cell;
 
 use kurbo::{Point, Rect, Vec2};
@@ -326,13 +325,7 @@ impl Widget for TextInputWidget {
         true
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
+    crate::impl_widget_any!();
 }
 
 #[cfg(test)]

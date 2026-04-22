@@ -184,6 +184,22 @@ pub trait Widget {
     fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
+/// Implements the `as_any`/`as_any_mut` boilerplate for a Widget type.
+///
+/// Every widget implementation needs these two methods to support typed
+/// downcasting via the arena. This macro eliminates the repetition.
+#[macro_export]
+macro_rules! impl_widget_any {
+    () => {
+        fn as_any(&self) -> &dyn core::any::Any {
+            self
+        }
+        fn as_any_mut(&mut self) -> &mut dyn core::any::Any {
+            self
+        }
+    };
+}
+
 /// Opaque handle to a widget in the [`WidgetArena`].
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct WidgetHandle(u32);

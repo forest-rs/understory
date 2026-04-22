@@ -4,7 +4,6 @@
 //! Text block widget for multiline wrapped text.
 
 use alloc::vec::Vec;
-use core::any::Any;
 
 use peniko::Brush;
 use understory_display::{DisplayNode, Insets};
@@ -52,11 +51,5 @@ impl Widget for TextBlockWidget {
         ));
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
+    crate::impl_widget_any!();
 }

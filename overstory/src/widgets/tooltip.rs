@@ -4,7 +4,6 @@
 //! Tooltip widget — promoted overlay surface with text content.
 
 use alloc::vec::Vec;
-use core::any::Any;
 
 use peniko::Brush;
 use understory_display::{DisplayAlign, DisplayNode, Insets};
@@ -107,11 +106,5 @@ impl Widget for TooltipWidget {
         Some(crate::ThemeKeys::BUTTON_BACKGROUND)
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
+    crate::impl_widget_any!();
 }
