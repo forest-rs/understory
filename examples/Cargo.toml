@@ -28,5 +28,8 @@ understory_outline = { path = "../understory_outline" }
 understory_style = { path = "../understory_style" }
 understory_transcript = { path = "../understory_transcript" }
 understory_virtual_list = { path = "../understory_virtual_list" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = { version = "3", default-features = false, features = ["rustls"] }
 ui-events-winit = "0.3.0"
 winit = "0.30.10"

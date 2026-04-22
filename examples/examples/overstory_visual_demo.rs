@@ -25,6 +25,7 @@ use overstory::{
 };
 use ui_events_winit::{WindowEventReducer, WindowEventTranslation};
 use understory_display::{BoxConstraints, TextEngine};
+use understory_examples::claude_api::{self, StreamEvent};
 use understory_examples::overstory_display::imaging_scene_from_display_tree;
 use understory_style::{
     IdSet, Selector, StyleBuilder, StyleCascade, StyleCascadeBuilder, StyleOrigin,
@@ -232,6 +233,14 @@ struct DemoApp {
     render_state: RenderState,
     transcript: Transcript,
     message_count: usize,
+    /// Receiver for Claude API streaming events.
+    api_receiver: Option<std::sync::mpsc::Receiver<understory_examples::claude_api::StreamEvent>>,
+    /// Pending assistant message being streamed.
+    streaming_text: String,
+    /// Tool calls with their results, waiting to be sent back to the API.
+    pending_tool_calls: Vec<(String, String, serde_json::Value, String)>,
+    /// Messages sent to Claude (for context continuity).
+    api_messages: Vec<understory_examples::claude_api::Message>,
     /// Monotonic epoch for converting between Instant and u64 nanos.
     epoch: std::time::Instant,
 }
@@ -240,42 +249,12 @@ impl DemoApp {
     fn new() -> Self {
         let (ui, ids) = build_demo_ui();
         let mut transcript = Transcript::new();
-        let sample_messages = [
-            (
-                MessageRole::Assistant,
-                "Welcome to the Overstory demo. This message area is driven by understory_transcript.",
-            ),
-            (MessageRole::User, "Can I type messages?"),
-            (
-                MessageRole::Assistant,
-                "Each message is a TextBlock element that wraps its text within the available width.",
-            ),
-            (
-                MessageRole::Assistant,
-                "The message list is a ScrollView with fill layout, so it stretches to fill the space between the button row and the bottom of the content panel.",
-            ),
-            (MessageRole::User, "What about scrolling?"),
-            (
-                MessageRole::Assistant,
-                "Try scrolling with the mouse wheel or trackpad to see the scroll offset in action.",
-            ),
-            (
-                MessageRole::Assistant,
-                "You can also switch between Light and Dark themes using the sidebar buttons. The text properties cascade through the style system.",
-            ),
-            (
-                MessageRole::Assistant,
-                "Switching between Roomy and Compact density adjusts padding, gaps, and button sizes throughout the UI.",
-            ),
-            (
-                MessageRole::Assistant,
-                "This is a longer message to demonstrate text wrapping. When a message exceeds the available width, Parley shapes the text with a max advance constraint and the glyphs wrap onto multiple lines.",
-            ),
-            (MessageRole::User, "Nice."),
-        ];
-        for (role, text) in &sample_messages {
-            transcript.append(NewEntry::message(*role, *text));
-        }
+        transcript.append(NewEntry::message(
+            MessageRole::Assistant,
+            "Welcome to the Overstory chat harness. I'm powered by Claude. \
+             Try asking me to switch themes or change the density — I have tools for that. \
+             Set ANTHROPIC_API_KEY to enable API access.",
+        ));
 
         let mut app = Self {
             ui,
@@ -286,6 +265,10 @@ impl DemoApp {
             render_state: RenderState::Suspended,
             transcript,
             message_count: 0,
+            api_receiver: None,
+            streaming_text: String::new(),
+            pending_tool_calls: Vec::new(),
+            api_messages: Vec::new(),
             epoch: std::time::Instant::now(),
         };
         app.sync_messages();
@@ -297,6 +280,226 @@ impl DemoApp {
 
     /// Returns true if the messages ScrollView is currently scrolled to the
     /// bottom (or content fits within the viewport).
+    fn build_tools() -> Vec<claude_api::Tool> {
+        vec![
+            claude_api::Tool {
+                name: "set_theme".into(),
+                description: "Switch the UI theme".into(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "theme": {
+                            "type": "string",
+                            "enum": ["light", "dark"],
+                            "description": "The theme to switch to"
+                        }
+                    },
+                    "required": ["theme"]
+                }),
+            },
+            claude_api::Tool {
+                name: "set_density".into(),
+                description: "Switch the UI density".into(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "density": {
+                            "type": "string",
+                            "enum": ["roomy", "compact"],
+                            "description": "The density mode to switch to"
+                        }
+                    },
+                    "required": ["density"]
+                }),
+            },
+        ]
+    }
+
+    fn send_to_claude(&mut self) {
+        // Build messages from transcript.
+        let mut messages = Vec::new();
+        for entry in self.transcript.entries() {
+            if let understory_transcript::EntryKind::Message(msg) = &entry.kind {
+                let role = match msg.role {
+                    MessageRole::User => "user",
+                    MessageRole::Assistant => "assistant",
+                    _ => continue,
+                };
+                let text = msg.body.as_text().unwrap_or("").to_string();
+                messages.push(claude_api::Message {
+                    role: role.into(),
+                    content: claude_api::MessageContent::Text(text),
+                });
+            }
+        }
+
+        self.api_messages = messages.clone();
+        let tools = Self::build_tools();
+        let system = Some(
+            "You are an AI assistant embedded in the Overstory UI demo. \
+             You can help the user and also control the UI using tools. \
+             Keep responses concise."
+                .to_string(),
+        );
+        self.api_receiver = Some(claude_api::send_streaming(messages, tools, system));
+        self.streaming_text.clear();
+    }
+
+    fn poll_api(&mut self) {
+        let Some(rx) = self.api_receiver.take() else {
+            return;
+        };
+
+        let mut needs_redraw = false;
+        let mut done = false;
+
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                StreamEvent::TextDelta(text) => {
+                    self.streaming_text.push_str(&text);
+                    needs_redraw = true;
+                }
+                StreamEvent::ToolCall { id, name, input } => {
+                    // Flush any pending text as an assistant message.
+                    if !self.streaming_text.is_empty() {
+                        let text = core::mem::take(&mut self.streaming_text);
+                        self.transcript
+                            .append(NewEntry::message(MessageRole::Assistant, text.as_str()));
+                        self.sync_messages();
+                    }
+                    // Execute the tool.
+                    let result = self.execute_tool(&name, &input);
+                    // Add tool result to transcript for visibility.
+                    self.transcript.append(NewEntry::message(
+                        MessageRole::Assistant,
+                        format!("[tool: {name}] {result}"),
+                    ));
+                    self.sync_messages();
+                    self.pending_tool_calls.push((id, name, input, result));
+                    needs_redraw = true;
+                }
+                StreamEvent::Done => {
+                    if !self.streaming_text.is_empty() {
+                        let text = core::mem::take(&mut self.streaming_text);
+                        self.transcript
+                            .append(NewEntry::message(MessageRole::Assistant, text.as_str()));
+                        self.sync_messages();
+                    }
+                    // If there were tool calls, send tool results back.
+                    if !self.pending_tool_calls.is_empty() {
+                        self.send_tool_results();
+                    }
+                    done = true;
+                    needs_redraw = true;
+                }
+                StreamEvent::Error(err) => {
+                    self.transcript.append(NewEntry::message(
+                        MessageRole::Assistant,
+                        format!("[error: {err}]"),
+                    ));
+                    self.sync_messages();
+                    done = true;
+                    needs_redraw = true;
+                }
+            }
+        }
+
+        if done && self.pending_tool_calls.is_empty() {
+            // Stream finished and no pending tool results — drop the receiver.
+        } else {
+            // Put the receiver back for continued polling.
+            self.api_receiver = Some(rx);
+        }
+
+        if needs_redraw {
+            let was_at_tail = self.is_at_tail();
+            if was_at_tail {
+                self.scroll_to_tail();
+            }
+        }
+    }
+
+    fn execute_tool(&mut self, name: &str, input: &serde_json::Value) -> String {
+        match name {
+            "set_theme" => {
+                let theme_name = input["theme"].as_str().unwrap_or("light");
+                match theme_name {
+                    "dark" => {
+                        self.ui.set_theme(dark_theme());
+                        self.sync_density_selection();
+                        "Switched to dark theme".into()
+                    }
+                    _ => {
+                        self.ui.set_theme(light_theme());
+                        self.sync_density_selection();
+                        "Switched to light theme".into()
+                    }
+                }
+            }
+            "set_density" => {
+                let density = input["density"].as_str().unwrap_or("roomy");
+                match density {
+                    "compact" => {
+                        self.apply_density(false);
+                        "Switched to compact density".into()
+                    }
+                    _ => {
+                        self.apply_density(true);
+                        "Switched to roomy density".into()
+                    }
+                }
+            }
+            _ => format!("Unknown tool: {name}"),
+        }
+    }
+
+    fn send_tool_results(&mut self) {
+        let tool_calls = core::mem::take(&mut self.pending_tool_calls);
+        // Build the assistant message with tool_use blocks.
+        let mut assistant_blocks = Vec::new();
+        if !self.streaming_text.is_empty() {
+            assistant_blocks.push(claude_api::ContentBlock::Text {
+                text: core::mem::take(&mut self.streaming_text),
+            });
+        }
+        for (id, name, input, _) in &tool_calls {
+            assistant_blocks.push(claude_api::ContentBlock::ToolUse {
+                id: id.clone(),
+                name: name.clone(),
+                input: input.clone(),
+            });
+        }
+
+        // Build tool result message using stored results.
+        let mut result_blocks = Vec::new();
+        for (id, _, _, result) in &tool_calls {
+            result_blocks.push(claude_api::ContentBlock::ToolResult {
+                tool_use_id: id.clone(),
+                content: result.clone(),
+            });
+        }
+
+        let mut messages = self.api_messages.clone();
+        messages.push(claude_api::Message {
+            role: "assistant".into(),
+            content: claude_api::MessageContent::Blocks(assistant_blocks),
+        });
+        messages.push(claude_api::Message {
+            role: "user".into(),
+            content: claude_api::MessageContent::Blocks(result_blocks),
+        });
+
+        self.api_messages = messages.clone();
+        let tools = Self::build_tools();
+        let system = Some(
+            "You are an AI assistant embedded in the Overstory UI demo. \
+             You can help the user and also control the UI using tools. \
+             Keep responses concise."
+                .to_string(),
+        );
+        self.api_receiver = Some(claude_api::send_streaming(messages, tools, system));
+    }
+
     fn now_nanos(&self) -> u64 {
         self.epoch.elapsed().as_nanos() as u64
     }
@@ -405,6 +608,8 @@ impl DemoApp {
                         self.scroll_to_tail();
                     }
                     self.ui.clear_text_buffer(self.ids.input, &mut self.text);
+                    // Send to Claude API.
+                    self.send_to_claude();
                 }
             }
         }
@@ -701,16 +906,30 @@ impl ApplicationHandler for DemoApp {
         self.ui.set_now(self.now_nanos());
 
         // Fire expired timers on timer wakeup.
-        if matches!(cause, winit::event::StartCause::ResumeTimeReached { .. }) {
-            if self.ui.tick(self.now_nanos()) {
-                if let RenderState::Active { window, .. } = &self.render_state {
-                    window.request_redraw();
-                }
-            }
+        if matches!(cause, winit::event::StartCause::ResumeTimeReached { .. })
+            && self.ui.tick(self.now_nanos())
+            && let RenderState::Active { window, .. } = &self.render_state
+        {
+            window.request_redraw();
         }
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // Poll for Claude API streaming events.
+        if self.api_receiver.is_some() {
+            self.poll_api();
+            if let RenderState::Active { window, .. } = &self.render_state {
+                window.request_redraw();
+            }
+            // While streaming, use a short poll interval.
+            event_loop.set_control_flow(
+                winit::event_loop::ControlFlow::WaitUntil(
+                    std::time::Instant::now() + std::time::Duration::from_millis(16),
+                ),
+            );
+            return;
+        }
+
         if let Some(deadline_nanos) = self.ui.next_deadline() {
             let deadline = self.epoch + std::time::Duration::from_nanos(deadline_nanos);
             event_loop
