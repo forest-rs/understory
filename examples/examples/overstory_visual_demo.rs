@@ -358,6 +358,33 @@ impl DemoApp {
         self.sync_messages();
     }
 
+    fn entry_display_state(&self, entry_id: EntryId) -> Option<(String, bool)> {
+        let entry = self.transcript.entry(entry_id)?;
+        let EntryKind::Message(msg) = &entry.kind else {
+            return None;
+        };
+        let body = msg.body.as_text().unwrap_or("");
+        let visible = !(entry.status == EntryStatus::Complete && body.is_empty());
+        let text = if entry.status == EntryStatus::InProgress && body.is_empty() {
+            "...".to_string()
+        } else {
+            body.to_string()
+        };
+        Some((text, visible))
+    }
+
+    fn refresh_entry_element(&mut self, entry_id: EntryId) {
+        let Some(element) = self.element_for_entry(entry_id) else {
+            return;
+        };
+        let Some((label, visible)) = self.entry_display_state(entry_id) else {
+            return;
+        };
+        self.ui.set_label(element, label);
+        self.ui
+            .set_local(element, self.ui.properties().visible, visible);
+    }
+
     fn poll_api(&mut self) {
         let Some(rx) = self.api_receiver.take() else {
             return;
@@ -371,16 +398,7 @@ impl DemoApp {
                 StreamEvent::TextDelta(text) => {
                     if let Some(eid) = self.streaming_entry {
                         let _ = self.transcript.append_chunk(eid, text.as_str());
-                        // Update the UI element label with the accumulated text.
-                        if let Some(element) = self.element_for_entry(eid) {
-                            let label = self
-                                .transcript
-                                .entry(eid)
-                                .and_then(|e| e.kind.body())
-                                .and_then(|b| b.as_text())
-                                .unwrap_or("");
-                            self.ui.set_label(element, label);
-                        }
+                        self.refresh_entry_element(eid);
                     }
                     needs_redraw = true;
                 }
@@ -454,6 +472,7 @@ impl DemoApp {
     fn complete_streaming_entry(&mut self) {
         if let Some(eid) = self.streaming_entry.take() {
             let _ = self.transcript.set_status(eid, EntryStatus::Complete);
+            self.refresh_entry_element(eid);
         }
     }
 
@@ -562,17 +581,10 @@ impl DemoApp {
         let entries: Vec<_> = self.transcript.entries().to_vec();
         for entry in entries.iter().skip(self.message_count) {
             if let EntryKind::Message(msg) = &entry.kind {
-                let display_text = if entry.status == EntryStatus::InProgress {
-                    let body = msg.body.as_text().unwrap_or("");
-                    if body.is_empty() { "..." } else { body }
-                } else {
-                    msg.body.as_text().unwrap_or("")
-                };
                 let is_user = msg.role == MessageRole::User;
                 let block = self
                     .ui
                     .append_child(self.ids.messages, overstory::TYPE_TEXT_BLOCK);
-                self.ui.set_label(block, display_text);
                 self.ui
                     .set_local(block, self.ui.properties().label_padding, 8.0);
                 self.ui.set_local(block, self.ui.properties().padding, 8.0);
@@ -583,6 +595,7 @@ impl DemoApp {
                         .add_class(block, overstory::MessageClass::User.class_id());
                 }
                 self.entry_elements.push((entry.id, block));
+                self.refresh_entry_element(entry.id);
             }
         }
         self.message_count = entries.len();
@@ -1513,6 +1526,15 @@ mod tests {
         let mut app = DemoApp::new();
         app.resize_ui(PhysicalSize::new(960, 640), 1.0);
 
+        // Add enough messages to overflow the scroll view.
+        for i in 0..20 {
+            app.transcript.append(NewEntry::message(
+                MessageRole::User,
+                format!("Message {i} with enough text to take up space"),
+            ));
+        }
+        app.sync_messages();
+
         // Find where the messages scroll view is.
         let scene = app.ui.scene(&mut app.text);
         let msg_rect = scene
@@ -1654,6 +1676,34 @@ mod tests {
         assert_eq!(roomy.background, theme_button);
         assert_eq!(compact.background, theme_primary);
         assert_eq!(roomy.foreground, theme_fg);
+    }
+
+    #[test]
+    fn empty_streaming_entry_hides_when_completed() {
+        let mut app = DemoApp::new();
+
+        let entry = app.transcript.append(
+            NewEntry::message(MessageRole::Assistant, "").with_status(EntryStatus::InProgress),
+        );
+        app.sync_messages();
+
+        let block = app
+            .element_for_entry(entry)
+            .expect("streaming entry should have a UI element");
+        let scene = app.ui.scene(&mut app.text);
+        let resolved = scene
+            .resolved_element(block)
+            .expect("typing indicator should be visible while in progress");
+        assert_eq!(resolved.label.as_deref(), Some("..."));
+
+        let _ = app.transcript.set_status(entry, EntryStatus::Complete);
+        app.refresh_entry_element(entry);
+
+        let scene = app.ui.scene(&mut app.text);
+        assert!(
+            scene.resolved_element(block).is_none(),
+            "completed empty typing indicator should disappear"
+        );
     }
 }
 
