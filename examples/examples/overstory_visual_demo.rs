@@ -1425,7 +1425,7 @@ fn build_demo_ui() -> (Ui, DemoIds) {
     ui.set_local(tree_label, ui.properties().label_padding, 2.0);
 
     let inspector_tree = ui.append_child(sidebar_column, overstory::TYPE_SCROLL_VIEW);
-    ui.set_local(inspector_tree, ui.properties().fill, true);
+    ui.set_local(inspector_tree, ui.properties().height, 200.0);
     ui.set_local(inspector_tree, ui.properties().padding, 4.0);
     ui.set_local(inspector_tree, ui.properties().gap, 0.0);
     ui.set_local(inspector_tree, ui.properties().background, Color::TRANSPARENT);
