@@ -528,6 +528,14 @@ impl DemoApp {
         let tools = Self::build_tools();
         self.api_receiver =
             Some(llm_api::send_streaming(&self.api_config, messages, tools));
+
+        // Create a new in-progress entry for the follow-up response.
+        let entry_id = self.transcript.append(
+            NewEntry::message(MessageRole::Assistant, "")
+                .with_status(EntryStatus::InProgress),
+        );
+        self.streaming_entry = Some(entry_id);
+        self.sync_messages();
     }
 
     fn now_nanos(&self) -> u64 {
