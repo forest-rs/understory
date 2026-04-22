@@ -232,6 +232,8 @@ struct DemoApp {
     render_state: RenderState,
     transcript: Transcript,
     message_count: usize,
+    /// Monotonic epoch for converting between Instant and u64 nanos.
+    epoch: std::time::Instant,
 }
 
 impl DemoApp {
@@ -284,15 +286,21 @@ impl DemoApp {
             render_state: RenderState::Suspended,
             transcript,
             message_count: 0,
+            epoch: std::time::Instant::now(),
         };
         app.sync_messages();
         app.apply_density(true);
+        app.ui.set_now(app.now_nanos());
         app.ui.set_focus(app.ids.input);
         app
     }
 
     /// Returns true if the messages ScrollView is currently scrolled to the
     /// bottom (or content fits within the viewport).
+    fn now_nanos(&self) -> u64 {
+        self.epoch.elapsed().as_nanos() as u64
+    }
+
     fn is_at_tail(&self) -> bool {
         let offset = self.ui.scroll_offset(self.ids.messages);
         let content_h = self.ui.content_height(self.ids.messages);
@@ -686,6 +694,30 @@ impl ApplicationHandler for DemoApp {
             renderer,
             blit,
         };
+    }
+
+    fn new_events(&mut self, _event_loop: &ActiveEventLoop, cause: winit::event::StartCause) {
+        // Update monotonic time for timer-dependent operations.
+        self.ui.set_now(self.now_nanos());
+
+        // Fire expired timers on timer wakeup.
+        if matches!(cause, winit::event::StartCause::ResumeTimeReached { .. }) {
+            if self.ui.tick(self.now_nanos()) {
+                if let RenderState::Active { window, .. } = &self.render_state {
+                    window.request_redraw();
+                }
+            }
+        }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if let Some(deadline_nanos) = self.ui.next_deadline() {
+            let deadline = self.epoch + std::time::Duration::from_nanos(deadline_nanos);
+            event_loop
+                .set_control_flow(winit::event_loop::ControlFlow::WaitUntil(deadline));
+        } else {
+            event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
+        }
     }
 
     fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
