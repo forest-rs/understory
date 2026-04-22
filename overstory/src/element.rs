@@ -183,6 +183,18 @@ impl Element {
         self.type_tag
     }
 
+    /// Returns the parent element id, if any.
+    #[must_use]
+    pub fn parent(&self) -> Option<ElementId> {
+        self.parent
+    }
+
+    /// Returns the direct children of this element.
+    #[must_use]
+    pub fn children(&self) -> &[ElementId] {
+        &self.children
+    }
+
     /// Returns the optional label text.
     #[must_use]
     pub fn label(&self) -> Option<&str> {
