@@ -52,6 +52,7 @@
 extern crate alloc;
 
 mod display;
+mod dock;
 mod element;
 mod properties;
 mod runtime;
@@ -62,6 +63,7 @@ mod ui;
 mod widget;
 pub mod widgets;
 
+pub use dock::{DockPaneController, DockPaneIds, DockPaneStyle};
 pub use element::{
     ButtonClass, Element, ElementId, LayoutClass, MessageClass, PSEUDO_DISABLED, PSEUDO_FOCUSED,
     PSEUDO_HOVER, PSEUDO_PRESSED, PseudoState, TYPE_BUTTON, TYPE_COLUMN, TYPE_PANEL, TYPE_ROOT,
