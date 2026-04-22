@@ -31,7 +31,7 @@ use understory_style::{
     IdSet, Selector, StyleBuilder, StyleCascade, StyleCascadeBuilder, StyleOrigin,
     StyleSheetBuilder, Theme, ThemeBuilder,
 };
-use understory_transcript::{EntryKind, MessageRole, NewEntry, Transcript};
+use understory_transcript::{EntryId, EntryKind, EntryStatus, MessageRole, NewEntry, Transcript};
 use wgpu::TextureFormat;
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
@@ -235,10 +235,12 @@ struct DemoApp {
     message_count: usize,
     /// Receiver for LLM API streaming events.
     api_receiver: Option<std::sync::mpsc::Receiver<StreamEvent>>,
-    /// Pending assistant message being streamed.
-    streaming_text: String,
+    /// The transcript entry currently being streamed into.
+    streaming_entry: Option<EntryId>,
     /// Tool calls with their results, waiting to be sent back to the API.
     pending_tool_calls: Vec<(String, String, serde_json::Value, String)>,
+    /// Map from transcript entry to UI element, for live updates.
+    entry_elements: Vec<(EntryId, ElementId)>,
     /// Messages sent to the LLM (for context continuity).
     api_messages: Vec<llm_api::Message>,
     /// API configuration.
@@ -272,8 +274,9 @@ impl DemoApp {
             transcript,
             message_count: 0,
             api_receiver: None,
-            streaming_text: String::new(),
+            streaming_entry: None,
             pending_tool_calls: Vec::new(),
+            entry_elements: Vec::new(),
             api_messages: Vec::new(),
             api_config: config,
             epoch: std::time::Instant::now(),
@@ -345,7 +348,14 @@ impl DemoApp {
         self.api_messages = messages.clone();
         let tools = Self::build_tools();
         self.api_receiver = Some(llm_api::send_streaming(&self.api_config, messages, tools));
-        self.streaming_text.clear();
+
+        // Create an in-progress assistant entry as a typing indicator.
+        let entry_id = self.transcript.append(
+            NewEntry::message(MessageRole::Assistant, "")
+                .with_status(EntryStatus::InProgress),
+        );
+        self.streaming_entry = Some(entry_id);
+        self.sync_messages();
     }
 
     fn poll_api(&mut self) {
@@ -359,19 +369,28 @@ impl DemoApp {
         while let Ok(event) = rx.try_recv() {
             match event {
                 StreamEvent::TextDelta(text) => {
-                    self.streaming_text.push_str(&text);
+                    if let Some(eid) = self.streaming_entry {
+                        let _ = self.transcript.append_chunk(eid, text.as_str());
+                        // Update the UI element label with the accumulated text.
+                        if let Some(element) = self.element_for_entry(eid) {
+                            let label = self
+                                .transcript
+                                .entry(eid)
+                                .and_then(|e| e.kind.body())
+                                .and_then(|b| b.as_text())
+                                .unwrap_or("");
+                            self.ui.set_label(element, label);
+                        }
+                    }
                     needs_redraw = true;
                 }
                 StreamEvent::ToolCall { id, name, input } => {
-                    // Flush any pending text as an assistant message.
-                    if !self.streaming_text.is_empty() {
-                        let text = core::mem::take(&mut self.streaming_text);
-                        self.transcript
-                            .append(NewEntry::message(MessageRole::Assistant, text.as_str()));
-                        self.sync_messages();
-                    }
+                    // Complete the streaming entry.
+                    self.complete_streaming_entry();
                     // Execute the tool.
+                    eprintln!("[tool call] {name}({input})");
                     let result = self.execute_tool(&name, &input);
+                    eprintln!("[tool result] {result}");
                     // Add tool result to transcript for visibility.
                     self.transcript.append(NewEntry::message(
                         MessageRole::Assistant,
@@ -382,12 +401,7 @@ impl DemoApp {
                     needs_redraw = true;
                 }
                 StreamEvent::Done => {
-                    if !self.streaming_text.is_empty() {
-                        let text = core::mem::take(&mut self.streaming_text);
-                        self.transcript
-                            .append(NewEntry::message(MessageRole::Assistant, text.as_str()));
-                        self.sync_messages();
-                    }
+                    self.complete_streaming_entry();
                     // If there were tool calls, send tool results back.
                     if !self.pending_tool_calls.is_empty() {
                         self.send_tool_results();
@@ -396,11 +410,19 @@ impl DemoApp {
                     needs_redraw = true;
                 }
                 StreamEvent::Error(err) => {
-                    self.transcript.append(NewEntry::message(
-                        MessageRole::Assistant,
-                        format!("[error: {err}]"),
-                    ));
-                    self.sync_messages();
+                    // Mark the streaming entry as failed if it exists.
+                    if let Some(eid) = self.streaming_entry.take() {
+                        let _ = self.transcript.set_status(eid, EntryStatus::Failed);
+                        if let Some(element) = self.element_for_entry(eid) {
+                            self.ui.set_label(element, format!("[error: {err}]"));
+                        }
+                    } else {
+                        self.transcript.append(NewEntry::message(
+                            MessageRole::Assistant,
+                            format!("[error: {err}]"),
+                        ));
+                        self.sync_messages();
+                    }
                     done = true;
                     needs_redraw = true;
                 }
@@ -419,6 +441,19 @@ impl DemoApp {
             if was_at_tail {
                 self.scroll_to_tail();
             }
+        }
+    }
+
+    fn element_for_entry(&self, entry_id: EntryId) -> Option<ElementId> {
+        self.entry_elements
+            .iter()
+            .find(|(eid, _)| *eid == entry_id)
+            .map(|(_, elem)| *elem)
+    }
+
+    fn complete_streaming_entry(&mut self) {
+        if let Some(eid) = self.streaming_entry.take() {
+            let _ = self.transcript.set_status(eid, EntryStatus::Complete);
         }
     }
 
@@ -460,11 +495,15 @@ impl DemoApp {
         let tool_calls = core::mem::take(&mut self.pending_tool_calls);
 
         // Build the assistant message with tool_calls.
-        let content = if self.streaming_text.is_empty() {
-            None
-        } else {
-            Some(core::mem::take(&mut self.streaming_text))
-        };
+        // Include any streamed text as the content.
+        let content = self
+            .streaming_entry
+            .and_then(|eid| self.transcript.entry(eid))
+            .and_then(|e| e.kind.body())
+            .and_then(|b| b.as_text())
+            .filter(|t| !t.is_empty())
+            .map(|t| t.to_string());
+        self.streaming_entry = None;
         let tc_messages: Vec<llm_api::ToolCallMessage> = tool_calls
             .iter()
             .map(|(id, name, input, _)| llm_api::ToolCallMessage {
@@ -515,12 +554,17 @@ impl DemoApp {
         let entries: Vec<_> = self.transcript.entries().to_vec();
         for entry in entries.iter().skip(self.message_count) {
             if let EntryKind::Message(msg) = &entry.kind {
-                let text = msg.body.as_text().unwrap_or("");
+                let display_text = if entry.status == EntryStatus::InProgress {
+                    let body = msg.body.as_text().unwrap_or("");
+                    if body.is_empty() { "..." } else { body }
+                } else {
+                    msg.body.as_text().unwrap_or("")
+                };
                 let is_user = msg.role == MessageRole::User;
                 let block = self
                     .ui
                     .append_child(self.ids.messages, overstory::TYPE_TEXT_BLOCK);
-                self.ui.set_label(block, text);
+                self.ui.set_label(block, display_text);
                 self.ui
                     .set_local(block, self.ui.properties().label_padding, 8.0);
                 self.ui.set_local(block, self.ui.properties().padding, 8.0);
@@ -530,6 +574,7 @@ impl DemoApp {
                     self.ui
                         .add_class(block, overstory::MessageClass::User.class_id());
                 }
+                self.entry_elements.push((entry.id, block));
             }
         }
         self.message_count = entries.len();
