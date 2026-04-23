@@ -60,6 +60,7 @@ pub(crate) struct RuntimeState {
     pub(crate) hover: HoverState<ElementId>,
     pub(crate) clicks: ClickState<ElementId>,
     pub(crate) pressed_target: Option<ElementId>,
+    pub(crate) captured_target: Option<ElementId>,
     pub(crate) focused: Option<ElementId>,
 }
 
@@ -69,6 +70,7 @@ impl RuntimeState {
             hover: HoverState::new(),
             clicks: ClickState::new(),
             pressed_target: None,
+            captured_target: None,
             focused: None,
         }
     }

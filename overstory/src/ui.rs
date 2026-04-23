@@ -135,7 +135,8 @@ impl Ui {
     pub fn cursor_icon(&self) -> Option<CursorIcon> {
         let target = self
             .runtime
-            .pressed_target
+            .captured_target
+            .or(self.runtime.pressed_target)
             .or_else(|| self.runtime.hover.current_path().last().copied())?;
         self.cursor_icon_for(target)
     }
@@ -761,7 +762,7 @@ impl Ui {
                     .clicks
                     .on_move(pointer_id(update.pointer), point);
                 self.update_hover(point, &mut batch, text);
-                if let Some(target) = self.runtime.pressed_target {
+                if let Some(target) = self.pointer_dispatch_target() {
                     let _ = self.dispatch_widget_pointer_event(target, event, text, &mut batch);
                 }
             }
@@ -788,9 +789,10 @@ impl Ui {
                 self.update_hover(point, &mut batch, text);
                 self.rebuild_with(text);
                 let current_target = self.scene.as_ref().and_then(|scene| scene.top_hit(point));
-                if let Some(target) = self.runtime.pressed_target {
+                if let Some(target) = self.pointer_dispatch_target() {
                     let _ = self.dispatch_widget_pointer_event(target, event, text, &mut batch);
                 }
+                self.runtime.captured_target = None;
                 self.set_pressed_target(None, &mut batch);
                 if let Some(target) = current_target {
                     match self.runtime.clicks.on_up(
@@ -829,9 +831,10 @@ impl Ui {
             }
             PointerEvent::Cancel(pointer) => {
                 let _ = self.runtime.clicks.cancel(pointer_id(*pointer));
-                if let Some(target) = self.runtime.pressed_target {
+                if let Some(target) = self.pointer_dispatch_target() {
                     let _ = self.dispatch_widget_pointer_event(target, event, text, &mut batch);
                 }
+                self.runtime.captured_target = None;
                 self.set_pressed_target(None, &mut batch);
                 self.clear_hover(&mut batch);
             }
@@ -893,10 +896,12 @@ impl Ui {
         };
         let resolved_slice = scene.resolved();
         let mut ctx = crate::PointerEventCtx::new(
+            id,
             &mut self.elements,
             &self.registry,
             &self.props,
             &mut self.dirty,
+            &mut self.runtime.captured_target,
             resolved_slice,
         );
         let Some(widget) = self.widget_arena.get_mut(handle) else {
@@ -922,6 +927,10 @@ impl Ui {
 
     fn mark_dirty(&mut self, channels: ChannelSet) {
         self.dirty |= channels;
+    }
+
+    fn pointer_dispatch_target(&self) -> Option<ElementId> {
+        self.runtime.captured_target.or(self.runtime.pressed_target)
     }
 
     fn clear_hover(&mut self, batch: &mut InteractionBatch) {
@@ -1355,6 +1364,68 @@ mod tests {
         }));
 
         assert_eq!(ui.cursor_icon(), Some(CursorIcon::ColResize));
+    }
+
+    #[test]
+    fn splitter_drag_captures_pointer_until_release() {
+        let mut ui = Ui::new(default_theme());
+        ui.set_view_rect(Rect::new(0.0, 0.0, 640.0, 240.0));
+        ui.set_local(ui.root(), ui.properties().padding, 0.0);
+        ui.set_local(ui.root(), ui.properties().gap, 0.0);
+
+        let row = ui.append_child(ui.root(), TYPE_ROW);
+        ui.set_local(row, ui.properties().padding, 0.0);
+        ui.set_local(row, ui.properties().gap, 0.0);
+        ui.set_local(row, ui.properties().width, 640.0);
+        ui.set_local(row, ui.properties().height, 240.0);
+
+        let left = ui.append_child(row, TYPE_PANEL);
+        ui.set_local(left, ui.properties().width, 180.0);
+        ui.set_local(left, ui.properties().height, 240.0);
+
+        let splitter = ui.append_child_with(
+            row,
+            TYPE_SPLITTER,
+            Some(Box::new(crate::widgets::Splitter::vertical(left))),
+        );
+        ui.set_local(splitter, ui.properties().width, 14.0);
+        ui.set_local(splitter, ui.properties().height, 240.0);
+
+        let right = ui.append_child(row, TYPE_PANEL);
+        ui.set_local(right, ui.properties().fill, true);
+        ui.set_local(right, ui.properties().height, 240.0);
+
+        let scene = ui.rebuild();
+        let splitter_rect = scene.resolved_element(splitter).unwrap().rect;
+        let center = splitter_rect.center();
+
+        let _ = ui.handle_pointer_event(&PointerEvent::Move(PointerUpdate {
+            pointer: primary_pointer(),
+            current: pointer_state(center.x, center.y, 1),
+            coalesced: Vec::new(),
+            predicted: Vec::new(),
+        }));
+        let _ = ui.handle_pointer_event(&PointerEvent::Down(PointerButtonEvent {
+            button: Some(PointerButton::Primary),
+            pointer: primary_pointer(),
+            state: pointer_state(center.x, center.y, 2),
+        }));
+        assert_eq!(ui.runtime.captured_target, Some(splitter));
+
+        let _ = ui.handle_pointer_event(&PointerEvent::Move(PointerUpdate {
+            pointer: primary_pointer(),
+            current: pointer_state(center.x + 32.0, center.y, 3),
+            coalesced: Vec::new(),
+            predicted: Vec::new(),
+        }));
+        assert_eq!(ui.runtime.captured_target, Some(splitter));
+
+        let _ = ui.handle_pointer_event(&PointerEvent::Up(PointerButtonEvent {
+            button: Some(PointerButton::Primary),
+            pointer: primary_pointer(),
+            state: pointer_state(center.x + 32.0, center.y, 4),
+        }));
+        assert_eq!(ui.runtime.captured_target, None);
     }
 
     #[test]

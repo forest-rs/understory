@@ -240,6 +240,7 @@ impl Widget for Splitter {
                 self.dragging = true;
                 self.drag_offset =
                     self.point_coordinate(point) - self.center_coordinate(resolved.rect);
+                ctx.capture_pointer();
                 true
             }
             PointerEvent::Move(update) if self.dragging => {
@@ -261,6 +262,7 @@ impl Widget for Splitter {
             }
             PointerEvent::Up(_) | PointerEvent::Cancel(_) if self.dragging => {
                 self.dragging = false;
+                ctx.release_pointer();
                 true
             }
             _ => false,

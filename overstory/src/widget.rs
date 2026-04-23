@@ -59,10 +59,12 @@ impl<'a> MeasureCtx<'a> {
 
 /// Narrow mutation/read context for widget pointer handlers.
 pub struct PointerEventCtx<'a> {
+    dispatch_id: ElementId,
     elements: &'a mut [Element],
     registry: &'a PropertyRegistry,
     props: &'a BuiltInProperties,
     dirty: &'a mut ChannelSet,
+    captured_target: &'a mut Option<ElementId>,
     resolved: &'a [ResolvedElement],
 }
 
@@ -77,17 +79,21 @@ impl core::fmt::Debug for PointerEventCtx<'_> {
 
 impl<'a> PointerEventCtx<'a> {
     pub(crate) fn new(
+        dispatch_id: ElementId,
         elements: &'a mut [Element],
         registry: &'a PropertyRegistry,
         props: &'a BuiltInProperties,
         dirty: &'a mut ChannelSet,
+        captured_target: &'a mut Option<ElementId>,
         resolved: &'a [ResolvedElement],
     ) -> Self {
         Self {
+            dispatch_id,
             elements,
             registry,
             props,
             dirty,
+            captured_target,
             resolved,
         }
     }
@@ -134,6 +140,25 @@ impl<'a> PointerEventCtx<'a> {
         if !affected.is_empty() {
             *self.dirty |= affected;
         }
+    }
+
+    /// Captures subsequent pointer move/up/cancel events for the dispatching
+    /// widget until capture is released.
+    pub fn capture_pointer(&mut self) {
+        *self.captured_target = Some(self.dispatch_id);
+    }
+
+    /// Releases pointer capture if held by the dispatching widget.
+    pub fn release_pointer(&mut self) {
+        if *self.captured_target == Some(self.dispatch_id) {
+            *self.captured_target = None;
+        }
+    }
+
+    /// Returns `true` if the dispatching widget currently holds pointer capture.
+    #[must_use]
+    pub fn has_pointer_capture(&self) -> bool {
+        *self.captured_target == Some(self.dispatch_id)
     }
 }
 
