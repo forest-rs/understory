@@ -87,6 +87,10 @@ pub use widget::{
     KeyboardEventCtx, MeasureCtx, PointerEventCtx, Widget, WidgetArena, WidgetHandle, content_box,
     text_label_node, text_label_node_constrained,
 };
+pub use widgets::{
+    Button, Divider, DividerAxis, DockPaneController, DockPaneIds, DockPaneStyle, ScrollView,
+    Spinner, Splitter, SplitterAxis, SplitterSide, TextBlock, TextInput, Tooltip,
+};
 
 /// Re-export the transport-agnostic event vocabulary used by Overstory.
 pub use ui_events;

@@ -17,7 +17,7 @@ use overstory::ui_events::pointer::{
     PointerButton, PointerButtonEvent, PointerButtons, PointerEvent, PointerId, PointerInfo,
     PointerState, PointerType, PointerUpdate,
 };
-use overstory::{ButtonClass, ElementId, LayoutClass, Ui, default_theme};
+use overstory::{Button, ButtonClass, ElementId, LayoutClass, Ui, default_theme};
 use understory_style::{
     IdSet, Selector, StyleBuilder, StyleCascadeBuilder, StyleOrigin, StyleSheetBuilder,
 };
@@ -93,14 +93,14 @@ fn build_showcase_ui() -> Ui {
     ui.set_local(actions, ui.properties().gap, 10.0);
 
     let compose = ui.append_child(actions, overstory::TYPE_BUTTON);
-    ui.widget_mut::<overstory::widgets::Button>(compose)
+    ui.widget_mut::<Button>(compose)
         .expect("compose should be a button")
         .set_text("Compose");
     ui.add_button_class(compose, ButtonClass::Primary);
     ui.set_style(compose, button_cascade.clone());
 
     let archive = ui.append_child(actions, overstory::TYPE_BUTTON);
-    ui.widget_mut::<overstory::widgets::Button>(archive)
+    ui.widget_mut::<Button>(archive)
         .expect("archive should be a button")
         .set_text("Archive");
     ui.set_style(archive, button_cascade.clone());
@@ -114,14 +114,14 @@ fn build_showcase_ui() -> Ui {
     ui.set_local(content_column, ui.properties().gap, 12.0);
 
     let search = ui.append_child(content_column, overstory::TYPE_BUTTON);
-    ui.widget_mut::<overstory::widgets::Button>(search)
+    ui.widget_mut::<Button>(search)
         .expect("search should be a button")
         .set_text("Search");
     ui.set_style(search, button_cascade.clone());
     ui.set_local(search, ui.properties().height, 52.0);
 
     let settings = ui.append_child(content_column, overstory::TYPE_BUTTON);
-    ui.widget_mut::<overstory::widgets::Button>(settings)
+    ui.widget_mut::<Button>(settings)
         .expect("settings should be a button")
         .set_text("Settings");
     ui.set_style(settings, button_cascade);

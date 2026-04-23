@@ -18,8 +18,7 @@ use understory_style::{
 use crate::{
     BuiltInProperties, Color, Element, ElementId, PSEUDO_DISABLED, PSEUDO_FOCUSED, PSEUDO_HOVER,
     PSEUDO_PRESSED, TYPE_SCROLL_VIEW, ThemeKeys, Widget, WidgetArena, WidgetHandle,
-    built_in_styles::BuiltInStyles,
-    widget::widget_text,
+    built_in_styles::BuiltInStyles, widget::widget_text,
 };
 
 /// Border styling for one resolved element.

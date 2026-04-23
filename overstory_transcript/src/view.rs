@@ -4,7 +4,7 @@
 use alloc::{boxed::Box, format, string::String, vec::Vec};
 
 use hashbrown::HashMap;
-use overstory::{Color, ElementId, MessageClass, Ui};
+use overstory::{Color, ElementId, MessageClass, TextBlock, Ui};
 use understory_transcript::{
     AnnotationLevel, EntryBody, EntryId, EntryKind, EntryStatus, MessageRole, Transcript,
     TranscriptEntry,
@@ -206,7 +206,7 @@ impl TranscriptViewController {
     ) {
         let show_text = presentation.visible && !presentation.text.is_empty();
         ui.set_local(ids.row, ui.properties().visible, presentation.visible);
-        ui.widget_mut::<overstory::widgets::TextBlock>(ids.text)
+        ui.widget_mut::<TextBlock>(ids.text)
             .expect("transcript rows use text block children")
             .set_text(presentation.text);
         ui.set_local(ids.text, ui.properties().visible, show_text);

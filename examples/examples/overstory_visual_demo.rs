@@ -20,9 +20,10 @@ use std::sync::Arc;
 use imaging_vello_hybrid::VelloHybridRenderer;
 use kurbo::Rect;
 use overstory::peniko::color::palette;
-use overstory::widgets::{DockPaneController, DockPaneIds, DockPaneStyle};
 use overstory::{
-    ButtonClass, Color, ElementId, Interaction, LayoutClass, ThemeKeys, Ui, default_theme,
+    Button, ButtonClass, Color, DockPaneController, DockPaneIds, DockPaneStyle, ElementId,
+    Interaction, LayoutClass, Splitter, TextBlock, TextInput, ThemeKeys, Tooltip, Ui,
+    default_theme,
 };
 use overstory_transcript::TranscriptViewController;
 use ui_events_winit::{WindowEventReducer, WindowEventTranslation};
@@ -1306,10 +1307,7 @@ impl DemoApp {
         let splitter_width = if self.roomy { 16.0 } else { 12.0 };
         let panel_width = self.inspector_dock.current_extent();
         let collapsed = self.inspector_dock.is_collapsed();
-        if let Some(splitter) = self
-            .ui
-            .widget_mut::<overstory::widgets::Splitter>(self.ids.splitter)
-        {
+        if let Some(splitter) = self.ui.widget_mut::<Splitter>(self.ids.splitter) {
             splitter.set_min_secondary(
                 340.0 + panel_width + if collapsed { 0.0 } else { splitter_width },
             );
@@ -1725,7 +1723,7 @@ fn build_demo_ui() -> (Ui, DemoIds) {
     );
     ui.set_local(inspector_panel, ui.properties().padding, 18.0);
     ui.set_local(inspector_panel, ui.properties().gap, 12.0);
-    if let Some(splitter) = ui.widget_mut::<overstory::widgets::Splitter>(inspector_splitter) {
+    if let Some(splitter) = ui.widget_mut::<Splitter>(inspector_splitter) {
         splitter.set_side(overstory::widgets::SplitterSide::Trailing);
         splitter.set_target(inspector_panel);
     }
@@ -1826,7 +1824,7 @@ fn build_demo_ui() -> (Ui, DemoIds) {
     ui.set_local(input, ui.properties().padding, 8.0);
     ui.set_local(input, ui.properties().border_width, 1.0);
     ui.set_local(input, ui.properties().corner_radius, 6.0);
-    if let Some(w) = ui.widget_mut::<overstory::widgets::TextInput>(input) {
+    if let Some(w) = ui.widget_mut::<TextInput>(input) {
         w.set_placeholder("Type a message... (Cmd+Enter to send)");
     }
 
@@ -1888,19 +1886,19 @@ fn format_color(color: Color) -> String {
 }
 
 fn set_button_text(ui: &mut Ui, id: ElementId, text: impl Into<Box<str>>) {
-    ui.widget_mut::<overstory::widgets::Button>(id)
+    ui.widget_mut::<Button>(id)
         .expect("element should host a Button widget")
         .set_text(text);
 }
 
 fn set_text_block_text(ui: &mut Ui, id: ElementId, text: impl Into<Box<str>>) {
-    ui.widget_mut::<overstory::widgets::TextBlock>(id)
+    ui.widget_mut::<TextBlock>(id)
         .expect("element should host a TextBlock widget")
         .set_text(text);
 }
 
 fn set_tooltip_text(ui: &mut Ui, id: ElementId, text: impl Into<Box<str>>) {
-    ui.widget_mut::<overstory::widgets::Tooltip>(id)
+    ui.widget_mut::<Tooltip>(id)
         .expect("element should host a Tooltip widget")
         .set_text(text);
 }
