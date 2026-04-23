@@ -192,7 +192,6 @@ struct DemoIds {
     inspector_toggle: ElementId,
     inspector_tree_label: ElementId,
     inspector_props_label: ElementId,
-    activity_spinner: ElementId,
     search: ElementId,
     settings: ElementId,
     deploy: ElementId,
@@ -230,6 +229,14 @@ struct PropertyRowElements {
     swatch: ElementId,
     value: ElementId,
     chips: Vec<ElementId>,
+}
+
+#[derive(Copy, Clone, Debug)]
+struct TranscriptRowElements {
+    entry_id: EntryId,
+    row: ElementId,
+    text: ElementId,
+    spinner: ElementId,
 }
 
 #[allow(
@@ -409,8 +416,8 @@ struct DemoApp {
     streaming_entry: Option<EntryId>,
     /// Tool calls with their results, waiting to be sent back to the API.
     pending_tool_calls: Vec<(String, String, serde_json::Value, String)>,
-    /// Map from transcript entry to UI element, for live updates.
-    entry_elements: Vec<(EntryId, ElementId)>,
+    /// Map from transcript entry to its retained row elements.
+    entry_elements: Vec<TranscriptRowElements>,
     /// Messages sent to the LLM (for context continuity).
     api_messages: Vec<llm_api::Message>,
     /// Accumulated text for the current assistant stream.
@@ -540,8 +547,6 @@ impl DemoApp {
         let tools = Self::build_tools();
         self.api_receiver = Some(llm_api::send_streaming(&self.api_config, messages, tools));
         self.streaming_api_text.clear();
-        self.set_activity_indicator(true);
-
         // Create an in-progress assistant entry as a typing indicator.
         let entry_id = self.transcript.append(
             NewEntry::message(MessageRole::Assistant, "").with_status(EntryStatus::InProgress),
@@ -550,19 +555,15 @@ impl DemoApp {
         self.sync_messages();
     }
 
-    fn entry_display_state(&self, entry_id: EntryId) -> Option<(String, bool)> {
+    fn entry_display_state(&self, entry_id: EntryId) -> Option<(String, bool, bool)> {
         let entry = self.transcript.entry(entry_id)?;
         let EntryKind::Message(msg) = &entry.kind else {
             return None;
         };
         let body = msg.body.as_text().unwrap_or("");
         let visible = !(entry.status == EntryStatus::Complete && body.is_empty());
-        let text = if entry.status == EntryStatus::InProgress && body.is_empty() {
-            "...".to_string()
-        } else {
-            body.to_string()
-        };
-        Some((text, visible))
+        let show_spinner = entry.status == EntryStatus::InProgress;
+        Some((body.to_string(), visible, show_spinner))
     }
 
     fn current_api_request_messages(&self) -> Vec<llm_api::Message> {
@@ -577,15 +578,28 @@ impl DemoApp {
     }
 
     fn refresh_entry_element(&mut self, entry_id: EntryId) {
-        let Some(element) = self.element_for_entry(entry_id) else {
+        let Some((row, text, spinner)) = self.entry_element_ids(entry_id) else {
             return;
         };
-        let Some((label, visible)) = self.entry_display_state(entry_id) else {
+        let Some((label, visible, show_spinner)) = self.entry_display_state(entry_id) else {
             return;
         };
-        self.ui.set_label(element, label);
+        let show_text = visible && !label.is_empty();
         self.ui
-            .set_local(element, self.ui.properties().visible, visible);
+            .set_local(row, self.ui.properties().visible, visible);
+        self.ui
+            .set_local(text, self.ui.properties().visible, show_text);
+        self.ui.set_label(text, label);
+        self.ui.set_local(
+            spinner,
+            self.ui.properties().visible,
+            visible && show_spinner,
+        );
+        if visible && show_spinner {
+            self.ui.start_spinner(spinner);
+        } else {
+            self.ui.stop_spinner(spinner);
+        }
     }
 
     fn finish_streaming_without_tools(&mut self) {
@@ -649,9 +663,9 @@ impl DemoApp {
                     // Mark the streaming entry as failed if it exists.
                     if let Some(eid) = self.streaming_entry.take() {
                         let _ = self.transcript.set_status(eid, EntryStatus::Failed);
-                        if let Some(element) = self.element_for_entry(eid) {
-                            self.ui.set_label(element, format!("[error: {err}]"));
-                        }
+                        let message = format!("[error: {err}]");
+                        let _ = self.transcript.append_chunk(eid, message.as_str());
+                        self.refresh_entry_element(eid);
                         self.streaming_api_text.clear();
                     } else {
                         self.transcript.append(NewEntry::message(
@@ -673,18 +687,16 @@ impl DemoApp {
             self.api_receiver = Some(rx);
         }
 
-        self.set_activity_indicator(self.api_receiver.is_some());
-
         if needs_redraw && was_at_tail {
             self.scroll_to_tail();
         }
     }
 
-    fn element_for_entry(&self, entry_id: EntryId) -> Option<ElementId> {
+    fn entry_element_ids(&self, entry_id: EntryId) -> Option<(ElementId, ElementId, ElementId)> {
         self.entry_elements
             .iter()
-            .find(|(eid, _)| *eid == entry_id)
-            .map(|(_, elem)| *elem)
+            .find(|entry| entry.entry_id == entry_id)
+            .map(|entry| (entry.row, entry.text, entry.spinner))
     }
 
     fn complete_streaming_entry(&mut self) {
@@ -758,27 +770,12 @@ impl DemoApp {
         let tools = Self::build_tools();
         self.api_receiver = Some(llm_api::send_streaming(&self.api_config, messages, tools));
         self.streaming_api_text.clear();
-        self.set_activity_indicator(true);
-
         // Create a new in-progress entry for the follow-up response.
         let entry_id = self.transcript.append(
             NewEntry::message(MessageRole::Assistant, "").with_status(EntryStatus::InProgress),
         );
         self.streaming_entry = Some(entry_id);
         self.sync_messages();
-    }
-
-    fn set_activity_indicator(&mut self, active: bool) {
-        self.ui.set_local(
-            self.ids.activity_spinner,
-            self.ui.properties().visible,
-            active,
-        );
-        if active {
-            self.ui.start_spinner(self.ids.activity_spinner);
-        } else {
-            self.ui.stop_spinner(self.ids.activity_spinner);
-        }
     }
 
     fn now_nanos(&self) -> u64 {
@@ -806,9 +803,21 @@ impl DemoApp {
         for entry in entries.iter().skip(self.message_count) {
             if let EntryKind::Message(msg) = &entry.kind {
                 let is_user = msg.role == MessageRole::User;
-                let block = self
-                    .ui
-                    .append_child(self.ids.messages, overstory::TYPE_TEXT_BLOCK);
+                let row = self.ui.append_child(self.ids.messages, overstory::TYPE_ROW);
+                self.ui.set_local(row, self.ui.properties().padding, 0.0);
+                self.ui.set_local(row, self.ui.properties().gap, 8.0);
+                self.ui
+                    .set_local(row, self.ui.properties().background, Color::TRANSPARENT);
+
+                let spinner = self.ui.append_child_with(
+                    row,
+                    overstory::TYPE_SPINNER,
+                    Some(Box::new(overstory::widgets::Spinner::new(18.0))),
+                );
+                self.ui
+                    .set_local(spinner, self.ui.properties().visible, false);
+
+                let block = self.ui.append_child(row, overstory::TYPE_TEXT_BLOCK);
                 self.ui
                     .set_local(block, self.ui.properties().label_padding, 8.0);
                 self.ui.set_local(block, self.ui.properties().padding, 8.0);
@@ -818,7 +827,12 @@ impl DemoApp {
                     self.ui
                         .add_class(block, overstory::MessageClass::User.class_id());
                 }
-                self.entry_elements.push((entry.id, block));
+                self.entry_elements.push(TranscriptRowElements {
+                    entry_id: entry.id,
+                    row,
+                    text: block,
+                    spinner,
+                });
                 self.refresh_entry_element(entry.id);
             }
         }
@@ -1640,8 +1654,12 @@ impl ApplicationHandler for DemoApp {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         // Poll for Claude API streaming events.
         if self.api_receiver.is_some() {
+            let now = self.now_nanos();
             self.poll_api();
-            if let RenderState::Active { window, .. } = &self.render_state {
+            let ticked = self.ui.tick(now);
+            if let RenderState::Active { window, .. } = &self.render_state
+                && (self.api_receiver.is_some() || ticked)
+            {
                 window.request_redraw();
             }
             // While streaming, use a short poll interval.
@@ -1898,26 +1916,14 @@ fn build_demo_ui() -> (Ui, DemoIds) {
 
     let _ = ui.append_child(content_column, overstory::TYPE_DIVIDER);
 
-    let composer_row = ui.append_child(content_column, overstory::TYPE_ROW);
-    ui.set_local(composer_row, ui.properties().padding, 0.0);
-    ui.set_local(composer_row, ui.properties().gap, 10.0);
-
     // Text input at the bottom.
-    let input = ui.append_child(composer_row, overstory::TYPE_TEXT_INPUT);
-    ui.set_local(input, ui.properties().fill, true);
+    let input = ui.append_child(content_column, overstory::TYPE_TEXT_INPUT);
     ui.set_local(input, ui.properties().padding, 8.0);
     ui.set_local(input, ui.properties().border_width, 1.0);
     ui.set_local(input, ui.properties().corner_radius, 6.0);
     if let Some(w) = ui.widget_mut::<overstory::widgets::TextInput>(input) {
         w.set_placeholder("Type a message... (Cmd+Enter to send)");
     }
-
-    let activity_spinner = ui.append_child_with(
-        composer_row,
-        overstory::TYPE_SPINNER,
-        Some(Box::new(overstory::widgets::Spinner::new(20.0))),
-    );
-    ui.set_local(activity_spinner, ui.properties().visible, false);
 
     (
         ui,
@@ -1935,7 +1941,6 @@ fn build_demo_ui() -> (Ui, DemoIds) {
             inspector_toggle,
             inspector_tree_label,
             inspector_props_label,
-            activity_spinner,
             search,
             settings,
             deploy,
@@ -2667,22 +2672,58 @@ mod tests {
         );
         app.sync_messages();
 
-        let block = app
-            .element_for_entry(entry)
-            .expect("streaming entry should have a UI element");
+        let (row, text, spinner) = app
+            .entry_element_ids(entry)
+            .expect("streaming entry should have UI elements");
         let scene = app.ui.scene();
-        let resolved = scene
-            .resolved_element(block)
-            .expect("typing indicator should be visible while in progress");
-        assert_eq!(resolved.label.as_deref(), Some("..."));
+        assert!(
+            scene.resolved_element(row).is_some(),
+            "streaming row should be visible while in progress"
+        );
+        assert!(
+            scene.resolved_element(spinner).is_some(),
+            "spinner should be visible while the streamed entry is empty"
+        );
+        assert!(
+            scene.resolved_element(text).is_none(),
+            "text block should stay hidden until content arrives"
+        );
 
         let _ = app.transcript.set_status(entry, EntryStatus::Complete);
         app.refresh_entry_element(entry);
 
         let scene = app.ui.scene();
         assert!(
-            scene.resolved_element(block).is_none(),
+            scene.resolved_element(row).is_none(),
             "completed empty typing indicator should disappear"
+        );
+    }
+
+    #[test]
+    fn streaming_entry_keeps_spinner_visible_while_text_arrives() {
+        let mut app = DemoApp::new();
+
+        let entry = app.transcript.append(
+            NewEntry::message(MessageRole::Assistant, "").with_status(EntryStatus::InProgress),
+        );
+        app.sync_messages();
+
+        let (_, text, spinner) = app
+            .entry_element_ids(entry)
+            .expect("streaming entry should have UI elements");
+        let _ = app.transcript.append_chunk(entry, "Hello");
+        app.refresh_entry_element(entry);
+
+        let scene = app.ui.scene();
+        assert!(
+            scene.resolved_element(spinner).is_some(),
+            "spinner should remain visible while the assistant turn is still in progress"
+        );
+        assert_eq!(
+            scene
+                .resolved_element(text)
+                .and_then(|resolved| resolved.label.as_deref()),
+            Some("Hello")
         );
     }
 
