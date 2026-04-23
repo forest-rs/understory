@@ -10,7 +10,9 @@ use kurbo::{Size, Vec2};
 use peniko::{Brush, Color};
 use understory_display::{DisplayAlign, DisplayNode, Insets};
 
-use crate::{ElementId, MeasureCtx, ResolvedElement, TimerId, TimerQueue, Widget, content_box};
+use crate::{
+    ElementId, MeasureCtx, MeasureStyle, ResolvedElement, TimerId, TimerQueue, Widget, content_box,
+};
 
 const STEP_INTERVAL_NANOS: u64 = 90_000_000;
 const DOT_COUNT: u8 = 8;
@@ -111,7 +113,12 @@ impl Spinner {
 }
 
 impl Widget for Spinner {
-    fn measure(&self, _available: Size, _ctx: &mut MeasureCtx<'_>) -> Option<Size> {
+    fn measure(
+        &self,
+        _available: Size,
+        _style: &MeasureStyle<'_>,
+        _ctx: &mut MeasureCtx<'_>,
+    ) -> Option<Size> {
         Some(Size::new(self.size, self.size))
     }
 

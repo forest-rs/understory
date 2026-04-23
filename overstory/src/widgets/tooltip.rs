@@ -5,10 +5,11 @@
 
 use alloc::{boxed::Box, vec::Vec};
 
+use kurbo::Size;
 use peniko::Brush;
 use understory_display::{DisplayAlign, DisplayNode, Insets};
 
-use crate::{ElementId, ResolvedElement, SurfaceRole, Widget};
+use crate::{ElementId, MeasureCtx, MeasureStyle, ResolvedElement, SurfaceRole, Widget};
 
 /// Tooltip-specific padding (tighter than the theme default).
 const TOOLTIP_PADDING: f64 = 6.0;
@@ -82,6 +83,33 @@ impl Tooltip {
 }
 
 impl Widget for Tooltip {
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "Widget measurement uses small display values and Parley APIs take f32."
+    )]
+    fn measure(
+        &self,
+        available: Size,
+        style: &MeasureStyle<'_>,
+        ctx: &mut MeasureCtx<'_>,
+    ) -> Option<Size> {
+        let text = self.text()?;
+        let content_width = (available.width - TOOLTIP_PADDING * 2.0).max(1.0) as f32;
+        let text_size = ctx.measure_text(
+            text,
+            TOOLTIP_FONT_SIZE as f32,
+            style.font_family,
+            Some(content_width),
+        );
+        let intrinsic_width = (text_size.width + TOOLTIP_PADDING * 2.0)
+            .min(available.width)
+            .max(0.0);
+        Some(Size::new(
+            intrinsic_width,
+            text_size.height + TOOLTIP_PADDING * 2.0,
+        ))
+    }
+
     fn surface_role(&self) -> Option<SurfaceRole> {
         if self.visible {
             Some(SurfaceRole::Tooltip)

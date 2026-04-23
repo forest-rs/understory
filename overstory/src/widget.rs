@@ -17,7 +17,7 @@ use invalidation::ChannelSet;
 use kurbo::{Rect, Size};
 use peniko::Brush;
 use ui_events::pointer::PointerEvent;
-use understory_display::{DisplayNode, TextEngine};
+use understory_display::{DisplayNode, TextAlign, TextEngine};
 use understory_property::{DependencyObjectExt, Property, PropertyRegistry};
 
 /// Context provided to widgets during measurement.
@@ -26,6 +26,32 @@ use understory_property::{DependencyObjectExt, Property, PropertyRegistry};
 /// directly into the widget interface.
 pub struct MeasureCtx<'a> {
     text: &'a mut TextEngine,
+}
+
+/// Resolved style inputs available during widget measurement.
+///
+/// This is the canonical measurement seam for built-in and custom widgets:
+/// scene/style resolution owns the values, widgets consume them.
+#[derive(Copy, Clone, Debug)]
+pub struct MeasureStyle<'a> {
+    /// Resolved width property for this element.
+    pub width: f64,
+    /// Resolved height property for this element.
+    pub height: f64,
+    /// Resolved container padding.
+    pub padding: f64,
+    /// Resolved inter-child gap.
+    pub gap: f64,
+    /// Whether this element is configured to fill along the parent axis.
+    pub fill: bool,
+    /// Resolved font size for text content.
+    pub font_size: f64,
+    /// Resolved text/content padding for text-bearing controls.
+    pub label_padding: f64,
+    /// Resolved font family.
+    pub font_family: &'a str,
+    /// Resolved text alignment.
+    pub text_align: TextAlign,
 }
 
 impl core::fmt::Debug for MeasureCtx<'_> {
@@ -310,7 +336,12 @@ pub trait Widget {
     /// `ctx` provides text measurement and other layout capabilities.
     /// Return `Some(size)` to provide a measured size. Return `None` to
     /// fall through to the standard container layout.
-    fn measure(&self, _available: Size, _ctx: &mut MeasureCtx<'_>) -> Option<Size> {
+    fn measure(
+        &self,
+        _available: Size,
+        _style: &MeasureStyle<'_>,
+        _ctx: &mut MeasureCtx<'_>,
+    ) -> Option<Size> {
         None
     }
 

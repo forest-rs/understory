@@ -15,12 +15,13 @@ use ui_events::pointer::PointerEvent;
 use understory_display::{DisplayAlign, DisplayNode, Insets, TextEngine};
 
 use crate::{
-    Element, ElementId, Interaction, InteractionBatch, ResolvedElement, Widget, content_box,
-    text_label_node, text_label_node_constrained,
+    Element, ElementId, Interaction, InteractionBatch, MeasureStyle, ResolvedElement, Widget,
+    content_box, text_label_node, text_label_node_constrained,
 };
 
 /// Label padding used for content box calculation in `measure`.
 /// Must match the resolved `label_padding` for consistent geometry.
+#[cfg(test)]
 const CONTENT_PADDING: f64 = 12.0;
 
 impl core::fmt::Debug for TextInput {
@@ -146,12 +147,13 @@ impl Widget for TextInput {
     fn measure(
         &self,
         available: kurbo::Size,
+        style: &MeasureStyle<'_>,
         ctx: &mut crate::MeasureCtx<'_>,
     ) -> Option<kurbo::Size> {
         // Subtract internal padding to match the text content box used by
         // display() and pointer hit-testing. Text input uses one top-left aligned content
         // box for measurement, painting, and hit-testing.
-        let padding = CONTENT_PADDING;
+        let padding = style.label_padding;
         #[allow(
             clippy::cast_possible_truncation,
             reason = "Display coordinates are small positive values."
@@ -169,7 +171,7 @@ impl Widget for TextInput {
                 line_height + padding * 2.0,
             ));
         }
-        let text_size = ctx.measure_text(text, font_size, "sans-serif", Some(text_width));
+        let text_size = ctx.measure_text(text, font_size, style.font_family, Some(text_width));
         let content_h = text_size.height.max(line_height);
         let height = (content_h + padding * 2.0).min(MAX_HEIGHT);
         Some(kurbo::Size::new(available.width, height))
@@ -393,7 +395,9 @@ mod tests {
     use alloc::{boxed::Box, vec::Vec};
 
     use super::*;
-    use crate::{BorderStyle, ElementId, MeasureCtx, ResolvedElement, TYPE_TEXT_INPUT};
+    use crate::{
+        BorderStyle, ElementId, MeasureCtx, MeasureStyle, ResolvedElement, TYPE_TEXT_INPUT,
+    };
     use kurbo::{Point, Rect};
     use peniko::Color;
     use understory_display::{DisplayNodeKind, TextAlign, TextEngine};
@@ -419,6 +423,20 @@ mod tests {
             clips_content: false,
             scroll_offset: 0.0,
             widget: None,
+        }
+    }
+
+    fn measure_style() -> MeasureStyle<'static> {
+        MeasureStyle {
+            width: 0.0,
+            height: 0.0,
+            padding: 0.0,
+            gap: 0.0,
+            fill: false,
+            font_size: 16.0,
+            label_padding: CONTENT_PADDING,
+            font_family: "sans-serif",
+            text_align: TextAlign::Start,
         }
     }
 
@@ -459,7 +477,7 @@ mod tests {
         let available = kurbo::Size::new(240.0, f64::INFINITY);
         let mut measure = MeasureCtx::new(&mut text);
         let measured = widget
-            .measure(available, &mut measure)
+            .measure(available, &measure_style(), &mut measure)
             .expect("text input should measure");
         let resolved = resolved_text_input(
             Rect::from_origin_size(Point::ORIGIN, measured),
@@ -504,14 +522,14 @@ mod tests {
         newline_widget.editor.set_text("alpha\n");
         let mut measure = MeasureCtx::new(&mut text);
         let newline_size = newline_widget
-            .measure(available, &mut measure)
+            .measure(available, &measure_style(), &mut measure)
             .expect("text input should measure");
 
         let mut text_widget = TextInput::new(16.0_f32);
         text_widget.editor.set_text("alpha\nb");
         let mut measure = MeasureCtx::new(&mut text);
         let text_size = text_widget
-            .measure(available, &mut measure)
+            .measure(available, &measure_style(), &mut measure)
             .expect("text input should measure");
 
         assert_eq!(

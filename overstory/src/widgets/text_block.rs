@@ -5,10 +5,11 @@
 
 use alloc::{boxed::Box, vec::Vec};
 
+use kurbo::Size;
 use peniko::Brush;
 use understory_display::{DisplayNode, Insets};
 
-use crate::{ElementId, ResolvedElement, Widget, text_label_node};
+use crate::{ElementId, MeasureCtx, MeasureStyle, ResolvedElement, Widget, text_label_node};
 
 /// Multiline wrapped text block widget.
 ///
@@ -42,6 +43,33 @@ impl TextBlock {
 }
 
 impl Widget for TextBlock {
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "Widget measurement uses small display values and Parley APIs take f32."
+    )]
+    fn measure(
+        &self,
+        available: Size,
+        style: &MeasureStyle<'_>,
+        ctx: &mut MeasureCtx<'_>,
+    ) -> Option<Size> {
+        let text = self.text()?;
+        let content_width = (available.width - style.label_padding * 2.0).max(1.0) as f32;
+        let text_size = ctx.measure_text(
+            text,
+            style.font_size as f32,
+            style.font_family,
+            Some(content_width),
+        );
+        let intrinsic_width = (text_size.width + style.label_padding * 2.0)
+            .min(available.width)
+            .max(0.0);
+        Some(Size::new(
+            intrinsic_width,
+            text_size.height + style.label_padding * 2.0,
+        ))
+    }
+
     fn display(&self, _id: ElementId, resolved: &ResolvedElement, children: &mut Vec<DisplayNode>) {
         let Some(text) = resolved.text.as_deref() else {
             return;

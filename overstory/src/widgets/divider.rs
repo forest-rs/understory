@@ -5,7 +5,7 @@
 
 use kurbo::Size;
 
-use crate::{MeasureCtx, Widget};
+use crate::{MeasureCtx, MeasureStyle, Widget};
 
 /// Orientation for a decorative divider.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
@@ -69,7 +69,12 @@ impl Divider {
 }
 
 impl Widget for Divider {
-    fn measure(&self, available: Size, _ctx: &mut MeasureCtx<'_>) -> Option<Size> {
+    fn measure(
+        &self,
+        available: Size,
+        _style: &MeasureStyle<'_>,
+        _ctx: &mut MeasureCtx<'_>,
+    ) -> Option<Size> {
         Some(self.measured_size(available))
     }
 

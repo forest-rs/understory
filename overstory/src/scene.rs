@@ -18,7 +18,8 @@ use understory_style::{
 use crate::{
     BuiltInProperties, Color, Element, ElementId, PSEUDO_DISABLED, PSEUDO_FOCUSED, PSEUDO_HOVER,
     PSEUDO_PRESSED, TYPE_SCROLL_VIEW, ThemeKeys, Widget, WidgetArena, WidgetHandle,
-    built_in_styles::BuiltInStyles, widget::widget_text,
+    built_in_styles::BuiltInStyles,
+    widget::{MeasureStyle, widget_text},
 };
 
 /// Border styling for one resolved element.
@@ -229,7 +230,11 @@ impl<'a> SceneBuilder<'a> {
             return LayoutSize::ZERO;
         }
 
-        let measured_height = self.measure_height(id, available_rect.width());
+        let measured_size = self.measure_size(
+            kurbo::Size::new(available_rect.width(), available_rect.height()),
+            element,
+            &style,
+        );
         let is_root = element.is_root;
         let width = if is_root {
             available_rect.width()
@@ -241,7 +246,7 @@ impl<'a> SceneBuilder<'a> {
         } else if style.fill && style.height <= 0.0 {
             available_rect.height().max(0.0)
         } else {
-            measured_height
+            measured_size.height
         };
 
         let rect = Rect::new(origin.x, origin.y, origin.x + width, origin.y + height);
@@ -316,26 +321,34 @@ impl<'a> SceneBuilder<'a> {
                 content.height()
             };
 
-            // Pass 1: measure non-fill children and count fill children.
+            // Pass 1: measure natural child sizes and count fill children.
             let mut used = 0.0_f64;
             let mut fill_count = 0_u32;
             let mut visible_count = 0_u32;
+            let mut measured_children = Vec::with_capacity(element.children.len());
             for &child in &element.children {
                 let Some(child_element) = self.elements.get(child.index()) else {
                     continue;
                 };
                 let child_style = self.resolve_style(child_element);
                 if !child_style.visible {
+                    measured_children.push(LayoutSize::ZERO);
                     continue;
                 }
                 visible_count += 1;
+                let measured_child = self.measure_size(
+                    kurbo::Size::new(content.width(), content.height()),
+                    child_element,
+                    &child_style,
+                );
+                measured_children.push(measured_child);
                 if child_style.fill {
                     fill_count += 1;
                 } else {
                     let extent = if horizontal {
-                        resolve_dim(child_style.width, content.width())
+                        measured_child.width
                     } else {
-                        self.measure_height(child, content.width())
+                        measured_child.height
                     };
                     used += extent;
                 }
@@ -354,7 +367,7 @@ impl<'a> SceneBuilder<'a> {
             // Pass 2: lay out all children with fill children using their share.
             let mut cursor = if horizontal { content.x0 } else { content.y0 };
             let mut previous_visible = false;
-            for &child in &element.children {
+            for (index, &child) in element.children.iter().enumerate() {
                 let Some(child_element) = self.elements.get(child.index()) else {
                     continue;
                 };
@@ -362,6 +375,7 @@ impl<'a> SceneBuilder<'a> {
                 if !child_style.visible {
                     continue;
                 }
+                let measured_child = measured_children[index];
                 if previous_visible {
                     cursor += style.gap;
                 }
@@ -369,7 +383,7 @@ impl<'a> SceneBuilder<'a> {
                     let child_w = if child_style.fill {
                         fill_extent
                     } else {
-                        (content.x1 - cursor).max(0.0)
+                        measured_child.width
                     };
                     (
                         Point::new(cursor, content.y0),
@@ -429,88 +443,128 @@ impl<'a> SceneBuilder<'a> {
         LayoutSize { width, height }
     }
 
-    fn measure_height(&mut self, id: ElementId, available_width: f64) -> f64 {
-        let Some(element) = self.elements.get(id.index()) else {
-            return 0.0;
-        };
-        let style = self.resolve_style(element);
-        if !style.visible {
-            return 0.0;
+    fn measure_size(
+        &mut self,
+        available: kurbo::Size,
+        element: &Element,
+        style: &ResolvedStyle,
+    ) -> LayoutSize {
+        if !style.visible || element.is_root {
+            return LayoutSize::ZERO;
         }
 
-        if element.is_root {
-            return 0.0;
-        }
-
-        if style.height > 0.0 {
-            return style.height;
-        }
-
-        // Delegate to widget if it provides a measure.
-        // Pass the full element width — the widget is responsible for
-        // subtracting its own internal padding to match rendering.
         if let Some(handle) = element.widget
             && let Some(widget) = self.widget_arena.get(handle)
         {
-            let width = resolve_dim(style.width, available_width);
-            let available = kurbo::Size::new(width, f64::INFINITY);
             let mut ctx = crate::MeasureCtx::new(self.text);
-            if let Some(measured) = widget.measure(available, &mut ctx) {
-                return measured.height;
+            if let Some(measured) = widget.measure(available, &style.measure_style(), &mut ctx) {
+                return LayoutSize {
+                    width: if style.width > 0.0 {
+                        resolve_dim(style.width, available.width)
+                    } else {
+                        measured.width.max(0.0)
+                    },
+                    height: if style.height > 0.0 {
+                        style.height.max(0.0)
+                    } else {
+                        measured.height.max(0.0)
+                    },
+                };
             }
         }
 
         if !element.is_container {
-            // Measure text height for leaf elements with widget-owned text.
-            let widget_text = element
-                .widget
-                .and_then(|handle| self.widget_arena.get(handle))
-                .and_then(widget_text);
-            if let Some(label) = widget_text {
-                let font_size = if style.font_size > 0.0 {
-                    style.font_size
+            return LayoutSize {
+                width: if style.width > 0.0 {
+                    resolve_dim(style.width, available.width)
                 } else {
-                    16.0
-                };
-                let width = resolve_dim(style.width, available_width);
-                let content_width = (width - style.padding * 2.0).max(1.0);
-                #[allow(
-                    clippy::cast_possible_truncation,
-                    reason = "Font size and width are small display values."
-                )]
-                let text_size = self.text.measure_text(
-                    label,
-                    font_size as f32,
-                    &style.font_family,
-                    Some(content_width as f32),
-                );
-                return (text_size.height + style.padding * 2.0).max(0.0);
-            }
-            return 0.0;
+                    0.0
+                },
+                height: if style.height > 0.0 {
+                    style.height.max(0.0)
+                } else {
+                    0.0
+                },
+            };
         }
 
-        let child_width =
-            (resolve_dim(style.width, available_width) - style.padding * 2.0).max(0.0);
-        if element.horizontal {
-            let mut max_height: f64 = 0.0;
-            for &child in &element.children {
-                max_height = max_height.max(self.measure_height(child, child_width));
-            }
-            (style.padding * 2.0 + max_height).max(0.0)
+        let base_width = if style.width > 0.0 {
+            resolve_dim(style.width, available.width)
         } else {
-            let mut total = style.padding * 2.0;
+            available.width.max(0.0)
+        };
+        let child_width = (base_width - style.padding * 2.0).max(0.0);
+
+        if element.horizontal {
+            let mut total_width = style.padding * 2.0;
+            let mut max_height = 0.0_f64;
             let mut visible_children = 0_u32;
             for &child in &element.children {
-                let height = self.measure_height(child, child_width);
-                if height > 0.0 {
+                let Some(child_element) = self.elements.get(child.index()) else {
+                    continue;
+                };
+                let child_style = self.resolve_style(child_element);
+                let child_size = self.measure_size(
+                    kurbo::Size::new(child_width, available.height),
+                    child_element,
+                    &child_style,
+                );
+                if child_size.width > 0.0 || child_size.height > 0.0 {
                     if visible_children > 0 {
-                        total += style.gap;
+                        total_width += style.gap;
                     }
-                    total += height;
+                    total_width += child_size.width;
+                    max_height = max_height.max(child_size.height);
                     visible_children += 1;
                 }
             }
-            total.max(0.0)
+            LayoutSize {
+                width: if style.width > 0.0 {
+                    base_width
+                } else {
+                    total_width.max(0.0)
+                },
+                height: if style.height > 0.0 {
+                    style.height.max(0.0)
+                } else {
+                    (style.padding * 2.0 + max_height).max(0.0)
+                },
+            }
+        } else {
+            let mut max_width = 0.0_f64;
+            let mut total_height = style.padding * 2.0;
+            let mut visible_children = 0_u32;
+            for &child in &element.children {
+                let Some(child_element) = self.elements.get(child.index()) else {
+                    continue;
+                };
+                let child_style = self.resolve_style(child_element);
+                let child_size = self.measure_size(
+                    kurbo::Size::new(child_width, available.height),
+                    child_element,
+                    &child_style,
+                );
+                if child_size.width > 0.0 || child_size.height > 0.0 {
+                    if visible_children > 0 {
+                        total_height += style.gap;
+                    }
+                    total_height += child_size.height;
+                    max_width = max_width.max(child_size.width);
+                    visible_children += 1;
+                }
+            }
+            LayoutSize {
+                width: if style.width > 0.0 {
+                    base_width
+                } else {
+                    (style.padding * 2.0 + max_width).max(0.0)
+                },
+                height: if style.height > 0.0 {
+                    style.height.max(0.0)
+                } else {
+                    total_height.max(0.0)
+                },
+            }
         }
     }
 
@@ -686,6 +740,20 @@ struct ResolvedStyle {
 }
 
 impl ResolvedStyle {
+    fn measure_style(&self) -> MeasureStyle<'_> {
+        MeasureStyle {
+            width: self.width,
+            height: self.height,
+            padding: self.padding,
+            gap: self.gap,
+            fill: self.fill,
+            font_size: self.font_size,
+            label_padding: self.label_padding,
+            font_family: &self.font_family,
+            text_align: self.text_align,
+        }
+    }
+
     fn flags_for(&self, widget: Option<&dyn Widget>) -> NodeFlags {
         let mut flags = NodeFlags::VISIBLE;
         if self.pickable || widget.is_some_and(|w| w.default_pickable()) {

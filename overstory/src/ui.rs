@@ -1265,7 +1265,9 @@ mod tests {
         ui.set_local(ui.root(), ui.properties().gap, 0.0);
 
         let button = ui.append_child(ui.root(), TYPE_BUTTON);
-        ui.set_label(button, "Launch");
+        ui.widget_mut::<crate::Button>(button)
+            .expect("button")
+            .set_text("Launch");
 
         let move_batch = ui.handle_pointer_event(&PointerEvent::Move(PointerUpdate {
             pointer: primary_pointer(),
@@ -1694,6 +1696,37 @@ mod tests {
 
         assert_eq!(left_rect, Rect::new(0.0, 0.0, 100.0, 80.0));
         assert_eq!(right_rect, Rect::new(112.0, 0.0, 320.0, 80.0));
+    }
+
+    #[test]
+    fn row_non_fill_buttons_use_intrinsic_widths() {
+        let mut ui = Ui::new(default_theme());
+        ui.set_view_rect(Rect::new(0.0, 0.0, 480.0, 120.0));
+        ui.set_local(ui.root(), ui.properties().padding, 0.0);
+        ui.set_local(ui.root(), ui.properties().gap, 0.0);
+
+        let row = ui.append_child(ui.root(), TYPE_ROW);
+        ui.set_local(row, ui.properties().padding, 0.0);
+        ui.set_local(row, ui.properties().gap, 12.0);
+
+        let short = ui.append_child(row, TYPE_BUTTON);
+        ui.widget_mut::<crate::Button>(short)
+            .expect("short button")
+            .set_text("A");
+
+        let long = ui.append_child(row, TYPE_BUTTON);
+        ui.widget_mut::<crate::Button>(long)
+            .expect("long button")
+            .set_text("A much longer button label");
+
+        let scene = ui.rebuild();
+        let short_rect = scene.resolved_element(short).expect("short resolved").rect;
+        let long_rect = scene.resolved_element(long).expect("long resolved").rect;
+
+        assert!(short_rect.width() < long_rect.width());
+        assert!(short_rect.width() < 200.0);
+        assert!(long_rect.x0 >= short_rect.x1 + 12.0);
+        assert!(long_rect.x1 < 480.0);
     }
 
     fn primary_pointer() -> PointerInfo {

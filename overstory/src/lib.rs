@@ -84,8 +84,8 @@ pub use surface::{
 pub use timer::{TimerId, TimerQueue};
 pub use ui::{Ui, default_theme};
 pub use widget::{
-    KeyboardEventCtx, MeasureCtx, PointerEventCtx, Widget, WidgetArena, WidgetHandle, content_box,
-    text_label_node, text_label_node_constrained,
+    KeyboardEventCtx, MeasureCtx, MeasureStyle, PointerEventCtx, Widget, WidgetArena, WidgetHandle,
+    content_box, text_label_node, text_label_node_constrained,
 };
 pub use widgets::{
     Button, Divider, DividerAxis, DockPaneController, DockPaneIds, DockPaneStyle, ScrollView,
