@@ -19,8 +19,9 @@ use understory_style::{ClassId, IdSet, StyleCascade, Theme, ThemeBuilder, TypeTa
 use crate::{
     BuiltInProperties, ButtonClass, DirtyChannels, Element, ElementId, Interaction,
     InteractionBatch, LayoutClass, RuntimeState, SceneSnapshot, TYPE_BUTTON, TYPE_COLUMN,
-    TYPE_PANEL, TYPE_ROOT, TYPE_ROW, TYPE_SCROLL_VIEW, TYPE_SPACER, TYPE_SPLITTER, TYPE_TEXT_BLOCK,
-    TYPE_TEXT_INPUT, ThemeKeys, Widget, WidgetArena, built_in_styles::BuiltInStyles,
+    TYPE_DIVIDER, TYPE_PANEL, TYPE_ROOT, TYPE_ROW, TYPE_SCROLL_VIEW, TYPE_SPACER, TYPE_SPINNER,
+    TYPE_SPLITTER, TYPE_TEXT_BLOCK, TYPE_TEXT_INPUT, ThemeKeys, Widget, WidgetArena,
+    built_in_styles::BuiltInStyles,
 };
 
 /// Retained Overstory UI state.
@@ -223,6 +224,16 @@ impl Ui {
                 parent,
                 type_tag,
                 Some(Box::new(crate::widgets::Button::new())),
+            ),
+            TYPE_DIVIDER => self.append_child_with(
+                parent,
+                type_tag,
+                Some(Box::new(crate::widgets::Divider::default())),
+            ),
+            TYPE_SPINNER => self.append_child_with(
+                parent,
+                type_tag,
+                Some(Box::new(crate::widgets::Spinner::default())),
             ),
             TYPE_TEXT_BLOCK => self.append_child_with(
                 parent,
@@ -457,6 +468,27 @@ impl Ui {
     /// Clears the text buffer for a `TextInput` element.
     pub fn clear_text_buffer(&mut self, id: ElementId) {
         self.with_text_engine(|ui, text| ui.clear_text_buffer_with(id, text));
+    }
+
+    /// Starts the animation timer for a `Spinner` element.
+    pub fn start_spinner(&mut self, id: ElementId) {
+        let now = self.now;
+        let mut timers = core::mem::take(&mut self.timers);
+        if let Some(spinner) = self.widget_mut::<crate::widgets::Spinner>(id) {
+            spinner.start(&mut timers, id, now);
+            self.mark_dirty(DirtyChannels::PAINT.into_set());
+        }
+        self.timers = timers;
+    }
+
+    /// Stops the animation timer for a `Spinner` element.
+    pub fn stop_spinner(&mut self, id: ElementId) {
+        let mut timers = core::mem::take(&mut self.timers);
+        if let Some(spinner) = self.widget_mut::<crate::widgets::Spinner>(id) {
+            spinner.stop(&mut timers);
+            self.mark_dirty(DirtyChannels::PAINT.into_set());
+        }
+        self.timers = timers;
     }
 
     fn clear_text_buffer_with(&mut self, id: ElementId, text: &mut TextEngine) {

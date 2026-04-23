@@ -48,6 +48,10 @@ pub const TYPE_TEXT_INPUT: TypeTag = TypeTag(9);
 pub const TYPE_TOOLTIP: TypeTag = TypeTag(10);
 /// Type tag for draggable pane splitters.
 pub const TYPE_SPLITTER: TypeTag = TypeTag(11);
+/// Type tag for decorative divider rules.
+pub const TYPE_DIVIDER: TypeTag = TypeTag(12);
+/// Type tag for animated loading indicators.
+pub const TYPE_SPINNER: TypeTag = TypeTag(13);
 
 /// Small class vocabulary for common button styling.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]

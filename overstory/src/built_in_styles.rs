@@ -21,16 +21,18 @@ use understory_style::{
 
 use crate::{
     BuiltInProperties, ButtonClass, Element, LayoutClass, MessageClass, PSEUDO_HOVER,
-    PSEUDO_PRESSED, TYPE_BUTTON, TYPE_PANEL, TYPE_ROOT, TYPE_SCROLL_VIEW, TYPE_SPLITTER,
-    TYPE_TEXT_BLOCK, TYPE_TEXT_INPUT, TYPE_TOOLTIP, ThemeKeys,
+    PSEUDO_PRESSED, TYPE_BUTTON, TYPE_DIVIDER, TYPE_PANEL, TYPE_ROOT, TYPE_SCROLL_VIEW,
+    TYPE_SPINNER, TYPE_SPLITTER, TYPE_TEXT_BLOCK, TYPE_TEXT_INPUT, TYPE_TOOLTIP, ThemeKeys,
 };
 
 #[derive(Clone, Debug)]
 pub(crate) struct BuiltInStyles {
     button: StyleCascade,
+    divider: StyleCascade,
     panel: StyleCascade,
     root: StyleCascade,
     scroll_view: StyleCascade,
+    spinner: StyleCascade,
     splitter: StyleCascade,
     text_block: StyleCascade,
     text_input: StyleCascade,
@@ -41,9 +43,11 @@ impl BuiltInStyles {
     pub(crate) fn new(props: &BuiltInProperties) -> Self {
         Self {
             button: button_styles(props),
+            divider: divider_styles(props),
             panel: panel_styles(props),
             root: root_styles(props),
             scroll_view: scroll_view_styles(props),
+            spinner: spinner_styles(props),
             splitter: splitter_styles(props),
             text_block: text_block_styles(props),
             text_input: text_input_styles(props),
@@ -54,9 +58,11 @@ impl BuiltInStyles {
     pub(crate) fn for_element(&self, element: &Element) -> Option<&StyleCascade> {
         match element.type_tag() {
             TYPE_BUTTON => Some(&self.button),
+            TYPE_DIVIDER => Some(&self.divider),
             TYPE_PANEL => Some(&self.panel),
             TYPE_ROOT => Some(&self.root),
             TYPE_SCROLL_VIEW => Some(&self.scroll_view),
+            TYPE_SPINNER => Some(&self.spinner),
             TYPE_SPLITTER => Some(&self.splitter),
             TYPE_TEXT_BLOCK => Some(&self.text_block),
             TYPE_TEXT_INPUT => Some(&self.text_input),
@@ -72,6 +78,17 @@ fn root_styles(props: &BuiltInProperties) -> StyleCascade {
             StyleOrigin::Base,
             StyleBuilder::new()
                 .set_resource(props.background, ThemeKeys::APP_BACKGROUND)
+                .build(),
+        )
+        .build()
+}
+
+fn divider_styles(props: &BuiltInProperties) -> StyleCascade {
+    StyleCascadeBuilder::new()
+        .push_style(
+            StyleOrigin::Base,
+            StyleBuilder::new()
+                .set_resource(props.background, ThemeKeys::BORDER_COLOR)
                 .build(),
         )
         .build()
@@ -160,6 +177,17 @@ fn button_styles(props: &BuiltInProperties) -> StyleCascade {
     StyleCascadeBuilder::new()
         .push_style(StyleOrigin::Base, base)
         .push_sheet(StyleOrigin::Sheet, sheet)
+        .build()
+}
+
+fn spinner_styles(props: &BuiltInProperties) -> StyleCascade {
+    StyleCascadeBuilder::new()
+        .push_style(
+            StyleOrigin::Base,
+            StyleBuilder::new()
+                .set_resource(props.foreground, ThemeKeys::ACCENT_BACKGROUND)
+                .build(),
+        )
         .build()
 }
 

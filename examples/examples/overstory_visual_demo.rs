@@ -163,8 +163,10 @@ fn type_tag_name(tag: TypeTag) -> &'static str {
         overstory::TYPE_ROW => "Row",
         overstory::TYPE_COLUMN => "Column",
         overstory::TYPE_BUTTON => "Button",
+        overstory::TYPE_DIVIDER => "Divider",
         overstory::TYPE_SPACER => "Spacer",
         overstory::TYPE_SCROLL_VIEW => "ScrollView",
+        overstory::TYPE_SPINNER => "Spinner",
         overstory::TYPE_SPLITTER => "Splitter",
         overstory::TYPE_TEXT_BLOCK => "TextBlock",
         overstory::TYPE_TEXT_INPUT => "TextInput",
@@ -190,6 +192,7 @@ struct DemoIds {
     inspector_toggle: ElementId,
     inspector_tree_label: ElementId,
     inspector_props_label: ElementId,
+    activity_spinner: ElementId,
     search: ElementId,
     settings: ElementId,
     deploy: ElementId,
@@ -537,6 +540,7 @@ impl DemoApp {
         let tools = Self::build_tools();
         self.api_receiver = Some(llm_api::send_streaming(&self.api_config, messages, tools));
         self.streaming_api_text.clear();
+        self.set_activity_indicator(true);
 
         // Create an in-progress assistant entry as a typing indicator.
         let entry_id = self.transcript.append(
@@ -669,6 +673,8 @@ impl DemoApp {
             self.api_receiver = Some(rx);
         }
 
+        self.set_activity_indicator(self.api_receiver.is_some());
+
         if needs_redraw && was_at_tail {
             self.scroll_to_tail();
         }
@@ -752,6 +758,7 @@ impl DemoApp {
         let tools = Self::build_tools();
         self.api_receiver = Some(llm_api::send_streaming(&self.api_config, messages, tools));
         self.streaming_api_text.clear();
+        self.set_activity_indicator(true);
 
         // Create a new in-progress entry for the follow-up response.
         let entry_id = self.transcript.append(
@@ -759,6 +766,19 @@ impl DemoApp {
         );
         self.streaming_entry = Some(entry_id);
         self.sync_messages();
+    }
+
+    fn set_activity_indicator(&mut self, active: bool) {
+        self.ui.set_local(
+            self.ids.activity_spinner,
+            self.ui.properties().visible,
+            active,
+        );
+        if active {
+            self.ui.start_spinner(self.ids.activity_spinner);
+        } else {
+            self.ui.stop_spinner(self.ids.activity_spinner);
+        }
     }
 
     fn now_nanos(&self) -> u64 {
@@ -1825,6 +1845,8 @@ fn build_demo_ui() -> (Ui, DemoIds) {
         Color::TRANSPARENT,
     );
 
+    let _ = ui.append_child(inspector_column, overstory::TYPE_DIVIDER);
+
     let inspector_props_label = ui.append_child(inspector_column, overstory::TYPE_TEXT_BLOCK);
     ui.set_label(inspector_props_label, "Properties");
     ui.set_local(inspector_props_label, ui.properties().font_size, 11.0);
@@ -1874,14 +1896,28 @@ fn build_demo_ui() -> (Ui, DemoIds) {
 
     // Messages are populated from the transcript via DemoApp::sync_messages.
 
+    let _ = ui.append_child(content_column, overstory::TYPE_DIVIDER);
+
+    let composer_row = ui.append_child(content_column, overstory::TYPE_ROW);
+    ui.set_local(composer_row, ui.properties().padding, 0.0);
+    ui.set_local(composer_row, ui.properties().gap, 10.0);
+
     // Text input at the bottom.
-    let input = ui.append_child(content_column, overstory::TYPE_TEXT_INPUT);
+    let input = ui.append_child(composer_row, overstory::TYPE_TEXT_INPUT);
+    ui.set_local(input, ui.properties().fill, true);
     ui.set_local(input, ui.properties().padding, 8.0);
     ui.set_local(input, ui.properties().border_width, 1.0);
     ui.set_local(input, ui.properties().corner_radius, 6.0);
     if let Some(w) = ui.widget_mut::<overstory::widgets::TextInput>(input) {
         w.set_placeholder("Type a message... (Cmd+Enter to send)");
     }
+
+    let activity_spinner = ui.append_child_with(
+        composer_row,
+        overstory::TYPE_SPINNER,
+        Some(Box::new(overstory::widgets::Spinner::new(20.0))),
+    );
+    ui.set_local(activity_spinner, ui.properties().visible, false);
 
     (
         ui,
@@ -1899,6 +1935,7 @@ fn build_demo_ui() -> (Ui, DemoIds) {
             inspector_toggle,
             inspector_tree_label,
             inspector_props_label,
+            activity_spinner,
             search,
             settings,
             deploy,
