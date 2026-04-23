@@ -101,7 +101,7 @@ impl ThemeKeys {
 pub struct BuiltInProperties {
     /// Explicit width; `0.0` means use the container's default placement policy.
     pub width: Property<f64>,
-    /// Explicit height; `0.0` means auto-size for containers.
+    /// Explicit height; `0.0` means use the container's default placement policy.
     pub height: Property<f64>,
     /// Uniform inner padding.
     pub padding: Property<f64>,

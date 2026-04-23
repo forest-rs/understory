@@ -251,7 +251,9 @@ impl<'a> SceneBuilder<'a> {
             available_rect.height()
         } else if style.height > 0.0 {
             style.height.max(0.0)
-        } else if style.fill && matches!(parent_horizontal, Some(false)) {
+        } else if matches!(parent_horizontal, Some(true))
+            || (style.fill && matches!(parent_horizontal, Some(false)))
+        {
             available_rect.height().max(0.0)
         } else {
             measured_size.height
