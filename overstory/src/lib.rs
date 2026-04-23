@@ -26,6 +26,7 @@
 //! - append-only retained element tree with stable [`ElementId`]s,
 //! - a built-in element vocabulary (`Root`, `Panel`, `Row`, `Column`, `Button`,
 //!   `Spacer`),
+//! - a typed built-in append seam via [`Ui::append`],
 //! - built-in layout/visual dependency properties,
 //! - a full rebuild path that resolves style, lays out elements, projects them
 //!   into an [`understory_box_tree::Tree`], and can build a retained
@@ -41,7 +42,7 @@
 //! - accessibility bridges,
 //! - platform event loops,
 //! - a renderer-facing paint backend,
-//! - a general widget authoring API.
+//! - a declarative tree DSL or diffing authoring model.
 //!
 //! ## Example
 //!
@@ -52,6 +53,7 @@
 extern crate alloc;
 
 mod built_in_styles;
+mod compose;
 mod display;
 mod element;
 mod properties;
@@ -63,6 +65,7 @@ mod ui;
 mod widget;
 pub mod widgets;
 
+pub use compose::{AppendSpec, Column, Panel, Row, Spacer};
 pub use cursor_icon::{self, CursorIcon};
 pub use element::{
     ButtonClass, Element, ElementId, LayoutClass, MessageClass, PSEUDO_DISABLED, PSEUDO_FOCUSED,

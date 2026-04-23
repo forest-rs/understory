@@ -17,7 +17,7 @@ use understory_property::{DependencyObjectExt, Property, PropertyRegistry};
 use understory_style::{ClassId, IdSet, StyleCascade, Theme, ThemeBuilder, TypeTag};
 
 use crate::{
-    BuiltInProperties, ButtonClass, DirtyChannels, Element, ElementId, Interaction,
+    AppendSpec, BuiltInProperties, ButtonClass, DirtyChannels, Element, ElementId, Interaction,
     InteractionBatch, LayoutClass, RuntimeState, SceneSnapshot, TYPE_BUTTON, TYPE_COLUMN,
     TYPE_DIVIDER, TYPE_PANEL, TYPE_ROOT, TYPE_ROW, TYPE_SCROLL_VIEW, TYPE_SPACER, TYPE_SPINNER,
     TYPE_SPLITTER, TYPE_TEXT_BLOCK, TYPE_TEXT_INPUT, ThemeKeys, Widget, WidgetArena,
@@ -58,6 +58,28 @@ pub struct Ui {
 }
 
 impl Ui {
+    /// Appends one typed element/widget spec under `parent`.
+    ///
+    /// This is the preferred authoring seam for built-in Overstory elements
+    /// and widgets. Lower-level retained tree APIs like [`Self::append_child`]
+    /// and [`Self::set_local`] remain available as escape hatches.
+    pub fn append<S: AppendSpec>(&mut self, parent: ElementId, spec: S) -> ElementId {
+        spec.append_to(self, parent)
+    }
+
+    /// Appends one custom widget with an explicit type tag.
+    ///
+    /// Prefer [`Self::append`] for built-in Overstory specs. This is the
+    /// typed lower-level seam for embedders that define their own widget types.
+    pub fn append_widget<W: Widget + 'static>(
+        &mut self,
+        parent: ElementId,
+        type_tag: TypeTag,
+        widget: W,
+    ) -> ElementId {
+        self.append_child_with(parent, type_tag, Some(Box::new(widget)))
+    }
+
     /// Creates a new retained UI with a single root element.
     ///
     /// The returned UI also initializes Overstory's built-in style defaults,
@@ -157,6 +179,10 @@ impl Ui {
 
     /// Appends a child element under the given parent with a type tag and
     /// optional widget.
+    ///
+    /// This is a low-level retained-tree escape hatch. Prefer [`Self::append`]
+    /// or [`Self::append_widget`] when you want authored widget/container
+    /// construction instead of manual tree surgery.
     pub fn append_child_with(
         &mut self,
         parent: ElementId,
@@ -207,7 +233,8 @@ impl Ui {
     /// Appends a child element with a built-in element type.
     ///
     /// This is a convenience wrapper that creates the appropriate widget and
-    /// sets structural flags based on the type tag.
+    /// sets structural flags based on the type tag. Prefer [`Self::append`]
+    /// for typed built-in authoring.
     pub fn append_child(&mut self, parent: ElementId, type_tag: TypeTag) -> ElementId {
         match type_tag {
             TYPE_ROOT | TYPE_PANEL | TYPE_COLUMN => self.append_container(parent, type_tag, false),
@@ -1255,6 +1282,37 @@ mod tests {
 
         let after = ui.rebuild().resolved_element(button).unwrap().border.width;
         assert_eq!(after, 4.0);
+    }
+
+    #[test]
+    fn append_builds_typed_row_and_button_specs() {
+        let mut ui = Ui::new(default_theme());
+        ui.set_view_rect(Rect::new(0.0, 0.0, 320.0, 120.0));
+        ui.set_local(ui.root(), ui.properties().padding, 0.0);
+        ui.set_local(ui.root(), ui.properties().gap, 0.0);
+
+        let row = ui.append(ui.root(), crate::Row::new().padding(0.0).gap(12.0));
+        let button = ui.append(
+            row,
+            crate::Button::new()
+                .with_text("Search")
+                .primary()
+                .height(42.0),
+        );
+
+        let scene = ui.rebuild();
+        let row_rect = scene.resolved_element(row).expect("row resolved").rect;
+        let button_rect = scene
+            .resolved_element(button)
+            .expect("button resolved")
+            .rect;
+        let resolved = scene
+            .resolved_element(button)
+            .expect("button resolved element");
+
+        assert_eq!(row_rect.width(), 320.0);
+        assert_eq!(button_rect.height(), 42.0);
+        assert_eq!(resolved.text.as_deref(), Some("Search"));
     }
 
     #[test]

@@ -5,7 +5,7 @@
 
 use kurbo::Size;
 
-use crate::{MeasureCtx, MeasureStyle, Widget};
+use crate::{AppendSpec, ElementId, MeasureCtx, MeasureStyle, Ui, Widget, compose};
 
 /// Orientation for a decorative divider.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
@@ -22,10 +22,11 @@ pub enum DividerAxis {
 /// The divider itself does not emit custom display nodes. It relies on the
 /// element's resolved background color to paint the rule inside the measured
 /// rectangle.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Divider {
     axis: DividerAxis,
     thickness: f64,
+    mount: compose::ElementOptions,
 }
 
 impl Default for Divider {
@@ -33,6 +34,7 @@ impl Default for Divider {
         Self {
             axis: DividerAxis::Horizontal,
             thickness: 1.0,
+            mount: compose::ElementOptions::default(),
         }
     }
 }
@@ -60,11 +62,32 @@ impl Divider {
         self
     }
 
+    /// Fills the remaining parent-axis space when supported by the parent.
+    #[must_use]
+    pub fn fill(mut self) -> Self {
+        self.mount = self.mount.fill(true);
+        self
+    }
+
+    /// Sets the divider foreground/background color.
+    #[must_use]
+    pub fn background(mut self, background: crate::Color) -> Self {
+        self.mount = self.mount.background(background);
+        self
+    }
+
     fn measured_size(&self, available: Size) -> Size {
         match self.axis {
             DividerAxis::Horizontal => Size::new(available.width.max(0.0), self.thickness),
             DividerAxis::Vertical => Size::new(self.thickness, available.height.max(0.0)),
         }
+    }
+}
+
+impl AppendSpec for Divider {
+    fn append_to(mut self, ui: &mut Ui, parent: ElementId) -> ElementId {
+        let mount = core::mem::take(&mut self.mount);
+        compose::append_widget_spec(ui, parent, crate::TYPE_DIVIDER, self, mount)
     }
 }
 

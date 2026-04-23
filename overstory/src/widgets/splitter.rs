@@ -5,7 +5,7 @@
 
 use alloc::vec::Vec;
 
-use crate::{Element, ElementId, ResolvedElement, Widget, content_box};
+use crate::{AppendSpec, Element, ElementId, ResolvedElement, Ui, Widget, compose, content_box};
 use cursor_icon::CursorIcon;
 use kurbo::Size;
 use peniko::{Brush, Color};
@@ -47,6 +47,7 @@ pub struct Splitter {
     min_secondary: f64,
     drag_offset: f64,
     dragging: bool,
+    mount: compose::ElementOptions,
 }
 
 impl Default for Splitter {
@@ -59,6 +60,7 @@ impl Default for Splitter {
             min_secondary: 240.0,
             drag_offset: 0.0,
             dragging: false,
+            mount: compose::ElementOptions::default(),
         }
     }
 }
@@ -136,6 +138,20 @@ impl Splitter {
     /// Updates the minimum extent reserved for the opposite pane.
     pub fn set_min_secondary(&mut self, min_secondary: f64) {
         self.min_secondary = min_secondary.max(0.0);
+    }
+
+    /// Sets an explicit width.
+    #[must_use]
+    pub fn width(mut self, width: f64) -> Self {
+        self.mount = self.mount.width(width);
+        self
+    }
+
+    /// Sets an explicit height.
+    #[must_use]
+    pub fn height(mut self, height: f64) -> Self {
+        self.mount = self.mount.height(height);
+        self
     }
 
     fn grip_size(&self) -> Size {
@@ -249,6 +265,13 @@ impl Splitter {
             }
             _ => None,
         }
+    }
+}
+
+impl AppendSpec for Splitter {
+    fn append_to(mut self, ui: &mut Ui, parent: ElementId) -> ElementId {
+        let mount = core::mem::take(&mut self.mount);
+        compose::append_widget_spec(ui, parent, crate::TYPE_SPLITTER, self, mount)
     }
 }
 

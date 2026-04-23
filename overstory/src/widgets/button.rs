@@ -11,8 +11,8 @@ use peniko::Brush;
 use understory_display::{DisplayAlign, DisplayNode, Insets};
 
 use crate::{
-    Element, ElementId, MeasureCtx, MeasureStyle, ResolvedElement, Widget, content_box,
-    text_label_node,
+    AppendSpec, ButtonClass, Element, ElementId, MeasureCtx, MeasureStyle, ResolvedElement, Ui,
+    Widget, compose, content_box, text_label_node,
 };
 
 /// Interactive push button widget with horizontally padded, vertically
@@ -20,6 +20,7 @@ use crate::{
 #[derive(Clone, Debug, Default)]
 pub struct Button {
     text: Box<str>,
+    mount: compose::ElementOptions,
 }
 
 impl Button {
@@ -28,7 +29,15 @@ impl Button {
     pub fn new() -> Self {
         Self {
             text: Box::from(""),
+            mount: compose::ElementOptions::default(),
         }
+    }
+
+    /// Creates a button with initial text.
+    #[must_use]
+    pub fn with_text(mut self, text: impl Into<Box<str>>) -> Self {
+        self.text = text.into();
+        self
     }
 
     /// Returns the button text.
@@ -40,6 +49,62 @@ impl Button {
     /// Replaces the button text.
     pub fn set_text(&mut self, text: impl Into<Box<str>>) {
         self.text = text.into();
+    }
+
+    /// Applies the built-in primary button class.
+    #[must_use]
+    pub fn primary(mut self) -> Self {
+        self.mount = self.mount.class(ButtonClass::Primary.class_id());
+        self
+    }
+
+    /// Fills the remaining parent-axis space when supported by the parent.
+    #[must_use]
+    pub fn fill(mut self) -> Self {
+        self.mount = self.mount.fill(true);
+        self
+    }
+
+    /// Sets an explicit width.
+    #[must_use]
+    pub fn width(mut self, width: f64) -> Self {
+        self.mount = self.mount.width(width);
+        self
+    }
+
+    /// Sets an explicit height.
+    #[must_use]
+    pub fn height(mut self, height: f64) -> Self {
+        self.mount = self.mount.height(height);
+        self
+    }
+
+    /// Sets the foreground color.
+    #[must_use]
+    pub fn foreground(mut self, foreground: crate::Color) -> Self {
+        self.mount = self.mount.foreground(foreground);
+        self
+    }
+
+    /// Sets a style cascade for the button element.
+    #[must_use]
+    pub fn style(mut self, style: understory_style::StyleCascade) -> Self {
+        self.mount = self.mount.style(style);
+        self
+    }
+
+    /// Sets a display name for inspectors/debug views.
+    #[must_use]
+    pub fn display_name(mut self, display_name: impl Into<Box<str>>) -> Self {
+        self.mount = self.mount.display_name(display_name);
+        self
+    }
+}
+
+impl AppendSpec for Button {
+    fn append_to(mut self, ui: &mut Ui, parent: ElementId) -> ElementId {
+        let mount = core::mem::take(&mut self.mount);
+        compose::append_widget_spec(ui, parent, crate::TYPE_BUTTON, self, mount)
     }
 }
 

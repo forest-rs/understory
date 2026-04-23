@@ -15,8 +15,8 @@ use ui_events::pointer::PointerEvent;
 use understory_display::{DisplayAlign, DisplayNode, Insets, TextEngine};
 
 use crate::{
-    Element, ElementId, Interaction, InteractionBatch, MeasureStyle, ResolvedElement, Widget,
-    content_box, text_label_node, text_label_node_constrained,
+    AppendSpec, Element, ElementId, Interaction, InteractionBatch, MeasureStyle, ResolvedElement,
+    Ui, Widget, compose, content_box, text_label_node, text_label_node_constrained,
 };
 
 /// Label padding used for content box calculation in `measure`.
@@ -48,6 +48,7 @@ pub struct TextInput {
     cursor_visible: bool,
     /// Timer ID for the blink timer, if active.
     blink_timer: Option<crate::TimerId>,
+    mount: compose::ElementOptions,
 }
 
 impl TextInput {
@@ -62,7 +63,15 @@ impl TextInput {
             last_content_width: Cell::new(None),
             cursor_visible: true,
             blink_timer: None,
+            mount: compose::ElementOptions::default(),
         }
+    }
+
+    /// Replaces the initial text buffer content and returns the configured widget.
+    #[must_use]
+    pub fn with_text(mut self, text: &str) -> Self {
+        self.set_text(text);
+        self
     }
 
     /// Returns the current text buffer content.
@@ -79,6 +88,62 @@ impl TextInput {
     /// Sets the placeholder text shown when the input is empty and unfocused.
     pub fn set_placeholder(&mut self, placeholder: impl Into<alloc::string::String>) {
         self.placeholder = Some(placeholder.into());
+    }
+
+    /// Sets the placeholder text and returns the configured widget.
+    #[must_use]
+    pub fn placeholder(mut self, placeholder: impl Into<alloc::string::String>) -> Self {
+        self.set_placeholder(placeholder);
+        self
+    }
+
+    /// Fills the remaining parent-axis space when supported by the parent.
+    #[must_use]
+    pub fn fill(mut self) -> Self {
+        self.mount = self.mount.fill(true);
+        self
+    }
+
+    /// Sets an explicit width.
+    #[must_use]
+    pub fn width(mut self, width: f64) -> Self {
+        self.mount = self.mount.width(width);
+        self
+    }
+
+    /// Sets an explicit height.
+    #[must_use]
+    pub fn height(mut self, height: f64) -> Self {
+        self.mount = self.mount.height(height);
+        self
+    }
+
+    /// Sets uniform inner padding.
+    #[must_use]
+    pub fn padding(mut self, padding: f64) -> Self {
+        self.mount = self.mount.padding(padding);
+        self
+    }
+
+    /// Sets border width.
+    #[must_use]
+    pub fn border_width(mut self, border_width: f64) -> Self {
+        self.mount = self.mount.border_width(border_width);
+        self
+    }
+
+    /// Sets corner radius.
+    #[must_use]
+    pub fn corner_radius(mut self, corner_radius: f64) -> Self {
+        self.mount = self.mount.corner_radius(corner_radius);
+        self
+    }
+
+    /// Sets a display name for inspectors/debug views.
+    #[must_use]
+    pub fn display_name(mut self, display_name: impl Into<alloc::boxed::Box<str>>) -> Self {
+        self.mount = self.mount.display_name(display_name);
+        self
     }
 
     /// Starts cursor blink. Called when the input gains focus.
@@ -137,6 +202,13 @@ impl TextInput {
         text.with_plain_editor(&mut self.editor, |driver| {
             driver.move_to_point(local_x, local_y);
         });
+    }
+}
+
+impl AppendSpec for TextInput {
+    fn append_to(mut self, ui: &mut Ui, parent: ElementId) -> ElementId {
+        let mount = core::mem::take(&mut self.mount);
+        compose::append_widget_spec(ui, parent, crate::TYPE_TEXT_INPUT, self, mount)
     }
 }
 

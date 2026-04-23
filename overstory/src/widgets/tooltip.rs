@@ -9,7 +9,10 @@ use kurbo::Size;
 use peniko::Brush;
 use understory_display::{DisplayAlign, DisplayNode, Insets};
 
-use crate::{ElementId, MeasureCtx, MeasureStyle, ResolvedElement, SurfaceRole, Widget};
+use crate::{
+    AppendSpec, ElementId, MeasureCtx, MeasureStyle, ResolvedElement, SurfaceRole, Ui, Widget,
+    compose,
+};
 
 /// Tooltip-specific padding (tighter than the theme default).
 const TOOLTIP_PADDING: f64 = 6.0;
@@ -28,6 +31,7 @@ pub struct Tooltip {
     text: Box<str>,
     /// Desired position in root coordinates (set by `update_tooltips`).
     position: Option<kurbo::Point>,
+    mount: compose::ElementOptions,
 }
 
 impl Tooltip {
@@ -39,6 +43,7 @@ impl Tooltip {
             visible: false,
             text: Box::from(""),
             position: None,
+            mount: compose::ElementOptions::default(),
         }
     }
 
@@ -79,6 +84,48 @@ impl Tooltip {
     /// Replaces the tooltip text.
     pub fn set_text(&mut self, text: impl Into<Box<str>>) {
         self.text = text.into();
+    }
+
+    /// Sets the tooltip text and returns the configured widget.
+    #[must_use]
+    pub fn with_text(mut self, text: impl Into<Box<str>>) -> Self {
+        self.text = text.into();
+        self
+    }
+
+    /// Sets an explicit width.
+    #[must_use]
+    pub fn width(mut self, width: f64) -> Self {
+        self.mount = self.mount.width(width);
+        self
+    }
+
+    /// Sets an explicit height.
+    #[must_use]
+    pub fn height(mut self, height: f64) -> Self {
+        self.mount = self.mount.height(height);
+        self
+    }
+
+    /// Sets corner radius.
+    #[must_use]
+    pub fn corner_radius(mut self, corner_radius: f64) -> Self {
+        self.mount = self.mount.corner_radius(corner_radius);
+        self
+    }
+
+    /// Sets border width.
+    #[must_use]
+    pub fn border_width(mut self, border_width: f64) -> Self {
+        self.mount = self.mount.border_width(border_width);
+        self
+    }
+}
+
+impl AppendSpec for Tooltip {
+    fn append_to(mut self, ui: &mut Ui, parent: ElementId) -> ElementId {
+        let mount = core::mem::take(&mut self.mount);
+        compose::append_widget_spec(ui, parent, crate::TYPE_TOOLTIP, self, mount)
     }
 }
 

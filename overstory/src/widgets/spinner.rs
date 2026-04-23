@@ -11,7 +11,8 @@ use peniko::{Brush, Color};
 use understory_display::{DisplayAlign, DisplayNode, Insets};
 
 use crate::{
-    ElementId, MeasureCtx, MeasureStyle, ResolvedElement, TimerId, TimerQueue, Widget, content_box,
+    AppendSpec, ElementId, MeasureCtx, MeasureStyle, ResolvedElement, TimerId, TimerQueue, Ui,
+    Widget, compose, content_box,
 };
 
 const STEP_INTERVAL_NANOS: u64 = 90_000_000;
@@ -29,11 +30,12 @@ const DOT_VECTORS: [(f64, f64); 8] = [
 const DOT_ALPHAS: [u8; 8] = [255, 208, 168, 132, 100, 72, 48, 28];
 
 /// Animated loading indicator built from retained display nodes.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Spinner {
     size: f64,
     phase: u8,
     timer: Option<TimerId>,
+    mount: compose::ElementOptions,
 }
 
 impl Default for Spinner {
@@ -42,6 +44,7 @@ impl Default for Spinner {
             size: 20.0,
             phase: 0,
             timer: None,
+            mount: compose::ElementOptions::default(),
         }
     }
 }
@@ -54,6 +57,13 @@ impl Spinner {
             size: size.max(12.0),
             ..Self::default()
         }
+    }
+
+    /// Sets visibility.
+    #[must_use]
+    pub fn visible(mut self, visible: bool) -> Self {
+        self.mount = self.mount.visible(visible);
+        self
     }
 
     /// Returns `true` when the spinner is actively animating.
@@ -109,6 +119,13 @@ impl Spinner {
                 DisplayNode::fill_rounded_rect(dot * 0.5, brush),
             ),
         )
+    }
+}
+
+impl AppendSpec for Spinner {
+    fn append_to(mut self, ui: &mut Ui, parent: ElementId) -> ElementId {
+        let mount = core::mem::take(&mut self.mount);
+        compose::append_widget_spec(ui, parent, crate::TYPE_SPINNER, self, mount)
     }
 }
 
