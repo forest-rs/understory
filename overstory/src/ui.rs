@@ -20,7 +20,7 @@ use crate::{
     BuiltInProperties, ButtonClass, DirtyChannels, Element, ElementId, Interaction,
     InteractionBatch, LayoutClass, RuntimeState, SceneSnapshot, TYPE_BUTTON, TYPE_COLUMN,
     TYPE_PANEL, TYPE_ROOT, TYPE_ROW, TYPE_SCROLL_VIEW, TYPE_SPACER, TYPE_SPLITTER, TYPE_TEXT_BLOCK,
-    TYPE_TEXT_INPUT, ThemeKeys, Widget, WidgetArena,
+    TYPE_TEXT_INPUT, ThemeKeys, Widget, WidgetArena, built_in_styles::BuiltInStyles,
 };
 
 /// Retained Overstory UI state.
@@ -36,6 +36,7 @@ pub struct Ui {
     view_rect: Rect,
     dirty: ChannelSet,
     widget_arena: WidgetArena,
+    built_in_styles: BuiltInStyles,
     timers: crate::TimerQueue,
     /// Current monotonic time in nanoseconds, set by the host before
     /// each event cycle via `set_now`.
@@ -48,6 +49,7 @@ impl Ui {
     pub fn new(theme: Theme) -> Self {
         let mut registry = PropertyRegistry::new();
         let props = BuiltInProperties::register(&mut registry);
+        let built_in_styles = BuiltInStyles::new(&props);
         let root = ElementId::new(0);
         let mut elements = Vec::new();
         let mut root_element = Element::new(root, None, TYPE_ROOT);
@@ -68,6 +70,7 @@ impl Ui {
                 | DirtyChannels::LAYOUT.into_set()
                 | DirtyChannels::PAINT.into_set(),
             widget_arena: WidgetArena::new(),
+            built_in_styles,
             timers: crate::TimerQueue::new(),
             now: 0,
         }
@@ -543,6 +546,7 @@ impl Ui {
                 &self.registry,
                 &self.props,
                 &self.theme,
+                &self.built_in_styles,
                 &self.widget_arena,
                 text,
             );
@@ -564,6 +568,7 @@ impl Ui {
                     &self.registry,
                     &self.props,
                     &self.theme,
+                    &self.built_in_styles,
                     &self.widget_arena,
                     text,
                 );
@@ -906,41 +911,42 @@ impl Ui {
 pub fn default_theme() -> Theme {
     ThemeBuilder::new()
         .set(
-            ThemeKeys::ROOT_BACKGROUND,
+            ThemeKeys::APP_BACKGROUND,
             Color::from_rgba8(242, 239, 232, 255),
         )
         .set(
-            ThemeKeys::PANEL_BACKGROUND,
+            ThemeKeys::SURFACE_BACKGROUND,
             Color::from_rgba8(255, 252, 246, 255),
         )
         .set(
-            ThemeKeys::SIDEBAR_BACKGROUND,
+            ThemeKeys::SURFACE_MUTED_BACKGROUND,
             Color::from_rgba8(226, 222, 213, 255),
         )
         .set(
-            ThemeKeys::BUTTON_BACKGROUND,
+            ThemeKeys::CONTROL_BACKGROUND,
             Color::from_rgba8(238, 233, 225, 255),
         )
         .set(
-            ThemeKeys::BUTTON_HOVER_BACKGROUND,
+            ThemeKeys::CONTROL_BACKGROUND_EMPHASIZED,
             Color::from_rgba8(230, 225, 216, 255),
         )
         .set(
-            ThemeKeys::BUTTON_PRESSED_BACKGROUND,
+            ThemeKeys::CONTROL_BACKGROUND_STRONG,
             Color::from_rgba8(214, 208, 198, 255),
         )
         .set(
-            ThemeKeys::PRIMARY_BACKGROUND,
+            ThemeKeys::ACCENT_BACKGROUND,
             Color::from_rgba8(24, 92, 72, 255),
         )
         .set(
-            ThemeKeys::PRIMARY_HOVER_BACKGROUND,
+            ThemeKeys::ACCENT_BACKGROUND_EMPHASIZED,
             Color::from_rgba8(31, 109, 86, 255),
         )
         .set(
-            ThemeKeys::PRIMARY_PRESSED_BACKGROUND,
+            ThemeKeys::ACCENT_BACKGROUND_STRONG,
             Color::from_rgba8(18, 72, 57, 255),
         )
+        .set(ThemeKeys::ACCENT_FOREGROUND, Color::WHITE)
         .set(ThemeKeys::FOREGROUND, Color::from_rgba8(33, 37, 41, 255))
         .set(
             ThemeKeys::BORDER_COLOR,
@@ -955,11 +961,11 @@ pub fn default_theme() -> Theme {
         .set(ThemeKeys::FONT_FAMILY, Box::<str>::from("sans-serif"))
         .set(ThemeKeys::TEXT_ALIGN, TextAlign::Start)
         .set(
-            ThemeKeys::SPLITTER_HOVER_BACKGROUND,
+            ThemeKeys::DIVIDER_BACKGROUND_EMPHASIZED,
             Color::from_rgba8(24, 92, 72, 28),
         )
         .set(
-            ThemeKeys::SPLITTER_ACTIVE_BACKGROUND,
+            ThemeKeys::DIVIDER_BACKGROUND_STRONG,
             Color::from_rgba8(24, 92, 72, 56),
         )
         .build()

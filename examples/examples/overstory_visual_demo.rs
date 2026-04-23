@@ -877,12 +877,12 @@ impl DemoApp {
         let primary_bg = *self
             .ui
             .theme()
-            .get(ThemeKeys::PRIMARY_BACKGROUND)
+            .get(ThemeKeys::ACCENT_BACKGROUND)
             .expect("primary background in theme");
         let button_bg = *self
             .ui
             .theme()
-            .get(ThemeKeys::BUTTON_BACKGROUND)
+            .get(ThemeKeys::CONTROL_BACKGROUND)
             .expect("button background in theme");
         let foreground = *self
             .ui
@@ -1397,13 +1397,18 @@ impl DemoApp {
         let button_bg = *self
             .ui
             .theme()
-            .get(ThemeKeys::BUTTON_BACKGROUND)
+            .get(ThemeKeys::CONTROL_BACKGROUND)
             .expect("button background in theme");
         let primary_bg = *self
             .ui
             .theme()
-            .get(ThemeKeys::PRIMARY_BACKGROUND)
+            .get(ThemeKeys::ACCENT_BACKGROUND)
             .expect("primary background in theme");
+        let accent_fg = *self
+            .ui
+            .theme()
+            .get(ThemeKeys::ACCENT_FOREGROUND)
+            .expect("accent foreground in theme");
         let foreground = *self
             .ui
             .theme()
@@ -1411,9 +1416,9 @@ impl DemoApp {
             .expect("foreground in theme");
 
         let (roomy_bg, roomy_fg, compact_bg, compact_fg) = if self.roomy {
-            (primary_bg, palette::css::WHITE, button_bg, foreground)
+            (primary_bg, accent_fg, button_bg, foreground)
         } else {
-            (button_bg, foreground, primary_bg, palette::css::WHITE)
+            (button_bg, foreground, primary_bg, accent_fg)
         };
 
         self.ui
@@ -2591,12 +2596,12 @@ mod tests {
         let theme_button = *app
             .ui
             .theme()
-            .get(ThemeKeys::BUTTON_BACKGROUND)
+            .get(ThemeKeys::CONTROL_BACKGROUND)
             .expect("button background in theme");
         let theme_primary = *app
             .ui
             .theme()
-            .get(ThemeKeys::PRIMARY_BACKGROUND)
+            .get(ThemeKeys::ACCENT_BACKGROUND)
             .expect("primary background in theme");
 
         let scene = app.ui.scene(&mut app.text);
@@ -2851,41 +2856,42 @@ fn light_theme() -> Theme {
 fn dark_theme() -> Theme {
     ThemeBuilder::new()
         .set(
-            ThemeKeys::ROOT_BACKGROUND,
+            ThemeKeys::APP_BACKGROUND,
             Color::from_rgba8(22, 22, 24, 255),
         )
         .set(
-            ThemeKeys::PANEL_BACKGROUND,
+            ThemeKeys::SURFACE_BACKGROUND,
             Color::from_rgba8(32, 32, 35, 255),
         )
         .set(
-            ThemeKeys::SIDEBAR_BACKGROUND,
+            ThemeKeys::SURFACE_MUTED_BACKGROUND,
             Color::from_rgba8(26, 26, 29, 255),
         )
         .set(
-            ThemeKeys::BUTTON_BACKGROUND,
+            ThemeKeys::CONTROL_BACKGROUND,
             Color::from_rgba8(44, 44, 48, 255),
         )
         .set(
-            ThemeKeys::BUTTON_HOVER_BACKGROUND,
+            ThemeKeys::CONTROL_BACKGROUND_EMPHASIZED,
             Color::from_rgba8(54, 54, 58, 255),
         )
         .set(
-            ThemeKeys::BUTTON_PRESSED_BACKGROUND,
+            ThemeKeys::CONTROL_BACKGROUND_STRONG,
             Color::from_rgba8(38, 38, 42, 255),
         )
         .set(
-            ThemeKeys::PRIMARY_BACKGROUND,
+            ThemeKeys::ACCENT_BACKGROUND,
             Color::from_rgba8(36, 140, 106, 255),
         )
         .set(
-            ThemeKeys::PRIMARY_HOVER_BACKGROUND,
+            ThemeKeys::ACCENT_BACKGROUND_EMPHASIZED,
             Color::from_rgba8(42, 158, 120, 255),
         )
         .set(
-            ThemeKeys::PRIMARY_PRESSED_BACKGROUND,
+            ThemeKeys::ACCENT_BACKGROUND_STRONG,
             Color::from_rgba8(28, 115, 86, 255),
         )
+        .set(ThemeKeys::ACCENT_FOREGROUND, Color::WHITE)
         .set(ThemeKeys::FOREGROUND, Color::from_rgba8(210, 212, 216, 255))
         .set(ThemeKeys::BORDER_COLOR, Color::from_rgba8(58, 58, 62, 255))
         .set(ThemeKeys::CORNER_RADIUS, 10.0_f64)
@@ -2893,11 +2899,11 @@ fn dark_theme() -> Theme {
         .set(ThemeKeys::GAP, 12.0_f64)
         .set(ThemeKeys::BUTTON_HEIGHT, 44.0_f64)
         .set(
-            ThemeKeys::SPLITTER_HOVER_BACKGROUND,
+            ThemeKeys::DIVIDER_BACKGROUND_EMPHASIZED,
             Color::from_rgba8(210, 212, 216, 24),
         )
         .set(
-            ThemeKeys::SPLITTER_ACTIVE_BACKGROUND,
+            ThemeKeys::DIVIDER_BACKGROUND_STRONG,
             Color::from_rgba8(210, 212, 216, 42),
         )
         .build()

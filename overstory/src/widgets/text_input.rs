@@ -14,11 +14,9 @@ use ui_events::keyboard::{Key, KeyboardEvent, Modifiers, NamedKey};
 use ui_events::pointer::PointerEvent;
 use understory_display::{DisplayAlign, DisplayNode, Insets, TextEngine};
 
-use understory_style::ResourceKey;
-
 use crate::{
-    Element, ElementId, Interaction, InteractionBatch, ResolvedElement, ThemeKeys, Widget,
-    content_box, text_label_node, text_label_node_constrained,
+    Element, ElementId, Interaction, InteractionBatch, ResolvedElement, Widget, content_box,
+    text_label_node, text_label_node_constrained,
 };
 
 /// Label padding used for content box calculation in `measure`.
@@ -373,15 +371,6 @@ impl Widget for TextInputWidget {
     fn label(&self) -> Option<&str> {
         let text = self.editor.raw_text();
         if text.is_empty() { None } else { Some(text) }
-    }
-
-    fn background_key(&self, _element: &Element) -> Option<ResourceKey> {
-        Some(ThemeKeys::PANEL_BACKGROUND)
-    }
-
-    fn height_key(&self) -> Option<ResourceKey> {
-        // No theme height — TextInput uses Widget::measure() for dynamic sizing.
-        None
     }
 
     fn default_pickable(&self) -> bool {

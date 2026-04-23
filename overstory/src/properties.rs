@@ -31,48 +31,50 @@ impl DirtyChannels {
 pub struct ThemeKeys;
 
 impl ThemeKeys {
-    /// Root surface background.
-    pub const ROOT_BACKGROUND: ResourceKey = ResourceKey::new(0);
-    /// Panel background.
-    pub const PANEL_BACKGROUND: ResourceKey = ResourceKey::new(1);
-    /// Default button background.
-    pub const BUTTON_BACKGROUND: ResourceKey = ResourceKey::new(2);
-    /// Default button hover background.
-    pub const BUTTON_HOVER_BACKGROUND: ResourceKey = ResourceKey::new(3);
-    /// Default button pressed background.
-    pub const BUTTON_PRESSED_BACKGROUND: ResourceKey = ResourceKey::new(4);
+    /// Application/workspace background behind retained surfaces.
+    pub const APP_BACKGROUND: ResourceKey = ResourceKey::new(0);
+    /// Default surface background for panels, inputs, and scroll containers.
+    pub const SURFACE_BACKGROUND: ResourceKey = ResourceKey::new(1);
+    /// Muted surface background for sidebars and secondary chrome.
+    pub const SURFACE_MUTED_BACKGROUND: ResourceKey = ResourceKey::new(2);
+    /// Default interactive control surface.
+    pub const CONTROL_BACKGROUND: ResourceKey = ResourceKey::new(3);
+    /// More emphasized control surface, suitable for hover-like states.
+    pub const CONTROL_BACKGROUND_EMPHASIZED: ResourceKey = ResourceKey::new(4);
+    /// Strong control surface, suitable for active/pressed states.
+    pub const CONTROL_BACKGROUND_STRONG: ResourceKey = ResourceKey::new(5);
+    /// Accent control surface.
+    pub const ACCENT_BACKGROUND: ResourceKey = ResourceKey::new(6);
+    /// More emphasized accent surface.
+    pub const ACCENT_BACKGROUND_EMPHASIZED: ResourceKey = ResourceKey::new(7);
+    /// Strong accent surface.
+    pub const ACCENT_BACKGROUND_STRONG: ResourceKey = ResourceKey::new(8);
+    /// Foreground used on accent surfaces.
+    pub const ACCENT_FOREGROUND: ResourceKey = ResourceKey::new(9);
     /// Shared foreground/text color.
-    pub const FOREGROUND: ResourceKey = ResourceKey::new(5);
+    pub const FOREGROUND: ResourceKey = ResourceKey::new(10);
     /// Shared border color.
-    pub const BORDER_COLOR: ResourceKey = ResourceKey::new(6);
+    pub const BORDER_COLOR: ResourceKey = ResourceKey::new(11);
     /// Shared corner radius.
-    pub const CORNER_RADIUS: ResourceKey = ResourceKey::new(7);
+    pub const CORNER_RADIUS: ResourceKey = ResourceKey::new(12);
     /// Shared container padding.
-    pub const PADDING: ResourceKey = ResourceKey::new(8);
+    pub const PADDING: ResourceKey = ResourceKey::new(13);
     /// Shared vertical gap.
-    pub const GAP: ResourceKey = ResourceKey::new(9);
+    pub const GAP: ResourceKey = ResourceKey::new(14);
     /// Default button height.
-    pub const BUTTON_HEIGHT: ResourceKey = ResourceKey::new(10);
-    /// Sidebar/panel accent background.
-    pub const SIDEBAR_BACKGROUND: ResourceKey = ResourceKey::new(11);
-    /// Primary action background.
-    pub const PRIMARY_BACKGROUND: ResourceKey = ResourceKey::new(12);
-    /// Primary action hover background.
-    pub const PRIMARY_HOVER_BACKGROUND: ResourceKey = ResourceKey::new(13);
-    /// Primary action pressed background.
-    pub const PRIMARY_PRESSED_BACKGROUND: ResourceKey = ResourceKey::new(14);
+    pub const BUTTON_HEIGHT: ResourceKey = ResourceKey::new(15);
     /// Default font size.
-    pub const FONT_SIZE: ResourceKey = ResourceKey::new(15);
+    pub const FONT_SIZE: ResourceKey = ResourceKey::new(16);
     /// Default label padding.
-    pub const LABEL_PADDING: ResourceKey = ResourceKey::new(16);
+    pub const LABEL_PADDING: ResourceKey = ResourceKey::new(17);
     /// Default font family.
-    pub const FONT_FAMILY: ResourceKey = ResourceKey::new(17);
+    pub const FONT_FAMILY: ResourceKey = ResourceKey::new(18);
     /// Default text alignment.
-    pub const TEXT_ALIGN: ResourceKey = ResourceKey::new(18);
-    /// Splitter hover background.
-    pub const SPLITTER_HOVER_BACKGROUND: ResourceKey = ResourceKey::new(19);
-    /// Splitter active background.
-    pub const SPLITTER_ACTIVE_BACKGROUND: ResourceKey = ResourceKey::new(20);
+    pub const TEXT_ALIGN: ResourceKey = ResourceKey::new(19);
+    /// Emphasized divider fill for hover-like states.
+    pub const DIVIDER_BACKGROUND_EMPHASIZED: ResourceKey = ResourceKey::new(20);
+    /// Strong divider fill for active drag states.
+    pub const DIVIDER_BACKGROUND_STRONG: ResourceKey = ResourceKey::new(21);
 }
 
 /// Built-in dependency properties for layout and visuals.

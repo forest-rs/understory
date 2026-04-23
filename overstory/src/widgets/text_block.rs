@@ -8,9 +8,7 @@ use alloc::vec::Vec;
 use peniko::Brush;
 use understory_display::{DisplayNode, Insets};
 
-use understory_style::ResourceKey;
-
-use crate::{Element, ElementId, MessageClass, ResolvedElement, ThemeKeys, Widget, text_label_node};
+use crate::{ElementId, ResolvedElement, Widget, text_label_node};
 
 /// Multiline wrapped text block widget.
 ///
@@ -29,14 +27,6 @@ impl TextBlockWidget {
 }
 
 impl Widget for TextBlockWidget {
-    fn background_key(&self, element: &Element) -> Option<ResourceKey> {
-        if element.classes.contains(MessageClass::User.class_id()) {
-            Some(ThemeKeys::BUTTON_BACKGROUND)
-        } else {
-            None
-        }
-    }
-
     fn display(&self, _id: ElementId, resolved: &ResolvedElement, children: &mut Vec<DisplayNode>) {
         let Some(label) = resolved.label.as_deref() else {
             return;

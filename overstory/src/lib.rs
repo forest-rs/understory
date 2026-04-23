@@ -51,6 +51,7 @@
 
 extern crate alloc;
 
+mod built_in_styles;
 mod display;
 mod element;
 mod properties;

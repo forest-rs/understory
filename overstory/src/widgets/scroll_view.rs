@@ -3,11 +3,8 @@
 
 //! Scroll view widget with vertical scroll offset and content tracking.
 
+use crate::Widget;
 use understory_display::TextEngine;
-
-use understory_style::ResourceKey;
-
-use crate::{Element, ThemeKeys, Widget};
 
 /// Scrollable container widget that tracks scroll offset, content height,
 /// and viewport height.
@@ -65,10 +62,6 @@ impl ScrollViewWidget {
 }
 
 impl Widget for ScrollViewWidget {
-    fn background_key(&self, _element: &Element) -> Option<ResourceKey> {
-        Some(ThemeKeys::PANEL_BACKGROUND)
-    }
-
     fn default_pickable(&self) -> bool {
         true
     }

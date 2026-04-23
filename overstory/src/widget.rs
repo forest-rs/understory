@@ -11,15 +11,13 @@
 use alloc::{boxed::Box, vec::Vec};
 use core::any::Any;
 
+use crate::{BuiltInProperties, Element, ElementId, InteractionBatch, ResolvedElement};
 use cursor_icon::CursorIcon;
 use invalidation::ChannelSet;
 use kurbo::{Rect, Size};
 use ui_events::pointer::PointerEvent;
 use understory_display::{DisplayNode, TextEngine};
 use understory_property::{DependencyObjectExt, Property, PropertyRegistry};
-use understory_style::ResourceKey;
-
-use crate::{BuiltInProperties, Element, ElementId, InteractionBatch, ResolvedElement};
 
 /// Context provided to widgets during measurement.
 ///
@@ -261,20 +259,6 @@ pub trait Widget {
     /// Used by scene resolution to populate `ResolvedElement::label` for
     /// widgets that generate their own text content (e.g., text input buffers).
     fn label(&self) -> Option<&str> {
-        None
-    }
-
-    /// Return the theme resource key for this widget's background color.
-    ///
-    /// Called during style resolution. Return `None` for no theme background.
-    fn background_key(&self, _element: &Element) -> Option<ResourceKey> {
-        None
-    }
-
-    /// Return the theme resource key for this widget's height.
-    ///
-    /// Called during style resolution. Return `None` for no theme height.
-    fn height_key(&self) -> Option<ResourceKey> {
         None
     }
 

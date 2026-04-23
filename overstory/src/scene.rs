@@ -11,12 +11,14 @@ use understory_box_tree::{LocalNode, NodeFlags, NodeId, QueryFilter, Tree};
 use understory_display::{TextAlign, TextEngine};
 use understory_property::{PropertyRegistry, PropertyStore};
 use understory_responder::adapters::box_tree::top_hit_for_point;
-use understory_style::{PseudoClassId, ResolveCx, ResourceKey, Theme, TypeTag};
+use understory_style::{
+    PseudoClassId, ResolveCx, StyleCascade, StyleCascadeBuilder, StyleSource, Theme, TypeTag,
+};
 
 use crate::{
-    BuiltInProperties, Color, Element, ElementId, LayoutClass, PSEUDO_DISABLED, PSEUDO_FOCUSED,
-    PSEUDO_HOVER, PSEUDO_PRESSED, TYPE_PANEL, TYPE_SCROLL_VIEW, ThemeKeys, Widget, WidgetArena,
-    WidgetHandle,
+    BuiltInProperties, Color, Element, ElementId, PSEUDO_DISABLED, PSEUDO_FOCUSED, PSEUDO_HOVER,
+    PSEUDO_PRESSED, TYPE_SCROLL_VIEW, ThemeKeys, Widget, WidgetArena, WidgetHandle,
+    built_in_styles::BuiltInStyles,
 };
 
 /// Border styling for one resolved element.
@@ -98,6 +100,7 @@ impl SceneSnapshot {
         registry: &PropertyRegistry,
         props: &BuiltInProperties,
         theme: &Theme,
+        built_in_styles: &BuiltInStyles,
         widget_arena: &WidgetArena,
         text: &mut TextEngine,
     ) -> (Self, Vec<(ElementId, f64, f64)>) {
@@ -111,6 +114,7 @@ impl SceneSnapshot {
             registry,
             props,
             theme,
+            built_in_styles,
             widget_arena,
             text,
             tree: &mut tree,
@@ -197,6 +201,7 @@ struct SceneBuilder<'a> {
     registry: &'a PropertyRegistry,
     props: &'a BuiltInProperties,
     theme: &'a Theme,
+    built_in_styles: &'a BuiltInStyles,
     widget_arena: &'a WidgetArena,
     text: &'a mut TextEngine,
     tree: &'a mut Tree,
@@ -519,10 +524,8 @@ impl<'a> SceneBuilder<'a> {
         let cx = ResolveCx::new(self.registry, self.theme, lookup);
         let pseudos = build_pseudos(element);
         let inputs = element.selector_inputs(&pseudos);
-        let widget_ref = element.widget.and_then(|h| self.widget_arena.get(h));
-        let background_key = widget_ref
-            .and_then(|w| w.background_key(element))
-            .or_else(|| default_background_key(element));
+        let built_in_style = self.built_in_styles.for_element(element);
+        let combined_style = compose_style_cascades(built_in_style, element.style.as_ref());
         let foreground_key = Some(ThemeKeys::FOREGROUND);
         let border_key = Some(ThemeKeys::BORDER_COLOR);
         let radius_key = Some(ThemeKeys::CORNER_RADIUS);
@@ -536,105 +539,109 @@ impl<'a> SceneBuilder<'a> {
         } else {
             None
         };
-        let height_key = widget_ref.and_then(|w| w.height_key());
 
         let mut resolved = ResolvedStyle {
-            width: cx.get_value(element, &inputs, self.props.width, element.style.as_ref()),
+            width: cx.get_value(element, &inputs, self.props.width, combined_style.as_ref()),
             height: cx.get_value_with_theme(
                 element,
                 &inputs,
                 self.props.height,
-                element.style.as_ref(),
-                height_key,
+                combined_style.as_ref(),
+                None,
             ),
             padding: cx.get_value_with_theme(
                 element,
                 &inputs,
                 self.props.padding,
-                element.style.as_ref(),
+                combined_style.as_ref(),
                 padding_key,
             ),
             gap: cx.get_value_with_theme(
                 element,
                 &inputs,
                 self.props.gap,
-                element.style.as_ref(),
+                combined_style.as_ref(),
                 gap_key,
             ),
             background: cx.get_value_with_theme(
                 element,
                 &inputs,
                 self.props.background,
-                element.style.as_ref(),
-                background_key,
+                combined_style.as_ref(),
+                None,
             ),
             foreground: cx.get_value_with_theme(
                 element,
                 &inputs,
                 self.props.foreground,
-                element.style.as_ref(),
+                combined_style.as_ref(),
                 foreground_key,
             ),
             border_color: cx.get_value_with_theme(
                 element,
                 &inputs,
                 self.props.border_color,
-                element.style.as_ref(),
+                combined_style.as_ref(),
                 border_key,
             ),
             border_width: cx.get_value(
                 element,
                 &inputs,
                 self.props.border_width,
-                element.style.as_ref(),
+                combined_style.as_ref(),
             ),
             corner_radius: cx.get_value_with_theme(
                 element,
                 &inputs,
                 self.props.corner_radius,
-                element.style.as_ref(),
+                combined_style.as_ref(),
                 radius_key,
             ),
-            visible: cx.get_value(element, &inputs, self.props.visible, element.style.as_ref()),
+            visible: cx.get_value(
+                element,
+                &inputs,
+                self.props.visible,
+                combined_style.as_ref(),
+            ),
             pickable: cx.get_value(
                 element,
                 &inputs,
                 self.props.pickable,
-                element.style.as_ref(),
+                combined_style.as_ref(),
             ),
             focusable: cx.get_value(
                 element,
                 &inputs,
                 self.props.focusable,
-                element.style.as_ref(),
+                combined_style.as_ref(),
             ),
-            fill: cx.get_value(element, &inputs, self.props.fill, element.style.as_ref()),
+            fill: cx.get_value(element, &inputs, self.props.fill, combined_style.as_ref()),
             font_size: cx.get_value_with_theme(
                 element,
                 &inputs,
                 self.props.font_size,
-                element.style.as_ref(),
+                combined_style.as_ref(),
                 Some(ThemeKeys::FONT_SIZE),
             ),
             label_padding: cx.get_value_with_theme(
                 element,
                 &inputs,
                 self.props.label_padding,
-                element.style.as_ref(),
+                combined_style.as_ref(),
                 Some(ThemeKeys::LABEL_PADDING),
             ),
             font_family: cx.get_value_with_theme(
                 element,
                 &inputs,
                 self.props.font_family,
-                element.style.as_ref(),
+                combined_style.as_ref(),
                 Some(ThemeKeys::FONT_FAMILY),
             ),
             text_align: cx.get_value_with_theme(
                 element,
                 &inputs,
                 self.props.text_align,
-                element.style.as_ref(),
+                combined_style.as_ref(),
                 Some(ThemeKeys::TEXT_ALIGN),
             ),
         };
@@ -741,17 +748,22 @@ fn inset_rect(rect: Rect, inset: f64) -> Rect {
     )
 }
 
-/// Default background resource key for elements without a widget-provided one.
-fn default_background_key(element: &Element) -> Option<ResourceKey> {
-    if element.is_root {
-        Some(ThemeKeys::ROOT_BACKGROUND)
-    } else if element.type_tag == TYPE_PANEL {
-        if element.classes.contains(LayoutClass::Sidebar.class_id()) {
-            Some(ThemeKeys::SIDEBAR_BACKGROUND)
-        } else {
-            Some(ThemeKeys::PANEL_BACKGROUND)
+fn compose_style_cascades(
+    widget_style: Option<&StyleCascade>,
+    element_style: Option<&StyleCascade>,
+) -> Option<StyleCascade> {
+    let mut builder = StyleCascadeBuilder::new();
+    let mut any = false;
+
+    for cascade in [widget_style, element_style].into_iter().flatten() {
+        for source in cascade.sources() {
+            any = true;
+            builder = match source {
+                StyleSource::Style { origin, style } => builder.push_style(*origin, style.clone()),
+                StyleSource::Sheet { origin, sheet } => builder.push_sheet(*origin, sheet.clone()),
+            };
         }
-    } else {
-        None
     }
+
+    any.then(|| builder.build())
 }

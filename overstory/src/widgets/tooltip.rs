@@ -103,9 +103,5 @@ impl Widget for TooltipWidget {
         ));
     }
 
-    fn background_key(&self, _element: &crate::Element) -> Option<understory_style::ResourceKey> {
-        Some(crate::ThemeKeys::BUTTON_BACKGROUND)
-    }
-
     crate::impl_widget_any!();
 }

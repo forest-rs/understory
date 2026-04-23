@@ -5,14 +5,12 @@
 
 use alloc::vec::Vec;
 
+use crate::{Element, ElementId, ResolvedElement, Widget, content_box};
 use cursor_icon::CursorIcon;
 use kurbo::Size;
 use peniko::{Brush, Color};
 use ui_events::pointer::PointerEvent;
 use understory_display::{DisplayAlign, DisplayNode};
-use understory_style::ResourceKey;
-
-use crate::{Element, ElementId, ResolvedElement, ThemeKeys, Widget, content_box};
 
 /// Axis/orientation for a splitter handle.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
@@ -266,16 +264,6 @@ impl Widget for SplitterWidget {
                 true
             }
             _ => false,
-        }
-    }
-
-    fn background_key(&self, element: &Element) -> Option<ResourceKey> {
-        if element.pseudos.pressed {
-            Some(ThemeKeys::SPLITTER_ACTIVE_BACKGROUND)
-        } else if element.pseudos.hovered {
-            Some(ThemeKeys::SPLITTER_HOVER_BACKGROUND)
-        } else {
-            None
         }
     }
 
