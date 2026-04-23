@@ -246,6 +246,7 @@ impl Widget for TextInput {
         &mut self,
         id: ElementId,
         event: &KeyboardEvent,
+        _ctx: &mut crate::KeyboardEventCtx<'_>,
         text: &mut TextEngine,
         batch: &mut InteractionBatch,
     ) -> bool {

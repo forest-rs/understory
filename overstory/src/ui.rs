@@ -518,10 +518,23 @@ impl Ui {
         let Some(focused) = self.runtime.focused else {
             return batch;
         };
+        self.rebuild_with(text);
         if let Some(handle) = self.elements.get(focused.index()).and_then(|e| e.widget)
-            && let Some(widget) = self.widget_arena.get_mut(handle)
+            && let Some(scene) = self.scene.as_ref()
         {
-            let handled = widget.keyboard_event(focused, event, text, &mut batch);
+            let resolved_slice = scene.resolved();
+            let mut ctx = crate::KeyboardEventCtx::new(
+                focused,
+                &mut self.elements,
+                &self.registry,
+                &self.props,
+                &mut self.dirty,
+                resolved_slice,
+            );
+            let Some(widget) = self.widget_arena.get_mut(handle) else {
+                return batch;
+            };
+            let handled = widget.keyboard_event(focused, event, &mut ctx, text, &mut batch);
             if handled {
                 self.mark_dirty(DirtyChannels::LAYOUT.into_set() | DirtyChannels::PAINT.into_set());
             }
@@ -1152,6 +1165,7 @@ mod tests {
     use super::*;
     use crate::PSEUDO_HOVER;
     use cursor_icon::CursorIcon;
+    use ui_events::keyboard::{Code, Key, KeyState, KeyboardEvent, Location, Modifiers, NamedKey};
     use ui_events::pointer::{
         PointerButtonEvent, PointerButtons, PointerId, PointerInfo, PointerState, PointerType,
         PointerUpdate,
@@ -1429,6 +1443,107 @@ mod tests {
     }
 
     #[test]
+    fn clicking_splitter_sets_keyboard_focus() {
+        let mut ui = Ui::new(default_theme());
+        let (left, splitter, _right, center) = splitter_test_row(&mut ui);
+
+        let _ = left;
+        let _ = ui.handle_pointer_event(&PointerEvent::Move(PointerUpdate {
+            pointer: primary_pointer(),
+            current: pointer_state(center.x, center.y, 1),
+            coalesced: Vec::new(),
+            predicted: Vec::new(),
+        }));
+        let _ = ui.handle_pointer_event(&PointerEvent::Down(PointerButtonEvent {
+            button: Some(PointerButton::Primary),
+            pointer: primary_pointer(),
+            state: pointer_state(center.x, center.y, 2),
+        }));
+        let up_batch = ui.handle_pointer_event(&PointerEvent::Up(PointerButtonEvent {
+            button: Some(PointerButton::Primary),
+            pointer: primary_pointer(),
+            state: pointer_state(center.x, center.y, 3),
+        }));
+
+        assert_eq!(ui.runtime.focused, Some(splitter));
+        assert!(
+            up_batch
+                .events()
+                .contains(&Interaction::FocusChanged(splitter))
+        );
+    }
+
+    #[test]
+    fn focused_splitter_uses_focused_style() {
+        let mut ui = Ui::new(default_theme());
+        let (_left, splitter, _right, center) = splitter_test_row(&mut ui);
+
+        let _ = ui.handle_pointer_event(&PointerEvent::Move(PointerUpdate {
+            pointer: primary_pointer(),
+            current: pointer_state(center.x, center.y, 1),
+            coalesced: Vec::new(),
+            predicted: Vec::new(),
+        }));
+        let _ = ui.handle_pointer_event(&PointerEvent::Down(PointerButtonEvent {
+            button: Some(PointerButton::Primary),
+            pointer: primary_pointer(),
+            state: pointer_state(center.x, center.y, 2),
+        }));
+        let _ = ui.handle_pointer_event(&PointerEvent::Up(PointerButtonEvent {
+            button: Some(PointerButton::Primary),
+            pointer: primary_pointer(),
+            state: pointer_state(center.x, center.y, 3),
+        }));
+
+        let theme_focused = *ui
+            .theme()
+            .get(ThemeKeys::DIVIDER_BACKGROUND_EMPHASIZED)
+            .expect("focused divider background in theme");
+        let scene = ui.rebuild();
+        let resolved = scene.resolved_element(splitter).expect("splitter resolved");
+        assert_eq!(resolved.background, theme_focused);
+    }
+
+    #[test]
+    fn focused_splitter_resizes_from_arrow_keys() {
+        let mut ui = Ui::new(default_theme());
+        let (left, _splitter, _right, center) = splitter_test_row(&mut ui);
+
+        let _ = ui.handle_pointer_event(&PointerEvent::Move(PointerUpdate {
+            pointer: primary_pointer(),
+            current: pointer_state(center.x, center.y, 1),
+            coalesced: Vec::new(),
+            predicted: Vec::new(),
+        }));
+        let _ = ui.handle_pointer_event(&PointerEvent::Down(PointerButtonEvent {
+            button: Some(PointerButton::Primary),
+            pointer: primary_pointer(),
+            state: pointer_state(center.x, center.y, 2),
+        }));
+        let _ = ui.handle_pointer_event(&PointerEvent::Up(PointerButtonEvent {
+            button: Some(PointerButton::Primary),
+            pointer: primary_pointer(),
+            state: pointer_state(center.x, center.y, 3),
+        }));
+
+        let right_arrow = KeyboardEvent {
+            key: Key::Named(NamedKey::ArrowRight),
+            code: Code::Unidentified,
+            state: KeyState::Down,
+            modifiers: Modifiers::empty(),
+            location: Location::Standard,
+            repeat: false,
+            is_composing: false,
+        };
+        let batch = ui.handle_keyboard_event(&right_arrow);
+        assert!(batch.is_empty());
+
+        let scene = ui.rebuild();
+        let left_rect = scene.resolved_element(left).expect("left resolved").rect;
+        assert_eq!(left_rect.width(), 188.0);
+    }
+
+    #[test]
     fn splitter_drag_updates_leading_pane_width() {
         let mut ui = Ui::new(default_theme());
         ui.set_view_rect(Rect::new(0.0, 0.0, 640.0, 240.0));
@@ -1497,6 +1612,46 @@ mod tests {
         assert_eq!(splitter_rect.x0, left_rect.x1);
         assert_eq!(right_rect.x0, splitter_rect.x1);
         assert!(right_rect.width() >= 220.0);
+    }
+
+    fn splitter_test_row(ui: &mut Ui) -> (ElementId, ElementId, ElementId, Point) {
+        ui.set_view_rect(Rect::new(0.0, 0.0, 640.0, 240.0));
+        ui.set_local(ui.root(), ui.properties().padding, 0.0);
+        ui.set_local(ui.root(), ui.properties().gap, 0.0);
+
+        let row = ui.append_child(ui.root(), TYPE_ROW);
+        ui.set_local(row, ui.properties().padding, 0.0);
+        ui.set_local(row, ui.properties().gap, 0.0);
+        ui.set_local(row, ui.properties().width, 640.0);
+        ui.set_local(row, ui.properties().height, 240.0);
+
+        let left = ui.append_child(row, TYPE_PANEL);
+        ui.set_local(left, ui.properties().width, 180.0);
+        ui.set_local(left, ui.properties().height, 240.0);
+
+        let splitter = ui.append_child_with(
+            row,
+            TYPE_SPLITTER,
+            Some(Box::new(
+                crate::widgets::Splitter::vertical(left)
+                    .with_min_primary(140.0)
+                    .with_min_secondary(220.0),
+            )),
+        );
+        ui.set_local(splitter, ui.properties().width, 14.0);
+        ui.set_local(splitter, ui.properties().height, 240.0);
+
+        let right = ui.append_child(row, TYPE_PANEL);
+        ui.set_local(right, ui.properties().fill, true);
+        ui.set_local(right, ui.properties().height, 240.0);
+
+        let scene = ui.rebuild();
+        let center = scene
+            .resolved_element(splitter)
+            .expect("splitter resolved")
+            .rect
+            .center();
+        (left, splitter, right, center)
     }
 
     #[test]

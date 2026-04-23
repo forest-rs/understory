@@ -9,6 +9,7 @@ use crate::{Element, ElementId, ResolvedElement, Widget, content_box};
 use cursor_icon::CursorIcon;
 use kurbo::Size;
 use peniko::{Brush, Color};
+use ui_events::keyboard::{KeyboardEvent, Modifiers, NamedKey};
 use ui_events::pointer::PointerEvent;
 use understory_display::{DisplayAlign, DisplayNode, TextEngine};
 
@@ -202,6 +203,53 @@ impl Splitter {
             SplitterAxis::Horizontal => ctx.set_local(target, props.height, extent),
         }
     }
+
+    fn apply_primary_extent_keyboard(
+        &self,
+        target: ElementId,
+        extent: f64,
+        ctx: &mut crate::KeyboardEventCtx<'_>,
+    ) {
+        let props = ctx.properties();
+        match self.axis {
+            SplitterAxis::Vertical => ctx.set_local(target, props.width, extent),
+            SplitterAxis::Horizontal => ctx.set_local(target, props.height, extent),
+        }
+    }
+
+    fn clamped_primary_extent_from_value(
+        &self,
+        current_primary: f64,
+        splitter_extent: f64,
+        parent_extent: f64,
+    ) -> f64 {
+        let max_primary = (parent_extent - splitter_extent - self.min_secondary).max(0.0);
+        let min_primary = self.min_primary.min(max_primary);
+        current_primary.clamp(min_primary, max_primary)
+    }
+
+    fn keyboard_delta(&self, event: &KeyboardEvent) -> Option<f64> {
+        let magnitude = if event.modifiers.contains(Modifiers::SHIFT) {
+            24.0
+        } else {
+            8.0
+        };
+        match (self.axis, &event.key) {
+            (SplitterAxis::Vertical, ui_events::keyboard::Key::Named(NamedKey::ArrowLeft)) => {
+                Some(-magnitude)
+            }
+            (SplitterAxis::Vertical, ui_events::keyboard::Key::Named(NamedKey::ArrowRight)) => {
+                Some(magnitude)
+            }
+            (SplitterAxis::Horizontal, ui_events::keyboard::Key::Named(NamedKey::ArrowUp)) => {
+                Some(-magnitude)
+            }
+            (SplitterAxis::Horizontal, ui_events::keyboard::Key::Named(NamedKey::ArrowDown)) => {
+                Some(magnitude)
+            }
+            _ => None,
+        }
+    }
 }
 
 impl Widget for Splitter {
@@ -269,7 +317,57 @@ impl Widget for Splitter {
         }
     }
 
+    fn keyboard_event(
+        &mut self,
+        id: ElementId,
+        event: &KeyboardEvent,
+        ctx: &mut crate::KeyboardEventCtx<'_>,
+        _text: &mut TextEngine,
+        _batch: &mut crate::InteractionBatch,
+    ) -> bool {
+        if !event.state.is_down() {
+            return false;
+        }
+        let Some(delta) = self.keyboard_delta(event) else {
+            return false;
+        };
+        let Some(target) = self.target else {
+            return false;
+        };
+        let Some(target_resolved) = ctx.resolved_element(target) else {
+            return false;
+        };
+        let Some(parent) = ctx.parent(id) else {
+            return false;
+        };
+        let Some(parent_rect) = ctx.rect(parent) else {
+            return false;
+        };
+        let Some(splitter_rect) = ctx.rect(id) else {
+            return false;
+        };
+        let current_primary = match self.axis {
+            SplitterAxis::Vertical => target_resolved.rect.width(),
+            SplitterAxis::Horizontal => target_resolved.rect.height(),
+        };
+        let signed_delta = match self.side {
+            SplitterSide::Leading => delta,
+            SplitterSide::Trailing => -delta,
+        };
+        let next_primary = self.clamped_primary_extent_from_value(
+            current_primary + signed_delta,
+            axis_extent(self.axis, splitter_rect),
+            axis_extent(self.axis, parent_rect),
+        );
+        self.apply_primary_extent_keyboard(target, next_primary, ctx);
+        true
+    }
+
     fn default_pickable(&self) -> bool {
+        true
+    }
+
+    fn default_focusable(&self) -> bool {
         true
     }
 

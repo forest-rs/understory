@@ -77,6 +77,26 @@ impl core::fmt::Debug for PointerEventCtx<'_> {
     }
 }
 
+/// Narrow mutation/read context for widget keyboard handlers.
+pub struct KeyboardEventCtx<'a> {
+    dispatch_id: ElementId,
+    elements: &'a mut [Element],
+    registry: &'a PropertyRegistry,
+    props: &'a BuiltInProperties,
+    dirty: &'a mut ChannelSet,
+    resolved: &'a [ResolvedElement],
+}
+
+impl core::fmt::Debug for KeyboardEventCtx<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("KeyboardEventCtx")
+            .field("dispatch_id", &self.dispatch_id)
+            .field("elements", &self.elements.len())
+            .field("resolved", &self.resolved.len())
+            .finish_non_exhaustive()
+    }
+}
+
 impl<'a> PointerEventCtx<'a> {
     pub(crate) fn new(
         dispatch_id: ElementId,
@@ -162,6 +182,76 @@ impl<'a> PointerEventCtx<'a> {
     }
 }
 
+impl<'a> KeyboardEventCtx<'a> {
+    pub(crate) fn new(
+        dispatch_id: ElementId,
+        elements: &'a mut [Element],
+        registry: &'a PropertyRegistry,
+        props: &'a BuiltInProperties,
+        dirty: &'a mut ChannelSet,
+        resolved: &'a [ResolvedElement],
+    ) -> Self {
+        Self {
+            dispatch_id,
+            elements,
+            registry,
+            props,
+            dirty,
+            resolved,
+        }
+    }
+
+    /// Returns the dispatching element id.
+    #[must_use]
+    pub const fn dispatch_id(&self) -> ElementId {
+        self.dispatch_id
+    }
+
+    /// Returns the built-in property handles.
+    #[must_use]
+    pub const fn properties(&self) -> &BuiltInProperties {
+        self.props
+    }
+
+    /// Returns one retained element by id.
+    #[must_use]
+    pub fn element(&self, id: ElementId) -> Option<&Element> {
+        self.elements.get(id.index())
+    }
+
+    /// Returns the parent id of one element, if any.
+    #[must_use]
+    pub fn parent(&self, id: ElementId) -> Option<ElementId> {
+        self.element(id)?.parent()
+    }
+
+    /// Returns one resolved element from the current scene snapshot.
+    #[must_use]
+    pub fn resolved_element(&self, id: ElementId) -> Option<&ResolvedElement> {
+        self.resolved.iter().find(|element| element.id == id)
+    }
+
+    /// Returns the resolved rectangle for one element, if present.
+    #[must_use]
+    pub fn rect(&self, id: ElementId) -> Option<Rect> {
+        Some(self.resolved_element(id)?.rect)
+    }
+
+    /// Sets one local property value on an element and accumulates dirty channels.
+    pub fn set_local<T>(&mut self, id: ElementId, property: Property<T>, value: T)
+    where
+        T: Clone + PartialEq + 'static,
+    {
+        let Some(element) = self.elements.get_mut(id.index()) else {
+            return;
+        };
+        let affected = element.set_local_notifying(property, value, self.registry);
+        if !affected.is_empty() {
+            *self.dirty |= affected;
+        }
+    }
+}
+
 /// Builds a text display node from a resolved element's label and style.
 ///
 /// This is the shared helper for all widgets that render text labels.
@@ -244,6 +334,7 @@ pub trait Widget {
         &mut self,
         _id: ElementId,
         _event: &ui_events::keyboard::KeyboardEvent,
+        _ctx: &mut KeyboardEventCtx<'_>,
         _text: &mut TextEngine,
         _batch: &mut InteractionBatch,
     ) -> bool {
