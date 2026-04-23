@@ -1,10 +1,10 @@
 // Copyright 2026 the Understory Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use alloc::{boxed::Box, format, string::String, vec::Vec};
+use alloc::{format, string::String, vec::Vec};
 
 use hashbrown::HashMap;
-use overstory::{Color, ElementId, MessageClass, TextBlock, Ui};
+use overstory::{Color, ElementId, MessageClass, Row, Spinner, TextBlock, Ui};
 use understory_transcript::{
     AnnotationLevel, EntryBody, EntryId, EntryKind, EntryStatus, MessageRole, Transcript,
     TranscriptEntry,
@@ -172,27 +172,22 @@ impl TranscriptViewController {
     }
 
     fn append_row(&self, ui: &mut Ui) -> TranscriptRowIds {
-        let row = ui.append_child(self.scroll_view, overstory::TYPE_ROW);
-        ui.set_local(row, ui.properties().padding, 0.0);
-        ui.set_local(row, ui.properties().gap, self.style.row_gap);
-        ui.set_local(row, ui.properties().background, Color::TRANSPARENT);
-
-        let spinner = ui.append_child_with(
-            row,
-            overstory::TYPE_SPINNER,
-            Some(Box::new(overstory::widgets::Spinner::new(
-                self.style.spinner_size,
-            ))),
+        let row = ui.append(
+            self.scroll_view,
+            Row::new()
+                .padding(0.0)
+                .gap(self.style.row_gap)
+                .background(Color::TRANSPARENT),
         );
-        ui.set_local(spinner, ui.properties().visible, false);
 
-        let text = ui.append_child(row, overstory::TYPE_TEXT_BLOCK);
-        ui.set_local(text, ui.properties().label_padding, self.style.row_padding);
-        ui.set_local(text, ui.properties().padding, self.style.row_padding);
-        ui.set_local(
-            text,
-            ui.properties().corner_radius,
-            self.style.row_corner_radius,
+        let spinner = ui.append(row, Spinner::new(self.style.spinner_size).visible(false));
+
+        let text = ui.append(
+            row,
+            TextBlock::new()
+                .label_padding(self.style.row_padding)
+                .padding(self.style.row_padding)
+                .corner_radius(self.style.row_corner_radius),
         );
 
         TranscriptRowIds { row, text, spinner }

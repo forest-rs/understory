@@ -21,8 +21,8 @@ use imaging_vello_hybrid::VelloHybridRenderer;
 use kurbo::Rect;
 use overstory::peniko::color::palette;
 use overstory::{
-    Button, ButtonClass, Color, DockPaneController, DockPaneIds, DockPaneStyle, ElementId,
-    Interaction, LayoutClass, Splitter, TextBlock, TextInput, ThemeKeys, Tooltip, Ui,
+    Button, Color, Column, Divider, DockPaneController, DockPaneIds, DockPaneStyle, ElementId,
+    Interaction, Panel, Row, ScrollView, Splitter, TextBlock, TextInput, ThemeKeys, Tooltip, Ui,
     default_theme,
 };
 use overstory_transcript::TranscriptViewController;
@@ -1657,19 +1657,14 @@ fn build_demo_ui() -> (Ui, DemoIds) {
 
     let button_cascade = make_button_cascade(&ui);
 
-    let shell = ui.append_child(ui.root(), overstory::TYPE_ROW);
-    ui.set_local(shell, ui.properties().padding, 0.0);
-    ui.set_local(shell, ui.properties().gap, 0.0);
+    let shell = ui.append(ui.root(), Row::new().padding(0.0).gap(0.0));
 
-    let sidebar = ui.append_child(shell, overstory::TYPE_PANEL);
-    ui.add_layout_class(sidebar, LayoutClass::Sidebar);
-    ui.set_local(sidebar, ui.properties().width, 176.0);
-    ui.set_local(sidebar, ui.properties().padding, 16.0);
-    ui.set_local(sidebar, ui.properties().gap, 10.0);
+    let sidebar = ui.append(
+        shell,
+        Panel::new().sidebar().width(176.0).padding(16.0).gap(10.0),
+    );
 
-    let sidebar_column = ui.append_child(sidebar, overstory::TYPE_COLUMN);
-    ui.set_local(sidebar_column, ui.properties().padding, 0.0);
-    ui.set_local(sidebar_column, ui.properties().gap, 10.0);
+    let sidebar_column = ui.append(sidebar, Column::new().padding(0.0).gap(10.0));
 
     let light = append_button(
         &mut ui,
@@ -1688,59 +1683,41 @@ fn build_demo_ui() -> (Ui, DemoIds) {
     let roomy = append_button(&mut ui, sidebar_column, &button_cascade, "Roomy", false);
     let compact = append_button(&mut ui, sidebar_column, &button_cascade, "Compact", false);
 
-    let splitter = ui.append_child_with(
+    let splitter = ui.append(
         shell,
-        overstory::TYPE_SPLITTER,
-        Some(Box::new(
-            overstory::widgets::Splitter::vertical(sidebar)
-                .with_min_primary(152.0)
-                .with_min_secondary(340.0),
-        )),
+        Splitter::vertical(sidebar)
+            .with_min_primary(152.0)
+            .with_min_secondary(340.0)
+            .width(16.0),
     );
-    ui.set_local(splitter, ui.properties().width, 16.0);
 
-    let content = ui.append_child(shell, overstory::TYPE_PANEL);
-    ui.set_local(content, ui.properties().fill, true);
-    ui.set_local(content, ui.properties().padding, 18.0);
-    ui.set_local(content, ui.properties().gap, 12.0);
+    let content = ui.append(shell, Panel::new().fill().padding(18.0).gap(12.0));
 
-    let inspector_splitter = ui.append_child_with(
+    let inspector_splitter = ui.append(
         shell,
-        overstory::TYPE_SPLITTER,
-        Some(Box::new(
-            overstory::widgets::Splitter::default()
-                .with_min_primary(260.0)
-                .with_min_secondary(420.0),
-        )),
+        Splitter::default()
+            .with_min_primary(260.0)
+            .with_min_secondary(420.0)
+            .width(16.0),
     );
-    ui.set_local(inspector_splitter, ui.properties().width, 16.0);
 
-    let inspector_panel = ui.append_child(shell, overstory::TYPE_PANEL);
-    ui.set_local(
-        inspector_panel,
-        ui.properties().width,
-        current_inspector_width(true),
+    let inspector_panel = ui.append(
+        shell,
+        Panel::new()
+            .width(current_inspector_width(true))
+            .padding(18.0)
+            .gap(12.0),
     );
-    ui.set_local(inspector_panel, ui.properties().padding, 18.0);
-    ui.set_local(inspector_panel, ui.properties().gap, 12.0);
     if let Some(splitter) = ui.widget_mut::<Splitter>(inspector_splitter) {
         splitter.set_side(overstory::widgets::SplitterSide::Trailing);
         splitter.set_target(inspector_panel);
     }
 
-    let content_column = ui.append_child(content, overstory::TYPE_COLUMN);
-    ui.set_local(content_column, ui.properties().padding, 0.0);
-    ui.set_local(content_column, ui.properties().gap, 12.0);
-    ui.set_local(content_column, ui.properties().fill, true);
+    let content_column = ui.append(content, Column::new().padding(0.0).gap(12.0).fill());
 
-    let inspector_column = ui.append_child(inspector_panel, overstory::TYPE_COLUMN);
-    ui.set_local(inspector_column, ui.properties().padding, 0.0);
-    ui.set_local(inspector_column, ui.properties().gap, 10.0);
-    ui.set_local(inspector_column, ui.properties().fill, true);
+    let inspector_column = ui.append(inspector_panel, Column::new().padding(0.0).gap(10.0).fill());
 
-    let inspector_header = ui.append_child(inspector_column, overstory::TYPE_ROW);
-    ui.set_local(inspector_header, ui.properties().padding, 0.0);
-    ui.set_local(inspector_header, ui.properties().gap, 8.0);
+    let inspector_header = ui.append(inspector_column, Row::new().padding(0.0).gap(8.0));
 
     let inspector_toggle = append_button(
         &mut ui,
@@ -1751,82 +1728,83 @@ fn build_demo_ui() -> (Ui, DemoIds) {
     );
     ui.set_local(inspector_toggle, ui.properties().width, 112.0);
 
-    let inspector_tree_label = ui.append_child(inspector_column, overstory::TYPE_TEXT_BLOCK);
-    set_text_block_text(&mut ui, inspector_tree_label, "Element Tree");
-    ui.set_local(inspector_tree_label, ui.properties().font_size, 11.0);
-    ui.set_local(inspector_tree_label, ui.properties().label_padding, 2.0);
-
-    let inspector_tree = ui.append_child(inspector_column, overstory::TYPE_SCROLL_VIEW);
-    ui.set_local(inspector_tree, ui.properties().fill, true);
-    ui.set_local(inspector_tree, ui.properties().padding, 4.0);
-    ui.set_local(inspector_tree, ui.properties().gap, 0.0);
-    ui.set_local(
-        inspector_tree,
-        ui.properties().background,
-        Color::TRANSPARENT,
+    let inspector_tree_label = ui.append(
+        inspector_column,
+        TextBlock::new()
+            .with_text("Element Tree")
+            .font_size(11.0)
+            .label_padding(2.0),
     );
 
-    let _ = ui.append_child(inspector_column, overstory::TYPE_DIVIDER);
+    let inspector_tree = ui.append(
+        inspector_column,
+        ScrollView::new()
+            .fill()
+            .padding(4.0)
+            .gap(0.0)
+            .background(Color::TRANSPARENT),
+    );
 
-    let inspector_props_label = ui.append_child(inspector_column, overstory::TYPE_TEXT_BLOCK);
-    set_text_block_text(&mut ui, inspector_props_label, "Properties");
-    ui.set_local(inspector_props_label, ui.properties().font_size, 11.0);
-    ui.set_local(inspector_props_label, ui.properties().label_padding, 2.0);
+    let _ = ui.append(inspector_column, Divider::default());
 
-    let inspector_props = ui.append_child(inspector_column, overstory::TYPE_SCROLL_VIEW);
-    ui.set_local(inspector_props, ui.properties().height, 220.0);
-    ui.set_local(inspector_props, ui.properties().padding, 4.0);
-    ui.set_local(inspector_props, ui.properties().gap, 0.0);
-    ui.set_local(
-        inspector_props,
-        ui.properties().background,
-        Color::TRANSPARENT,
+    let inspector_props_label = ui.append(
+        inspector_column,
+        TextBlock::new()
+            .with_text("Properties")
+            .font_size(11.0)
+            .label_padding(2.0),
+    );
+
+    let inspector_props = ui.append(
+        inspector_column,
+        ScrollView::new()
+            .height(220.0)
+            .padding(4.0)
+            .gap(0.0)
+            .background(Color::TRANSPARENT),
     );
 
     // Action button row at the top of the content area.
-    let button_row = ui.append_child(content_column, overstory::TYPE_ROW);
-    ui.set_local(button_row, ui.properties().padding, 0.0);
-    ui.set_local(button_row, ui.properties().gap, 8.0);
+    let button_row = ui.append(content_column, Row::new().padding(0.0).gap(8.0));
 
     let search = append_button(&mut ui, button_row, &button_cascade, "Search", false);
-    ui.set_local(search, ui.properties().fill, true);
     let settings = append_button(&mut ui, button_row, &button_cascade, "Settings", false);
-    ui.set_local(settings, ui.properties().fill, true);
     let deploy = append_button(&mut ui, button_row, &button_cascade, "Deploy", true);
-    ui.set_local(deploy, ui.properties().fill, true);
-    ui.set_local(deploy, ui.properties().foreground, palette::css::WHITE);
 
     // Tooltip on the Deploy button — shows on hover, positioned below trigger.
-    let tooltip = ui.append_child_with(
+    let _tooltip = ui.append(
         ui.root(),
-        overstory::TYPE_TOOLTIP,
-        Some(Box::new(overstory::widgets::Tooltip::new(deploy))),
+        Tooltip::new(deploy)
+            .with_text("Ships to production")
+            .height(28.0)
+            .width(150.0)
+            .corner_radius(4.0)
+            .border_width(1.0),
     );
-    set_tooltip_text(&mut ui, tooltip, "Ships to production");
-    ui.set_local(tooltip, ui.properties().height, 28.0);
-    ui.set_local(tooltip, ui.properties().width, 150.0);
-    ui.set_local(tooltip, ui.properties().corner_radius, 4.0);
-    ui.set_local(tooltip, ui.properties().border_width, 1.0);
 
     // Scrollable message area demonstrating ScrollView + TextBlock.
-    let messages = ui.append_child(content_column, overstory::TYPE_SCROLL_VIEW);
-    ui.set_local(messages, ui.properties().fill, true);
-    ui.set_local(messages, ui.properties().padding, 12.0);
-    ui.set_local(messages, ui.properties().gap, 10.0);
-    ui.set_local(messages, ui.properties().background, Color::TRANSPARENT);
+    let messages = ui.append(
+        content_column,
+        ScrollView::new()
+            .fill()
+            .padding(12.0)
+            .gap(10.0)
+            .background(Color::TRANSPARENT),
+    );
 
     // Messages are populated from the transcript via DemoApp::sync_messages.
 
-    let _ = ui.append_child(content_column, overstory::TYPE_DIVIDER);
+    let _ = ui.append(content_column, Divider::default());
 
     // Text input at the bottom.
-    let input = ui.append_child(content_column, overstory::TYPE_TEXT_INPUT);
-    ui.set_local(input, ui.properties().padding, 8.0);
-    ui.set_local(input, ui.properties().border_width, 1.0);
-    ui.set_local(input, ui.properties().corner_radius, 6.0);
-    if let Some(w) = ui.widget_mut::<TextInput>(input) {
-        w.set_placeholder("Type a message... (Cmd+Enter to send)");
-    }
+    let input = ui.append(
+        content_column,
+        TextInput::new(16.0)
+            .padding(8.0)
+            .border_width(1.0)
+            .corner_radius(6.0)
+            .placeholder("Type a message... (Cmd+Enter to send)"),
+    );
 
     (
         ui,
@@ -1885,6 +1863,7 @@ fn format_color(color: Color) -> String {
     format!("#{:02x}{:02x}{:02x}{:02x}", rgba.r, rgba.g, rgba.b, rgba.a)
 }
 
+#[cfg(test)]
 fn set_button_text(ui: &mut Ui, id: ElementId, text: impl Into<Box<str>>) {
     ui.widget_mut::<Button>(id)
         .expect("element should host a Button widget")
@@ -1894,12 +1873,6 @@ fn set_button_text(ui: &mut Ui, id: ElementId, text: impl Into<Box<str>>) {
 fn set_text_block_text(ui: &mut Ui, id: ElementId, text: impl Into<Box<str>>) {
     ui.widget_mut::<TextBlock>(id)
         .expect("element should host a TextBlock widget")
-        .set_text(text);
-}
-
-fn set_tooltip_text(ui: &mut Ui, id: ElementId, text: impl Into<Box<str>>) {
-    ui.widget_mut::<Tooltip>(id)
-        .expect("element should host a Tooltip widget")
         .set_text(text);
 }
 
@@ -2801,15 +2774,15 @@ fn append_button(
     label: &str,
     primary: bool,
 ) -> ElementId {
-    let button = ui.append_child(parent, overstory::TYPE_BUTTON);
-    set_button_text(ui, button, label);
-    ui.set_style(button, cascade.clone());
-    ui.set_local(button, ui.properties().height, 42.0);
+    let mut button = Button::new()
+        .with_text(label)
+        .style(cascade.clone())
+        .height(42.0)
+        .fill();
     if primary {
-        ui.add_button_class(button, ButtonClass::Primary);
-        ui.set_local(button, ui.properties().foreground, palette::css::WHITE);
+        button = button.primary().foreground(palette::css::WHITE);
     }
-    button
+    ui.append(parent, button)
 }
 
 fn make_button_cascade(ui: &Ui) -> StyleCascade {
