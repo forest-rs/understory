@@ -10,7 +10,7 @@ use cursor_icon::CursorIcon;
 use kurbo::Size;
 use peniko::{Brush, Color};
 use ui_events::pointer::PointerEvent;
-use understory_display::{DisplayAlign, DisplayNode};
+use understory_display::{DisplayAlign, DisplayNode, TextEngine};
 
 /// Axis/orientation for a splitter handle.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
@@ -227,7 +227,7 @@ impl Widget for SplitterWidget {
         event: &PointerEvent,
         resolved: &ResolvedElement,
         ctx: &mut crate::PointerEventCtx<'_>,
-        _text: &mut crate::TextServices<'_>,
+        _text: &mut TextEngine,
         _batch: &mut crate::InteractionBatch,
     ) -> bool {
         let Some(target) = self.target else {

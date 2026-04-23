@@ -460,10 +460,10 @@ impl Ui {
 
     /// Clears the text buffer for a `TextInput` element.
     pub fn clear_text_buffer(&mut self, id: ElementId) {
-        self.with_text_services(|ui, text| ui.clear_text_buffer_with(id, text));
+        self.with_text_engine(|ui, text| ui.clear_text_buffer_with(id, text));
     }
 
-    fn clear_text_buffer_with(&mut self, id: ElementId, text: &mut crate::TextServices<'_>) {
+    fn clear_text_buffer_with(&mut self, id: ElementId, text: &mut TextEngine) {
         if let Some(w) = self.widget_mut::<crate::widgets::TextInputWidget>(id) {
             w.clear(text);
             self.mark_dirty(DirtyChannels::LAYOUT.into_set() | DirtyChannels::PAINT.into_set());
@@ -477,13 +477,13 @@ impl Ui {
         &mut self,
         event: &ui_events::keyboard::KeyboardEvent,
     ) -> InteractionBatch {
-        self.with_text_services(|ui, text| ui.handle_keyboard_event_with(event, text))
+        self.with_text_engine(|ui, text| ui.handle_keyboard_event_with(event, text))
     }
 
     fn handle_keyboard_event_with(
         &mut self,
         event: &ui_events::keyboard::KeyboardEvent,
-        text: &mut crate::TextServices<'_>,
+        text: &mut TextEngine,
     ) -> InteractionBatch {
         let mut batch = InteractionBatch::default();
         let Some(focused) = self.runtime.focused else {
@@ -505,10 +505,10 @@ impl Ui {
     /// Tooltips become visible when their trigger element is hovered and
     /// are positioned below the trigger's resolved rect.
     pub fn update_tooltips(&mut self) {
-        self.with_text_services(|ui, text| ui.update_tooltips_with(text));
+        self.with_text_engine(|ui, text| ui.update_tooltips_with(text));
     }
 
-    fn update_tooltips_with(&mut self, text: &mut crate::TextServices<'_>) {
+    fn update_tooltips_with(&mut self, text: &mut TextEngine) {
         // Collect tooltip info: (tooltip_id, trigger_id).
         let tooltips: Vec<(ElementId, ElementId)> = self
             .elements
@@ -563,10 +563,10 @@ impl Ui {
     /// Refreshes widget layouts (e.g., text editor glyph positions) before
     /// cursor/selection geometry.
     pub fn refresh_editors(&mut self) {
-        self.with_text_services(|ui, text| ui.refresh_editors_with(text));
+        self.with_text_engine(|ui, text| ui.refresh_editors_with(text));
     }
 
-    fn refresh_editors_with(&mut self, text: &mut crate::TextServices<'_>) {
+    fn refresh_editors_with(&mut self, text: &mut TextEngine) {
         for (_handle, widget) in self.widget_arena.iter_mut() {
             widget.refresh_layout(text);
         }
@@ -574,11 +574,11 @@ impl Ui {
 
     /// Rebuilds the resolved scene if needed and returns the current snapshot.
     pub fn rebuild(&mut self) -> &SceneSnapshot {
-        self.with_text_services(|ui, text| ui.rebuild_with(text));
+        self.with_text_engine(|ui, text| ui.rebuild_with(text));
         self.scene.as_ref().expect("scene just rebuilt")
     }
 
-    fn rebuild_with(&mut self, text: &mut crate::TextServices<'_>) {
+    fn rebuild_with(&mut self, text: &mut TextEngine) {
         if self.scene.is_none() || !self.dirty.is_empty() {
             let (snapshot, scroll_metrics) = SceneSnapshot::build(
                 &self.elements,
@@ -589,7 +589,7 @@ impl Ui {
                 &self.theme,
                 &self.built_in_styles,
                 &self.widget_arena,
-                text.engine_mut(),
+                text,
             );
             let mut needs_rebuild = false;
             for (id, content_h, viewport_h) in &scroll_metrics {
@@ -611,7 +611,7 @@ impl Ui {
                     &self.theme,
                     &self.built_in_styles,
                     &self.widget_arena,
-                    text.engine_mut(),
+                    text,
                 );
                 self.scene = Some(snapshot);
             } else {
@@ -712,13 +712,13 @@ impl Ui {
 
     /// Handles one pointer event from `ui-events`.
     pub fn handle_pointer_event(&mut self, event: &PointerEvent) -> InteractionBatch {
-        self.with_text_services(|ui, text| ui.handle_pointer_event_with(event, text))
+        self.with_text_engine(|ui, text| ui.handle_pointer_event_with(event, text))
     }
 
     fn handle_pointer_event_with(
         &mut self,
         event: &PointerEvent,
-        text: &mut crate::TextServices<'_>,
+        text: &mut TextEngine,
     ) -> InteractionBatch {
         let mut batch = InteractionBatch::default();
         self.rebuild_with(text);
@@ -849,7 +849,7 @@ impl Ui {
         &mut self,
         id: ElementId,
         event: &PointerEvent,
-        text: &mut crate::TextServices<'_>,
+        text: &mut TextEngine,
         batch: &mut InteractionBatch,
     ) -> bool {
         let Some(scene) = self.scene.as_ref() else {
@@ -912,12 +912,7 @@ impl Ui {
         self.mark_dirty(DirtyChannels::LAYOUT.into_set() | DirtyChannels::PAINT.into_set());
     }
 
-    fn update_hover(
-        &mut self,
-        point: Point,
-        batch: &mut InteractionBatch,
-        text: &mut crate::TextServices<'_>,
-    ) {
+    fn update_hover(&mut self, point: Point, batch: &mut InteractionBatch, text: &mut TextEngine) {
         self.rebuild_with(text);
         let path = self
             .scene
@@ -975,18 +970,12 @@ impl Ui {
         self.mark_dirty(DirtyChannels::LAYOUT.into_set() | DirtyChannels::PAINT.into_set());
     }
 
-    fn with_text_services<R>(
-        &mut self,
-        f: impl FnOnce(&mut Self, &mut crate::TextServices<'_>) -> R,
-    ) -> R {
+    fn with_text_engine<R>(&mut self, f: impl FnOnce(&mut Self, &mut TextEngine) -> R) -> R {
         let mut text = self
             .text
             .take()
             .expect("Ui text engine should always be present");
-        let result = {
-            let mut text_services = crate::TextServices::new(&mut text);
-            f(self, &mut text_services)
-        };
+        let result = f(self, &mut text);
         self.text = Some(text);
         result
     }
