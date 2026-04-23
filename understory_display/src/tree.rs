@@ -799,9 +799,7 @@ fn layout_node(
             node.layout = DisplayLayout { rect, bounds };
         }
         DisplayNodeKind::Text(display_text) => {
-            let max_advance = display_text
-                .max_width
-                .or_else(|| max_advance(size.width));
+            let max_advance = display_text.max_width.or_else(|| max_advance(size.width));
             display_text.ensure_shaped(text, max_advance);
             let text_bounds = union_run_bounds(&display_text.runs).unwrap_or(Rect::ZERO);
             let delta = origin - text_bounds.origin();

@@ -35,10 +35,7 @@ impl Message {
     }
 
     /// Create an assistant message that includes tool calls.
-    pub fn assistant_with_tools(
-        content: Option<String>,
-        tool_calls: Vec<ToolCallMessage>,
-    ) -> Self {
+    pub fn assistant_with_tools(content: Option<String>, tool_calls: Vec<ToolCallMessage>) -> Self {
         Self {
             role: "assistant".into(),
             content,
@@ -245,8 +242,8 @@ pub fn send_streaming(
             {
                 // Emit any accumulated tool calls.
                 for (id, name, args) in &tool_calls {
-                    let input: serde_json::Value = serde_json::from_str(args)
-                        .unwrap_or(serde_json::Value::Null);
+                    let input: serde_json::Value =
+                        serde_json::from_str(args).unwrap_or(serde_json::Value::Null);
                     let _ = tx.send(StreamEvent::ToolCall {
                         id: id.clone(),
                         name: name.clone(),
