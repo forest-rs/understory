@@ -5,9 +5,9 @@
 
 use alloc::vec::Vec;
 
+use cursor_icon::CursorIcon;
 use peniko::Brush;
 use understory_display::{DisplayAlign, DisplayNode, Insets};
-
 
 use understory_style::ResourceKey;
 
@@ -15,7 +15,6 @@ use crate::{
     ButtonClass, Element, ElementId, ResolvedElement, ThemeKeys, Widget, content_box,
     text_label_node,
 };
-
 
 /// Interactive push button widget with horizontally padded, vertically
 /// centered label text.
@@ -71,6 +70,10 @@ impl Widget for ButtonWidget {
 
     fn default_focusable(&self) -> bool {
         true
+    }
+
+    fn cursor_icon(&self, _element: &Element) -> Option<CursorIcon> {
+        Some(CursorIcon::Pointer)
     }
 
     crate::impl_widget_any!();

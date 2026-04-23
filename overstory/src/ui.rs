@@ -6,6 +6,7 @@
 use alloc::{boxed::Box, vec::Vec};
 use core::num::NonZeroU64;
 
+use cursor_icon::CursorIcon;
 use invalidation::ChannelSet;
 use kurbo::{Point, Rect};
 use peniko::Color;
@@ -106,6 +107,16 @@ impl Ui {
     #[must_use]
     pub fn view_rect(&self) -> Rect {
         self.view_rect
+    }
+
+    /// Returns the current cursor hint from the active hover or press target.
+    #[must_use]
+    pub fn cursor_icon(&self) -> Option<CursorIcon> {
+        let target = self
+            .runtime
+            .pressed_target
+            .or_else(|| self.runtime.hover.current_path().last().copied())?;
+        self.cursor_icon_for(target)
     }
 
     /// Sets the current view rectangle and marks layout/paint dirty.
@@ -803,6 +814,21 @@ impl Ui {
         widget.handle_pointer_event(id, event, &resolved, &mut ctx, text, batch)
     }
 
+    fn cursor_icon_for(&self, id: ElementId) -> Option<CursorIcon> {
+        let mut current = Some(id);
+        while let Some(id) = current {
+            let element = self.elements.get(id.index())?;
+            if let Some(handle) = element.widget
+                && let Some(widget) = self.widget_arena.get(handle)
+                && let Some(icon) = widget.cursor_icon(element)
+            {
+                return Some(icon);
+            }
+            current = element.parent();
+        }
+        None
+    }
+
     fn mark_dirty(&mut self, channels: ChannelSet) {
         self.dirty |= channels;
     }
@@ -1004,6 +1030,7 @@ fn scroll_delta_y(delta: ui_events::ScrollDelta) -> f64 {
 mod tests {
     use super::*;
     use crate::PSEUDO_HOVER;
+    use cursor_icon::CursorIcon;
     use ui_events::pointer::{
         PointerButtonEvent, PointerButtons, PointerId, PointerInfo, PointerState, PointerType,
         PointerUpdate,
@@ -1144,6 +1171,117 @@ mod tests {
         );
         assert!(up_batch.events().contains(&Interaction::PressEnded(button)));
         assert!(up_batch.events().contains(&Interaction::Clicked(button)));
+    }
+
+    #[test]
+    fn splitter_hover_exposes_resize_cursor() {
+        let mut ui = Ui::new(default_theme());
+        ui.set_view_rect(Rect::new(0.0, 0.0, 640.0, 240.0));
+        ui.set_local(ui.root(), ui.properties().padding, 0.0);
+        ui.set_local(ui.root(), ui.properties().gap, 0.0);
+
+        let row = ui.append_child(ui.root(), TYPE_ROW);
+        ui.set_local(row, ui.properties().padding, 0.0);
+        ui.set_local(row, ui.properties().gap, 0.0);
+        ui.set_local(row, ui.properties().width, 640.0);
+        ui.set_local(row, ui.properties().height, 240.0);
+
+        let left = ui.append_child(row, TYPE_PANEL);
+        ui.set_local(left, ui.properties().width, 180.0);
+        ui.set_local(left, ui.properties().height, 240.0);
+
+        let splitter = ui.append_child_with(
+            row,
+            TYPE_SPLITTER,
+            Some(Box::new(crate::widgets::SplitterWidget::vertical(left))),
+        );
+        ui.set_local(splitter, ui.properties().width, 14.0);
+        ui.set_local(splitter, ui.properties().height, 240.0);
+
+        let right = ui.append_child(row, TYPE_PANEL);
+        ui.set_local(right, ui.properties().fill, true);
+        ui.set_local(right, ui.properties().height, 240.0);
+
+        let mut text = TextEngine::new();
+        let scene = ui.rebuild(&mut text);
+        let splitter_rect = scene.resolved_element(splitter).unwrap().rect;
+        let center = splitter_rect.center();
+
+        let _ = ui.handle_pointer_event(
+            &PointerEvent::Move(PointerUpdate {
+                pointer: primary_pointer(),
+                current: pointer_state(center.x, center.y, 1),
+                coalesced: Vec::new(),
+                predicted: Vec::new(),
+            }),
+            &mut text,
+        );
+
+        assert_eq!(ui.cursor_icon(), Some(CursorIcon::ColResize));
+    }
+
+    #[test]
+    fn pressed_splitter_keeps_resize_cursor() {
+        let mut ui = Ui::new(default_theme());
+        ui.set_view_rect(Rect::new(0.0, 0.0, 640.0, 240.0));
+        ui.set_local(ui.root(), ui.properties().padding, 0.0);
+        ui.set_local(ui.root(), ui.properties().gap, 0.0);
+
+        let row = ui.append_child(ui.root(), TYPE_ROW);
+        ui.set_local(row, ui.properties().padding, 0.0);
+        ui.set_local(row, ui.properties().gap, 0.0);
+        ui.set_local(row, ui.properties().width, 640.0);
+        ui.set_local(row, ui.properties().height, 240.0);
+
+        let left = ui.append_child(row, TYPE_PANEL);
+        ui.set_local(left, ui.properties().width, 180.0);
+        ui.set_local(left, ui.properties().height, 240.0);
+
+        let splitter = ui.append_child_with(
+            row,
+            TYPE_SPLITTER,
+            Some(Box::new(crate::widgets::SplitterWidget::vertical(left))),
+        );
+        ui.set_local(splitter, ui.properties().width, 14.0);
+        ui.set_local(splitter, ui.properties().height, 240.0);
+
+        let right = ui.append_child(row, TYPE_PANEL);
+        ui.set_local(right, ui.properties().fill, true);
+        ui.set_local(right, ui.properties().height, 240.0);
+
+        let mut text = TextEngine::new();
+        let scene = ui.rebuild(&mut text);
+        let splitter_rect = scene.resolved_element(splitter).unwrap().rect;
+        let center = splitter_rect.center();
+
+        let _ = ui.handle_pointer_event(
+            &PointerEvent::Move(PointerUpdate {
+                pointer: primary_pointer(),
+                current: pointer_state(center.x, center.y, 1),
+                coalesced: Vec::new(),
+                predicted: Vec::new(),
+            }),
+            &mut text,
+        );
+        let _ = ui.handle_pointer_event(
+            &PointerEvent::Down(PointerButtonEvent {
+                button: Some(PointerButton::Primary),
+                pointer: primary_pointer(),
+                state: pointer_state(center.x, center.y, 2),
+            }),
+            &mut text,
+        );
+        let _ = ui.handle_pointer_event(
+            &PointerEvent::Move(PointerUpdate {
+                pointer: primary_pointer(),
+                current: pointer_state(center.x + 20.0, center.y, 3),
+                coalesced: Vec::new(),
+                predicted: Vec::new(),
+            }),
+            &mut text,
+        );
+
+        assert_eq!(ui.cursor_icon(), Some(CursorIcon::ColResize));
     }
 
     #[test]

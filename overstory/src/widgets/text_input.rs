@@ -6,6 +6,7 @@
 use alloc::vec::Vec;
 use core::cell::Cell;
 
+use cursor_icon::CursorIcon;
 use kurbo::{Point, Rect, Vec2};
 use parley::PlainEditor;
 use peniko::{Brush, Color};
@@ -109,6 +110,29 @@ impl TextInputWidget {
         self.editor.set_text("");
         let (font_cx, layout_cx) = text.contexts();
         self.editor.driver(font_cx, layout_cx).move_to_text_start();
+    }
+
+    fn move_cursor_to_view_point(
+        &mut self,
+        point: Point,
+        resolved: &ResolvedElement,
+        text: &mut TextEngine,
+    ) {
+        let label_padding = resolved.label_padding;
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "Parley move_to_point takes f32; display coordinates are small."
+        )]
+        let local_x = (point.x - resolved.rect.x0 - label_padding) as f32;
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "Parley move_to_point takes f32; display coordinates are small."
+        )]
+        let local_y = (point.y - resolved.rect.y0 - label_padding) as f32;
+        let (font_cx, layout_cx) = text.contexts();
+        self.editor
+            .driver(font_cx, layout_cx)
+            .move_to_point(local_x, local_y);
     }
 }
 
@@ -324,21 +348,7 @@ impl Widget for TextInputWidget {
         };
         let point = button.state.logical_position();
         let point = Point::new(point.x, point.y);
-        let label_padding = resolved.label_padding;
-        #[allow(
-            clippy::cast_possible_truncation,
-            reason = "Parley move_to_point takes f32; display coordinates are small."
-        )]
-        let local_x = (point.x - resolved.rect.x0 - label_padding) as f32;
-        #[allow(
-            clippy::cast_possible_truncation,
-            reason = "Parley move_to_point takes f32; display coordinates are small."
-        )]
-        let local_y = (point.y - resolved.rect.y0 - label_padding) as f32;
-        let (font_cx, layout_cx) = text.contexts();
-        self.editor
-            .driver(font_cx, layout_cx)
-            .move_to_point(local_x, local_y);
+        self.move_cursor_to_view_point(point, resolved, text);
         true
     }
 
@@ -382,6 +392,10 @@ impl Widget for TextInputWidget {
         true
     }
 
+    fn cursor_icon(&self, _element: &Element) -> Option<CursorIcon> {
+        Some(CursorIcon::Text)
+    }
+
     crate::impl_widget_any!();
 }
 
@@ -393,13 +407,6 @@ mod tests {
     use crate::{BorderStyle, ElementId, MeasureCtx, ResolvedElement, TYPE_TEXT_INPUT};
     use kurbo::{Point, Rect};
     use peniko::Color;
-    use ui_events::{
-        keyboard::Modifiers,
-        pointer::{
-            ContactGeometry, PointerButton, PointerButtonEvent, PointerButtons, PointerEvent,
-            PointerId, PointerInfo, PointerOrientation, PointerState, PointerType,
-        },
-    };
     use understory_display::{DisplayNodeKind, TextAlign, TextEngine};
 
     fn resolved_text_input(rect: Rect, label: &str) -> ResolvedElement {
@@ -424,34 +431,6 @@ mod tests {
             scroll_offset: 0.0,
             widget: None,
         }
-    }
-
-    #[allow(
-        clippy::field_reassign_with_default,
-        reason = "PointerState does not expose a convenient public position constructor here."
-    )]
-    fn pointer_down(point: Point) -> PointerEvent {
-        let mut state = PointerState::default();
-        state.time = 1;
-        state.position.x = point.x;
-        state.position.y = point.y;
-        state.buttons = PointerButtons::new();
-        state.modifiers = Modifiers::empty();
-        state.count = 1;
-        state.contact_geometry = ContactGeometry::default();
-        state.orientation = PointerOrientation::default();
-        state.pressure = 0.0;
-        state.tangential_pressure = 0.0;
-        state.scale_factor = 1.0;
-        PointerEvent::Down(PointerButtonEvent {
-            button: Some(PointerButton::Primary),
-            pointer: PointerInfo {
-                pointer_id: Some(PointerId::PRIMARY),
-                persistent_device_id: None,
-                pointer_type: PointerType::Mouse,
-            },
-            state,
-        })
     }
 
     #[test]
@@ -483,9 +462,7 @@ mod tests {
     }
 
     #[test]
-    fn multiline_click_targets_second_line_with_padded_origin() {
-        use crate::TYPE_TEXT_INPUT;
-
+    fn move_cursor_to_view_point_targets_second_line_with_padded_origin() {
         let mut widget = TextInputWidget::new(16.0_f32);
         widget.editor.set_text("alpha\nbeta");
 
@@ -518,27 +495,7 @@ mod tests {
             resolved.rect.x0 + CONTENT_PADDING + 4.0,
             resolved.rect.y0 + CONTENT_PADDING + line_height + 1.0,
         );
-        let mut elements = [Element::new(resolved.id, None, TYPE_TEXT_INPUT)];
-        let mut registry = understory_property::PropertyRegistry::new();
-        let mut dirty = invalidation::ChannelSet::default();
-        let props = crate::BuiltInProperties::register(&mut registry);
-        let mut ctx = crate::PointerEventCtx::new(
-            &mut elements,
-            &registry,
-            &props,
-            &mut dirty,
-            core::slice::from_ref(&resolved),
-        );
-        let mut batch = InteractionBatch::default();
-        let handled = widget.handle_pointer_event(
-            resolved.id,
-            &pointer_down(click_point),
-            &resolved,
-            &mut ctx,
-            &mut text,
-            &mut batch,
-        );
-        assert!(handled);
+        widget.move_cursor_to_view_point(click_point, &resolved, &mut text);
         widget.refresh_layout(&mut text);
 
         let moved_cursor = widget

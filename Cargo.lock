@@ -1753,6 +1753,7 @@ dependencies = [
 name = "overstory"
 version = "0.1.0"
 dependencies = [
+ "cursor-icon",
  "hashbrown 0.16.1",
  "invalidation",
  "kurbo",

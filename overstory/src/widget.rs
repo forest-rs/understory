@@ -11,6 +11,7 @@
 use alloc::{boxed::Box, vec::Vec};
 use core::any::Any;
 
+use cursor_icon::CursorIcon;
 use invalidation::ChannelSet;
 use kurbo::{Rect, Size};
 use ui_events::pointer::PointerEvent;
@@ -285,6 +286,14 @@ pub trait Widget {
     /// Whether this widget makes its element focusable by default.
     fn default_focusable(&self) -> bool {
         false
+    }
+
+    /// Returns the cursor hint for this widget, if any.
+    ///
+    /// Called from the retained UI runtime for the active hover or pressed
+    /// target. Return `None` to leave the cursor unchanged.
+    fn cursor_icon(&self, _element: &Element) -> Option<CursorIcon> {
+        None
     }
 
     /// Request that this element be promoted to a separate compositor surface.

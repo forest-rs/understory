@@ -24,6 +24,7 @@ understory_responder = { path = "../understory_responder", default-features = fa
   "box_tree_adapter",
 ] }
 understory_style = { path = "../understory_style" }
+cursor-icon = "1.2.0"
 
 [lints]
 workspace = true

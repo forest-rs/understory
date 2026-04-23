@@ -1172,7 +1172,16 @@ impl DemoApp {
         };
         let interactions = self.ui.handle_pointer_event(&event, &mut self.text);
         self.apply_interactions(&interactions);
+        self.sync_window_cursor(window);
         window.request_redraw();
+    }
+
+    fn sync_window_cursor(&self, window: &Window) {
+        window.set_cursor(
+            self.ui
+                .cursor_icon()
+                .unwrap_or(overstory::CursorIcon::Default),
+        );
     }
 
     fn apply_interactions(&mut self, interactions: &overstory::InteractionBatch) {
@@ -1577,6 +1586,7 @@ impl ApplicationHandler for DemoApp {
         self.resize_ui(size, window.scale_factor());
         let blit = BlitPipeline::new(&device, surface_format);
         let renderer = VelloHybridRenderer::new(device.clone(), queue.clone());
+        self.sync_window_cursor(&window);
         window.request_redraw();
         self.render_state = RenderState::Active {
             window,

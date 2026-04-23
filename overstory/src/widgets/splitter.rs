@@ -5,6 +5,7 @@
 
 use alloc::vec::Vec;
 
+use cursor_icon::CursorIcon;
 use kurbo::Size;
 use peniko::{Brush, Color};
 use ui_events::pointer::PointerEvent;
@@ -280,6 +281,13 @@ impl Widget for SplitterWidget {
 
     fn default_pickable(&self) -> bool {
         true
+    }
+
+    fn cursor_icon(&self, _element: &Element) -> Option<CursorIcon> {
+        Some(match self.axis {
+            SplitterAxis::Vertical => CursorIcon::ColResize,
+            SplitterAxis::Horizontal => CursorIcon::RowResize,
+        })
     }
 
     crate::impl_widget_any!();
