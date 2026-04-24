@@ -8,11 +8,12 @@ use alloc::{boxed::Box, vec::Vec};
 use cursor_icon::CursorIcon;
 use kurbo::Size;
 use peniko::Brush;
+use ui_events::keyboard::{Key, KeyState, KeyboardEvent, NamedKey};
 use understory_display::{DisplayAlign, DisplayNode, Insets};
 
 use crate::{
-    AppendSpec, ButtonClass, Element, ElementId, MeasureCtx, MeasureStyle, ResolvedElement, Ui,
-    Widget, compose, content_box, text_label_node,
+    AppendSpec, ButtonClass, Element, ElementId, Interaction, InteractionBatch, KeyboardEventCtx,
+    MeasureCtx, MeasureStyle, ResolvedElement, Ui, Widget, compose, content_box, text_label_node,
 };
 
 /// Interactive push button widget with horizontally padded, vertically
@@ -20,6 +21,7 @@ use crate::{
 #[derive(Clone, Debug, Default)]
 pub struct Button {
     text: Box<str>,
+    space_armed: bool,
     mount: compose::ElementOptions,
 }
 
@@ -29,6 +31,7 @@ impl Button {
     pub fn new() -> Self {
         Self {
             text: Box::from(""),
+            space_armed: false,
             mount: compose::ElementOptions::default(),
         }
     }
@@ -150,6 +153,40 @@ impl Widget for Button {
             DisplayAlign::Center,
             Insets::symmetric(resolved.label_padding, 0.0),
         ));
+    }
+
+    fn keyboard_event(
+        &mut self,
+        id: ElementId,
+        event: &KeyboardEvent,
+        _ctx: &mut KeyboardEventCtx<'_>,
+        _text: &mut understory_display::TextEngine,
+        batch: &mut InteractionBatch,
+    ) -> bool {
+        match (&event.key, event.state) {
+            (Key::Named(NamedKey::Enter), KeyState::Down) if !event.repeat => {
+                batch.push(Interaction::PressStarted(id));
+                batch.push(Interaction::PressEnded(id));
+                batch.push(Interaction::Clicked(id));
+                true
+            }
+            (Key::Character(space), KeyState::Down) if !event.repeat && &**space == " " => {
+                if !self.space_armed {
+                    self.space_armed = true;
+                    batch.push(Interaction::PressStarted(id));
+                }
+                true
+            }
+            (Key::Character(space), KeyState::Up) if &**space == " " => {
+                if self.space_armed {
+                    self.space_armed = false;
+                    batch.push(Interaction::PressEnded(id));
+                    batch.push(Interaction::Clicked(id));
+                }
+                true
+            }
+            _ => false,
+        }
     }
 
     fn default_pickable(&self) -> bool {

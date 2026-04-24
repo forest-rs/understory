@@ -2068,6 +2068,65 @@ mod tests {
     }
 
     #[test]
+    fn focused_button_clicks_on_enter_keydown() {
+        let mut ui = Ui::new(default_theme());
+        ui.set_view_rect(Rect::new(0.0, 0.0, 240.0, 120.0));
+
+        let button = ui.append(ui.root(), crate::Button::new().with_text("Run"));
+        ui.set_focus(button);
+
+        let enter = KeyboardEvent {
+            key: Key::Named(NamedKey::Enter),
+            code: Code::Unidentified,
+            state: KeyState::Down,
+            modifiers: Modifiers::empty(),
+            location: Location::Standard,
+            repeat: false,
+            is_composing: false,
+        };
+
+        let batch = ui.handle_keyboard_event(&enter);
+        assert!(batch.events().contains(&Interaction::PressStarted(button)));
+        assert!(batch.events().contains(&Interaction::PressEnded(button)));
+        assert!(batch.events().contains(&Interaction::Clicked(button)));
+    }
+
+    #[test]
+    fn focused_button_clicks_on_space_keyup() {
+        let mut ui = Ui::new(default_theme());
+        ui.set_view_rect(Rect::new(0.0, 0.0, 240.0, 120.0));
+
+        let button = ui.append(ui.root(), crate::Button::new().with_text("Run"));
+        ui.set_focus(button);
+
+        let space_down = KeyboardEvent {
+            key: Key::Character(" ".into()),
+            code: Code::Unidentified,
+            state: KeyState::Down,
+            modifiers: Modifiers::empty(),
+            location: Location::Standard,
+            repeat: false,
+            is_composing: false,
+        };
+        let space_up = KeyboardEvent {
+            state: KeyState::Up,
+            ..space_down.clone()
+        };
+
+        let down_batch = ui.handle_keyboard_event(&space_down);
+        assert!(
+            down_batch
+                .events()
+                .contains(&Interaction::PressStarted(button))
+        );
+        assert!(!down_batch.events().contains(&Interaction::Clicked(button)));
+
+        let up_batch = ui.handle_keyboard_event(&space_up);
+        assert!(up_batch.events().contains(&Interaction::PressEnded(button)));
+        assert!(up_batch.events().contains(&Interaction::Clicked(button)));
+    }
+
+    #[test]
     fn arrow_navigation_moves_button_focus_when_widget_does_not_handle() {
         let mut ui = Ui::new(default_theme());
         ui.set_view_rect(Rect::new(0.0, 0.0, 320.0, 120.0));
