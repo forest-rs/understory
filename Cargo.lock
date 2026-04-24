@@ -1779,6 +1779,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "overstory_list"
+version = "0.1.0"
+dependencies = [
+ "overstory",
+]
+
+[[package]]
 name = "overstory_transcript"
 version = "0.1.0"
 dependencies = [
@@ -2704,6 +2711,7 @@ dependencies = [
  "kurbo",
  "overstory",
  "overstory_inspector",
+ "overstory_list",
  "overstory_transcript",
  "peniko",
  "pollster",
