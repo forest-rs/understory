@@ -8,10 +8,12 @@
 //! widgets own kind-specific state and behavior (event handling, custom
 //! layout, rendering).
 
-use alloc::{boxed::Box, vec::Vec};
+use alloc::{borrow::Cow, boxed::Box, vec::Vec};
 use core::any::Any;
 
-use crate::{BuiltInProperties, Element, ElementId, InteractionBatch, ResolvedElement};
+use crate::{
+    BuiltInProperties, Element, ElementId, InteractionBatch, ResolvedElement, SemanticRole,
+};
 use cursor_icon::CursorIcon;
 use invalidation::ChannelSet;
 use kurbo::{Rect, Size};
@@ -435,6 +437,26 @@ pub trait Widget {
     /// inline rendering.
     fn surface_role(&self) -> Option<crate::SurfaceRole> {
         None
+    }
+
+    /// Returns the semantic role for this widget.
+    fn semantic_role(&self) -> SemanticRole {
+        SemanticRole::Generic
+    }
+
+    /// Returns the semantic name for this widget, if available.
+    fn semantic_name(&self) -> Option<Cow<'_, str>> {
+        None
+    }
+
+    /// Returns the semantic value for this widget, if available.
+    fn semantic_value(&self) -> Option<Cow<'_, str>> {
+        None
+    }
+
+    /// Returns `true` when this widget should be exposed as busy.
+    fn semantic_busy(&self) -> bool {
+        false
     }
 
     /// Downcast to a concrete type for typed accessors.

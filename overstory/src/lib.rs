@@ -59,6 +59,7 @@ mod element;
 mod properties;
 mod runtime;
 mod scene;
+mod semantics;
 mod surface;
 mod timer;
 mod ui;
@@ -68,10 +69,10 @@ pub mod widgets;
 pub use compose::{AppendSpec, Column, Panel, Row, Spacer};
 pub use cursor_icon::{self, CursorIcon};
 pub use element::{
-    ButtonClass, Element, ElementId, LayoutClass, MessageClass, PSEUDO_DISABLED, PSEUDO_FOCUSED,
-    PSEUDO_HOVER, PSEUDO_PRESSED, PseudoState, TYPE_BUTTON, TYPE_COLUMN, TYPE_DIVIDER, TYPE_PANEL,
-    TYPE_ROOT, TYPE_ROW, TYPE_SCROLL_VIEW, TYPE_SPACER, TYPE_SPINNER, TYPE_SPLITTER,
-    TYPE_TEXT_BLOCK, TYPE_TEXT_INPUT, TYPE_TOOLTIP,
+    ButtonClass, Element, ElementId, LayoutClass, MessageClass, PSEUDO_DISABLED,
+    PSEUDO_FOCUS_VISIBLE, PSEUDO_FOCUSED, PSEUDO_HOVER, PSEUDO_PRESSED, PseudoState, TYPE_BUTTON,
+    TYPE_COLUMN, TYPE_DIVIDER, TYPE_PANEL, TYPE_ROOT, TYPE_ROW, TYPE_SCROLL_VIEW, TYPE_SPACER,
+    TYPE_SPINNER, TYPE_SPLITTER, TYPE_TEXT_BLOCK, TYPE_TEXT_INPUT, TYPE_TOOLTIP,
 };
 /// Re-export `peniko` so Overstory callers can use the shared color vocabulary
 /// and palettes without adding another direct dependency for basic styling.
@@ -80,6 +81,7 @@ pub use properties::{BuiltInProperties, DirtyChannels, ThemeKeys};
 pub(crate) use runtime::RuntimeState;
 pub use runtime::{Interaction, InteractionBatch};
 pub use scene::{BorderStyle, ResolvedElement, SceneSnapshot};
+pub use semantics::{SemanticInfo, SemanticRole, SemanticState};
 pub use surface::{
     AnchorKind, BlendModeHint, ExternalSurface, ExternalSurfaceKind, SurfaceAnchor, SurfaceContent,
     SurfaceEntry, SurfacePlan, SurfaceRole,

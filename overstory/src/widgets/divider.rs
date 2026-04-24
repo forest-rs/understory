@@ -5,7 +5,7 @@
 
 use kurbo::Size;
 
-use crate::{AppendSpec, ElementId, MeasureCtx, MeasureStyle, Ui, Widget, compose};
+use crate::{AppendSpec, ElementId, MeasureCtx, MeasureStyle, SemanticRole, Ui, Widget, compose};
 
 /// Orientation for a decorative divider.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
@@ -99,6 +99,10 @@ impl Widget for Divider {
         _ctx: &mut MeasureCtx<'_>,
     ) -> Option<Size> {
         Some(self.measured_size(available))
+    }
+
+    fn semantic_role(&self) -> SemanticRole {
+        SemanticRole::Separator
     }
 
     crate::impl_widget_any!();

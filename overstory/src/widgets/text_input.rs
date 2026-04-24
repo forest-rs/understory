@@ -3,6 +3,7 @@
 
 //! Text input widget backed by Parley's `PlainEditor`.
 
+use alloc::borrow::Cow;
 use alloc::vec::Vec;
 use core::cell::Cell;
 
@@ -16,7 +17,7 @@ use understory_display::{DisplayAlign, DisplayNode, Insets, TextEngine};
 
 use crate::{
     AppendSpec, Element, ElementId, Interaction, InteractionBatch, MeasureStyle, ResolvedElement,
-    Ui, Widget, compose, content_box, text_label_node, text_label_node_constrained,
+    SemanticRole, Ui, Widget, compose, content_box, text_label_node, text_label_node_constrained,
 };
 
 /// Label padding used for content box calculation in `measure`.
@@ -459,6 +460,14 @@ impl Widget for TextInput {
         Some(CursorIcon::Text)
     }
 
+    fn semantic_role(&self) -> SemanticRole {
+        SemanticRole::TextInput
+    }
+
+    fn semantic_value(&self) -> Option<Cow<'_, str>> {
+        Some(Cow::Borrowed(self.text()))
+    }
+
     crate::impl_widget_any!();
 }
 
@@ -468,7 +477,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        BorderStyle, ElementId, MeasureCtx, MeasureStyle, ResolvedElement, TYPE_TEXT_INPUT,
+        BorderStyle, ElementId, MeasureCtx, MeasureStyle, ResolvedElement, SemanticInfo,
+        TYPE_TEXT_INPUT,
     };
     use kurbo::{Point, Rect};
     use peniko::Color;
@@ -488,6 +498,8 @@ mod tests {
             hovered: false,
             pressed: false,
             focused: true,
+            focus_visible: true,
+            disabled: false,
             font_size: 16.0,
             label_padding: CONTENT_PADDING,
             font_family: Box::<str>::from("sans-serif"),
@@ -495,6 +507,7 @@ mod tests {
             clips_content: false,
             scroll_offset: 0.0,
             widget: None,
+            semantics: SemanticInfo::default(),
         }
     }
 

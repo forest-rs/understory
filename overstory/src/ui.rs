@@ -473,14 +473,30 @@ impl Ui {
     /// Sets keyboard focus to an element. Uses the current monotonic time
     /// (set via `set_now`) to start cursor blink timers.
     pub fn set_focus(&mut self, id: ElementId) {
+        self.set_focus_visible(id, true);
+    }
+
+    fn set_focus_visible(&mut self, id: ElementId, focus_visible: bool) {
         let now = self.now;
         if self.runtime.focused == Some(id) {
+            if let Some(element) = self.elements.get_mut(id.index()) {
+                element.pseudos.focus_visible = focus_visible;
+            }
+            self.mark_dirty(DirtyChannels::PAINT.into_set());
+            return;
+        }
+        if !self
+            .elements
+            .get(id.index())
+            .is_some_and(|element| element.get_effective_local(self.props.enabled, &self.registry))
+        {
             return;
         }
         // Stop blink on previously focused element.
         if let Some(prev) = self.runtime.focused.take() {
             if let Some(element) = self.elements.get_mut(prev.index()) {
                 element.pseudos.focused = false;
+                element.pseudos.focus_visible = false;
                 if self.runtime.pressed_target != Some(prev) {
                     element.pseudos.pressed = false;
                 }
@@ -495,6 +511,7 @@ impl Ui {
         self.runtime.focused = Some(id);
         if let Some(element) = self.elements.get_mut(id.index()) {
             element.pseudos.focused = true;
+            element.pseudos.focus_visible = focus_visible;
         }
         // Start blink on newly focused TextInput.
         if let Some(handle) = self.elements.get(id.index()).and_then(|e| e.widget)
@@ -565,6 +582,20 @@ impl Ui {
     ) -> InteractionBatch {
         let mut batch = InteractionBatch::default();
         self.rebuild_with(text);
+        if let Some(focused) = self.runtime.focused
+            && let Some(scene) = self.scene.as_ref()
+            && scene
+                .node_for(focused)
+                .and_then(|node| scene.box_tree().flags(node))
+                .is_none_or(|flags| !flags.contains(NodeFlags::FOCUSABLE))
+        {
+            self.runtime.focused = None;
+            if let Some(element) = self.elements.get_mut(focused.index()) {
+                element.pseudos.focused = false;
+                element.pseudos.focus_visible = false;
+                element.pseudos.pressed = false;
+            }
+        }
         let focused = self.runtime.focused;
         let mut handled = false;
         if let Some(focused) = focused
@@ -592,7 +623,7 @@ impl Ui {
             && let Some(navigation) = navigation_for_key_event(event)
             && let Some(next) = self.next_focus_target(navigation)
         {
-            self.set_focus(next);
+            self.set_focus_visible(next, true);
             batch.push(Interaction::FocusChanged(next));
         }
         batch
@@ -952,7 +983,7 @@ impl Ui {
                                 })
                                 .is_some_and(|f| f.contains(NodeFlags::FOCUSABLE));
                             if is_focusable {
-                                self.set_focus(id);
+                                self.set_focus_visible(id, false);
                                 batch.push(Interaction::FocusChanged(id));
                             }
                         }
@@ -1640,29 +1671,20 @@ mod tests {
                 .events()
                 .contains(&Interaction::FocusChanged(splitter))
         );
+        let scene = ui.rebuild();
+        assert!(
+            !scene
+                .resolved_element(splitter)
+                .expect("splitter resolved")
+                .focus_visible
+        );
     }
 
     #[test]
-    fn focused_splitter_uses_focused_style() {
+    fn focus_visible_splitter_uses_focus_visible_style() {
         let mut ui = Ui::new(default_theme());
-        let (_left, splitter, _right, center) = splitter_test_row(&mut ui);
-
-        let _ = ui.handle_pointer_event(&PointerEvent::Move(PointerUpdate {
-            pointer: primary_pointer(),
-            current: pointer_state(center.x, center.y, 1),
-            coalesced: Vec::new(),
-            predicted: Vec::new(),
-        }));
-        let _ = ui.handle_pointer_event(&PointerEvent::Down(PointerButtonEvent {
-            button: Some(PointerButton::Primary),
-            pointer: primary_pointer(),
-            state: pointer_state(center.x, center.y, 2),
-        }));
-        let _ = ui.handle_pointer_event(&PointerEvent::Up(PointerButtonEvent {
-            button: Some(PointerButton::Primary),
-            pointer: primary_pointer(),
-            state: pointer_state(center.x, center.y, 3),
-        }));
+        let (_left, splitter, _right, _center) = splitter_test_row(&mut ui);
+        ui.set_focus(splitter);
 
         let theme_focused = *ui
             .theme()
@@ -2259,6 +2281,7 @@ mod tests {
 
         assert_eq!(resolved.border.color, theme_focus_ring);
         assert_eq!(resolved.border.width, 2.0);
+        assert!(resolved.focus_visible);
     }
 
     #[test]
@@ -2278,5 +2301,73 @@ mod tests {
 
         assert_eq!(resolved.border.color, theme_focus_ring);
         assert_eq!(resolved.border.width, 2.0);
+        assert!(resolved.focus_visible);
+    }
+
+    #[test]
+    fn disabled_button_is_not_clickable_or_focusable() {
+        let mut ui = Ui::new(default_theme());
+        ui.set_view_rect(Rect::new(0.0, 0.0, 240.0, 120.0));
+
+        let button = ui.append(ui.root(), crate::Button::new().with_text("Disabled"));
+        ui.set_local(button, ui.properties().enabled, false);
+
+        let center = ui
+            .rebuild()
+            .resolved_element(button)
+            .expect("button resolved")
+            .rect
+            .center();
+
+        let _ = ui.handle_pointer_event(&PointerEvent::Move(PointerUpdate {
+            pointer: primary_pointer(),
+            current: pointer_state(center.x, center.y, 1),
+            coalesced: Vec::new(),
+            predicted: Vec::new(),
+        }));
+        let _ = ui.handle_pointer_event(&PointerEvent::Down(PointerButtonEvent {
+            button: Some(PointerButton::Primary),
+            pointer: primary_pointer(),
+            state: pointer_state(center.x, center.y, 2),
+        }));
+        let up_batch = ui.handle_pointer_event(&PointerEvent::Up(PointerButtonEvent {
+            button: Some(PointerButton::Primary),
+            pointer: primary_pointer(),
+            state: pointer_state(center.x, center.y, 3),
+        }));
+
+        assert!(!up_batch.events().contains(&Interaction::Clicked(button)));
+        assert_ne!(ui.runtime.focused, Some(button));
+        let resolved = ui
+            .rebuild()
+            .resolved_element(button)
+            .expect("button resolved");
+        assert!(resolved.disabled);
+        assert_eq!(resolved.semantics.role, crate::SemanticRole::Button);
+        assert!(resolved.semantics.state.disabled);
+    }
+
+    #[test]
+    fn resolved_semantics_expose_role_name_and_value() {
+        let mut ui = Ui::new(default_theme());
+        ui.set_view_rect(Rect::new(0.0, 0.0, 320.0, 160.0));
+
+        let button = ui.append(ui.root(), crate::Button::new().with_text("Save"));
+        let input = ui.append(ui.root(), crate::TextInput::new(16.0).with_text("hello"));
+
+        let scene = ui.rebuild();
+        let button_resolved = scene.resolved_element(button).expect("button resolved");
+        let input_resolved = scene.resolved_element(input).expect("input resolved");
+
+        assert_eq!(button_resolved.semantics.role, crate::SemanticRole::Button);
+        assert_eq!(button_resolved.semantics.name.as_deref(), Some("Save"));
+        assert_eq!(button_resolved.semantics.value.as_deref(), None);
+
+        assert_eq!(
+            input_resolved.semantics.role,
+            crate::SemanticRole::TextInput
+        );
+        assert_eq!(input_resolved.semantics.name.as_deref(), None);
+        assert_eq!(input_resolved.semantics.value.as_deref(), Some("hello"));
     }
 }

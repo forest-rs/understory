@@ -3,7 +3,9 @@
 
 //! Scroll view widget with vertical scroll offset and content tracking.
 
-use crate::{AppendSpec, ElementId, Ui, Widget, compose};
+use alloc::borrow::Cow;
+
+use crate::{AppendSpec, ElementId, SemanticRole, Ui, Widget, compose};
 use understory_display::TextEngine;
 
 /// Scrollable container widget that tracks scroll offset, content height,
@@ -123,6 +125,18 @@ impl Widget for ScrollView {
     }
 
     fn refresh_layout(&mut self, _text: &mut TextEngine) {}
+
+    fn semantic_role(&self) -> SemanticRole {
+        SemanticRole::ScrollArea
+    }
+
+    fn semantic_value(&self) -> Option<Cow<'_, str>> {
+        Some(Cow::Owned(alloc::format!(
+            "{:.0}/{:.0}",
+            self.scroll_offset,
+            self.content_height
+        )))
+    }
 
     crate::impl_widget_any!();
 }

@@ -3,7 +3,7 @@
 
 //! Button widget with centered text content.
 
-use alloc::{boxed::Box, vec::Vec};
+use alloc::{borrow::Cow, boxed::Box, vec::Vec};
 
 use cursor_icon::CursorIcon;
 use kurbo::Size;
@@ -13,7 +13,8 @@ use understory_display::{DisplayAlign, DisplayNode, Insets};
 
 use crate::{
     AppendSpec, ButtonClass, Element, ElementId, Interaction, InteractionBatch, KeyboardEventCtx,
-    MeasureCtx, MeasureStyle, ResolvedElement, Ui, Widget, compose, content_box, text_label_node,
+    MeasureCtx, MeasureStyle, ResolvedElement, SemanticRole, Ui, Widget, compose, content_box,
+    text_label_node,
 };
 
 /// Interactive push button widget with horizontally padded, vertically
@@ -203,6 +204,14 @@ impl Widget for Button {
 
     fn cursor_icon(&self, _element: &Element) -> Option<CursorIcon> {
         Some(CursorIcon::Pointer)
+    }
+
+    fn semantic_role(&self) -> SemanticRole {
+        SemanticRole::Button
+    }
+
+    fn semantic_name(&self) -> Option<Cow<'_, str>> {
+        self.text().map(Cow::Borrowed)
     }
 
     crate::impl_widget_any!();

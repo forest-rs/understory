@@ -112,10 +112,10 @@ pub struct PseudoState {
     pub hovered: bool,
     /// The element is the active press target.
     pub pressed: bool,
-    /// The element is disabled.
-    pub disabled: bool,
     /// The element has keyboard focus.
     pub focused: bool,
+    /// The element's focus should be visibly indicated.
+    pub focus_visible: bool,
 }
 
 /// Hover pseudo selector id.
@@ -126,6 +126,8 @@ pub const PSEUDO_PRESSED: PseudoClassId = PseudoClassId(2);
 pub const PSEUDO_DISABLED: PseudoClassId = PseudoClassId(3);
 /// Focused pseudo selector id.
 pub const PSEUDO_FOCUSED: PseudoClassId = PseudoClassId(4);
+/// Focus-visible pseudo selector id.
+pub const PSEUDO_FOCUS_VISIBLE: PseudoClassId = PseudoClassId(5);
 
 /// One retained element in the Overstory tree.
 #[derive(Clone)]

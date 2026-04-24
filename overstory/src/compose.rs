@@ -27,6 +27,7 @@ pub(crate) struct ElementOptions {
     pub(crate) gap: Option<f64>,
     pub(crate) fill: Option<bool>,
     pub(crate) visible: Option<bool>,
+    pub(crate) enabled: Option<bool>,
     pub(crate) background: Option<Color>,
     pub(crate) foreground: Option<Color>,
     pub(crate) border_width: Option<f64>,
@@ -138,6 +139,9 @@ pub(crate) fn apply_element_options(
     }
     if let Some(visible) = options.visible {
         ui.set_local(id, props.visible, visible);
+    }
+    if let Some(enabled) = options.enabled {
+        ui.set_local(id, props.enabled, enabled);
     }
     if let Some(background) = options.background {
         ui.set_local(id, props.background, background);

@@ -3,9 +3,12 @@
 
 //! Draggable splitter widget for resizing an adjacent pane.
 
+use alloc::borrow::Cow;
 use alloc::vec::Vec;
 
-use crate::{AppendSpec, Element, ElementId, ResolvedElement, Ui, Widget, compose, content_box};
+use crate::{
+    AppendSpec, Element, ElementId, ResolvedElement, SemanticRole, Ui, Widget, compose, content_box,
+};
 use cursor_icon::CursorIcon;
 use kurbo::Size;
 use peniko::{Brush, Color};
@@ -399,6 +402,18 @@ impl Widget for Splitter {
             SplitterAxis::Vertical => CursorIcon::ColResize,
             SplitterAxis::Horizontal => CursorIcon::RowResize,
         })
+    }
+
+    fn semantic_role(&self) -> SemanticRole {
+        SemanticRole::Splitter
+    }
+
+    fn semantic_value(&self) -> Option<Cow<'_, str>> {
+        let axis = match self.axis {
+            SplitterAxis::Vertical => "vertical",
+            SplitterAxis::Horizontal => "horizontal",
+        };
+        Some(Cow::Borrowed(axis))
     }
 
     crate::impl_widget_any!();

@@ -3,15 +3,15 @@
 
 //! Tooltip widget — promoted overlay surface with text content.
 
-use alloc::{boxed::Box, vec::Vec};
+use alloc::{borrow::Cow, boxed::Box, vec::Vec};
 
 use kurbo::Size;
 use peniko::Brush;
 use understory_display::{DisplayAlign, DisplayNode, Insets};
 
 use crate::{
-    AppendSpec, ElementId, MeasureCtx, MeasureStyle, ResolvedElement, SurfaceRole, Ui, Widget,
-    compose,
+    AppendSpec, ElementId, MeasureCtx, MeasureStyle, ResolvedElement, SemanticRole, SurfaceRole,
+    Ui, Widget, compose,
 };
 
 /// Tooltip-specific padding (tighter than the theme default).
@@ -189,6 +189,14 @@ impl Widget for Tooltip {
             DisplayAlign::Center,
             Insets::uniform(TOOLTIP_PADDING),
         ));
+    }
+
+    fn semantic_role(&self) -> SemanticRole {
+        SemanticRole::Tooltip
+    }
+
+    fn semantic_name(&self) -> Option<Cow<'_, str>> {
+        self.text().map(Cow::Borrowed)
     }
 
     crate::impl_widget_any!();

@@ -20,10 +20,10 @@ use understory_style::{
 };
 
 use crate::{
-    BuiltInProperties, ButtonClass, Element, LayoutClass, MessageClass, PSEUDO_FOCUSED,
-    PSEUDO_HOVER, PSEUDO_PRESSED, TYPE_BUTTON, TYPE_DIVIDER, TYPE_PANEL, TYPE_ROOT,
-    TYPE_SCROLL_VIEW, TYPE_SPINNER, TYPE_SPLITTER, TYPE_TEXT_BLOCK, TYPE_TEXT_INPUT, TYPE_TOOLTIP,
-    ThemeKeys,
+    BuiltInProperties, ButtonClass, Element, LayoutClass, MessageClass, PSEUDO_DISABLED,
+    PSEUDO_FOCUS_VISIBLE, PSEUDO_HOVER, PSEUDO_PRESSED, TYPE_BUTTON, TYPE_DIVIDER, TYPE_PANEL,
+    TYPE_ROOT, TYPE_SCROLL_VIEW, TYPE_SPINNER, TYPE_SPLITTER, TYPE_TEXT_BLOCK, TYPE_TEXT_INPUT,
+    TYPE_TOOLTIP, ThemeKeys,
 };
 
 #[derive(Clone, Debug)]
@@ -129,6 +129,9 @@ fn button_styles(props: &BuiltInProperties) -> StyleCascade {
     let focused = StyleBuilder::new()
         .set_resource(props.border_color, ThemeKeys::FOCUS_RING_COLOR)
         .build();
+    let disabled = StyleBuilder::new()
+        .set_resource(props.background, ThemeKeys::CONTROL_BACKGROUND_STRONG)
+        .build();
     let hover = StyleBuilder::new()
         .set_resource(props.background, ThemeKeys::CONTROL_BACKGROUND_EMPHASIZED)
         .build();
@@ -151,10 +154,15 @@ fn button_styles(props: &BuiltInProperties) -> StyleCascade {
         required_classes: IdSet::default(),
         required_pseudos: IdSet::from_ids([PSEUDO_HOVER]),
     };
-    let selector_focused = Selector {
+    let selector_focus_visible = Selector {
         type_tag: Some(TYPE_BUTTON),
         required_classes: IdSet::default(),
-        required_pseudos: IdSet::from_ids([PSEUDO_FOCUSED]),
+        required_pseudos: IdSet::from_ids([PSEUDO_FOCUS_VISIBLE]),
+    };
+    let selector_disabled = Selector {
+        type_tag: Some(TYPE_BUTTON),
+        required_classes: IdSet::default(),
+        required_pseudos: IdSet::from_ids([PSEUDO_DISABLED]),
     };
     let selector_pressed = Selector {
         type_tag: Some(TYPE_BUTTON),
@@ -178,7 +186,8 @@ fn button_styles(props: &BuiltInProperties) -> StyleCascade {
     };
 
     let sheet = StyleSheetBuilder::new()
-        .rule(selector_focused, focused)
+        .rule(selector_focus_visible, focused)
+        .rule(selector_disabled, disabled)
         .rule(selector_hover, hover)
         .rule(selector_pressed, pressed)
         .rule(selector_primary, primary)
@@ -230,10 +239,10 @@ fn splitter_styles(props: &BuiltInProperties) -> StyleCascade {
         required_classes: IdSet::default(),
         required_pseudos: IdSet::from_ids([PSEUDO_HOVER]),
     };
-    let selector_focused = Selector {
+    let selector_focus_visible = Selector {
         type_tag: Some(TYPE_SPLITTER),
         required_classes: IdSet::default(),
-        required_pseudos: IdSet::from_ids([PSEUDO_FOCUSED]),
+        required_pseudos: IdSet::from_ids([PSEUDO_FOCUS_VISIBLE]),
     };
     let selector_pressed = Selector {
         type_tag: Some(TYPE_SPLITTER),
@@ -242,7 +251,7 @@ fn splitter_styles(props: &BuiltInProperties) -> StyleCascade {
     };
 
     let sheet = StyleSheetBuilder::new()
-        .rule(selector_focused, focused)
+        .rule(selector_focus_visible, focused)
         .rule(selector_hover, hover)
         .rule(selector_pressed, pressed)
         .build();
@@ -276,10 +285,18 @@ fn text_input_styles(props: &BuiltInProperties) -> StyleCascade {
     let focused = StyleBuilder::new()
         .set_resource(props.border_color, ThemeKeys::FOCUS_RING_COLOR)
         .build();
-    let selector_focused = Selector {
+    let disabled = StyleBuilder::new()
+        .set_resource(props.background, ThemeKeys::SURFACE_MUTED_BACKGROUND)
+        .build();
+    let selector_focus_visible = Selector {
         type_tag: Some(TYPE_TEXT_INPUT),
         required_classes: IdSet::default(),
-        required_pseudos: IdSet::from_ids([PSEUDO_FOCUSED]),
+        required_pseudos: IdSet::from_ids([PSEUDO_FOCUS_VISIBLE]),
+    };
+    let selector_disabled = Selector {
+        type_tag: Some(TYPE_TEXT_INPUT),
+        required_classes: IdSet::default(),
+        required_pseudos: IdSet::from_ids([PSEUDO_DISABLED]),
     };
     StyleCascadeBuilder::new()
         .push_style(
@@ -294,7 +311,8 @@ fn text_input_styles(props: &BuiltInProperties) -> StyleCascade {
         .push_sheet(
             StyleOrigin::Sheet,
             StyleSheetBuilder::new()
-                .rule(selector_focused, focused)
+                .rule(selector_focus_visible, focused)
+                .rule(selector_disabled, disabled)
                 .build(),
         )
         .build()

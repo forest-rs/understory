@@ -3,6 +3,7 @@
 
 //! Timer-driven loading spinner widget.
 
+use alloc::borrow::Cow;
 use alloc::vec::Vec;
 use core::f64::consts::FRAC_1_SQRT_2;
 
@@ -11,8 +12,8 @@ use peniko::{Brush, Color};
 use understory_display::{DisplayAlign, DisplayNode, Insets};
 
 use crate::{
-    AppendSpec, ElementId, MeasureCtx, MeasureStyle, ResolvedElement, TimerId, TimerQueue, Ui,
-    Widget, compose, content_box,
+    AppendSpec, ElementId, MeasureCtx, MeasureStyle, ResolvedElement, SemanticRole, TimerId,
+    TimerQueue, Ui, Widget, compose, content_box,
 };
 
 const STEP_INTERVAL_NANOS: u64 = 90_000_000;
@@ -156,6 +157,18 @@ impl Widget for Spinner {
         if self.timer == Some(id) {
             self.phase = (self.phase + 1) % DOT_COUNT;
         }
+    }
+
+    fn semantic_role(&self) -> SemanticRole {
+        SemanticRole::ProgressIndicator
+    }
+
+    fn semantic_name(&self) -> Option<Cow<'_, str>> {
+        Some(Cow::Borrowed("Loading"))
+    }
+
+    fn semantic_busy(&self) -> bool {
+        self.is_running()
     }
 
     crate::impl_widget_any!();

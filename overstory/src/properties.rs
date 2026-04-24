@@ -126,6 +126,8 @@ pub struct BuiltInProperties {
     pub pickable: Property<bool>,
     /// Focusable toggle.
     pub focusable: Property<bool>,
+    /// Enabled/disabled toggle for interaction semantics.
+    pub enabled: Property<bool>,
     /// Initial focus preference when this element's focus space activates.
     pub autofocus: Property<bool>,
     /// Optional explicit focus traversal ordering key.
@@ -228,6 +230,17 @@ impl BuiltInProperties {
                 "Focusable",
                 PropertyMetadataBuilder::new(false)
                     .affects_channels(DirtyChannels::INTERACTION.into_set())
+                    .build(),
+            ),
+            enabled: registry.register(
+                "Enabled",
+                PropertyMetadataBuilder::new(true)
+                    .inherits(true)
+                    .affects_channels(
+                        DirtyChannels::INTERACTION.into_set()
+                            | DirtyChannels::LAYOUT.into_set()
+                            | DirtyChannels::PAINT.into_set(),
+                    )
                     .build(),
             ),
             autofocus: registry.register(

@@ -3,21 +3,24 @@
 
 //! Derived scene snapshot over the retained Overstory element tree.
 
-use alloc::{boxed::Box, vec, vec::Vec};
+use alloc::{borrow::Cow, boxed::Box, vec, vec::Vec};
 
 use hashbrown::HashMap;
 use kurbo::{Affine, Point, Rect};
 use understory_box_tree::{LocalNode, NodeFlags, NodeId, QueryFilter, Tree};
 use understory_display::{TextAlign, TextEngine};
-use understory_property::{PropertyRegistry, PropertyStore};
+use understory_property::{DependencyObjectExt, PropertyRegistry, PropertyStore};
 use understory_responder::adapters::box_tree::top_hit_for_point;
 use understory_style::{
     PseudoClassId, ResolveCx, StyleCascade, StyleCascadeBuilder, StyleSource, Theme, TypeTag,
 };
 
 use crate::{
-    BuiltInProperties, Color, Element, ElementId, PSEUDO_DISABLED, PSEUDO_FOCUSED, PSEUDO_HOVER,
-    PSEUDO_PRESSED, TYPE_SCROLL_VIEW, ThemeKeys, Widget, WidgetArena, WidgetHandle,
+    BuiltInProperties, Color, Element, ElementId, PSEUDO_DISABLED, PSEUDO_FOCUS_VISIBLE,
+    PSEUDO_FOCUSED, PSEUDO_HOVER, PSEUDO_PRESSED, SemanticInfo, SemanticRole, SemanticState,
+    TYPE_BUTTON, TYPE_COLUMN, TYPE_DIVIDER, TYPE_PANEL, TYPE_ROOT, TYPE_ROW, TYPE_SCROLL_VIEW,
+    TYPE_SPINNER, TYPE_SPLITTER, TYPE_TEXT_BLOCK, TYPE_TEXT_INPUT, TYPE_TOOLTIP, ThemeKeys, Widget,
+    WidgetArena, WidgetHandle,
     built_in_styles::BuiltInStyles,
     widget::{MeasureStyle, widget_text},
 };
@@ -67,6 +70,10 @@ pub struct ResolvedElement {
     pub pressed: bool,
     /// Focus state at snapshot time.
     pub focused: bool,
+    /// Focus-visible state at snapshot time.
+    pub focus_visible: bool,
+    /// Disabled state at snapshot time.
+    pub disabled: bool,
     /// Resolved font size for text content.
     pub font_size: f64,
     /// Resolved horizontal text padding.
@@ -81,6 +88,8 @@ pub struct ResolvedElement {
     pub scroll_offset: f64,
     /// Widget handle for delegating display to the widget.
     pub widget: Option<WidgetHandle>,
+    /// Resolved semantic snapshot for this element.
+    pub semantics: SemanticInfo,
 }
 
 /// Full resolved scene snapshot for one Overstory frame.
@@ -296,6 +305,8 @@ impl<'a> SceneBuilder<'a> {
             hovered: element.pseudos.hovered,
             pressed: element.pseudos.pressed,
             focused: element.pseudos.focused,
+            focus_visible: element.pseudos.focus_visible,
+            disabled: !style.enabled,
             font_size: style.font_size,
             label_padding: style.label_padding,
             font_family: style.font_family.clone(),
@@ -311,6 +322,7 @@ impl<'a> SceneBuilder<'a> {
                 0.0
             },
             widget: element.widget,
+            semantics: resolve_semantics(element, widget_ref, !style.enabled),
         });
 
         let is_scroll_view = element.widget.is_some() && element.type_tag == TYPE_SCROLL_VIEW;
@@ -589,7 +601,8 @@ impl<'a> SceneBuilder<'a> {
                 .map(|entry| (&entry.store, entry.parent))
         };
         let cx = ResolveCx::new(self.registry, self.theme, lookup);
-        let pseudos = build_pseudos(element);
+        let enabled = element.get_effective_local(self.props.enabled, self.registry);
+        let pseudos = build_pseudos(element, enabled);
         let inputs = element.selector_inputs(&pseudos);
         let built_in_style = self.built_in_styles.for_element(element);
         let combined_style = compose_style_cascades(built_in_style, element.style.as_ref());
@@ -670,6 +683,7 @@ impl<'a> SceneBuilder<'a> {
                 self.props.visible,
                 combined_style.as_ref(),
             ),
+            enabled,
             pickable: cx.get_value(
                 element,
                 &inputs,
@@ -744,6 +758,7 @@ struct ResolvedStyle {
     border_width: f64,
     corner_radius: f64,
     visible: bool,
+    enabled: bool,
     pickable: bool,
     focusable: bool,
     fill: bool,
@@ -770,10 +785,10 @@ impl ResolvedStyle {
 
     fn flags_for(&self, widget: Option<&dyn Widget>) -> NodeFlags {
         let mut flags = NodeFlags::VISIBLE;
-        if self.pickable || widget.is_some_and(|w| w.default_pickable()) {
+        if self.enabled && (self.pickable || widget.is_some_and(|w| w.default_pickable())) {
             flags |= NodeFlags::PICKABLE;
         }
-        if self.focusable || widget.is_some_and(|w| w.default_focusable()) {
+        if self.enabled && (self.focusable || widget.is_some_and(|w| w.default_focusable())) {
             flags |= NodeFlags::FOCUSABLE;
         }
         flags
@@ -793,21 +808,84 @@ impl LayoutSize {
     };
 }
 
-fn build_pseudos(element: &Element) -> Vec<PseudoClassId> {
-    let mut pseudos = Vec::with_capacity(3);
+fn build_pseudos(element: &Element, enabled: bool) -> Vec<PseudoClassId> {
+    let mut pseudos = Vec::with_capacity(5);
     if element.pseudos.hovered {
         pseudos.push(PSEUDO_HOVER);
     }
     if element.pseudos.pressed {
         pseudos.push(PSEUDO_PRESSED);
     }
-    if element.pseudos.disabled {
+    if !enabled {
         pseudos.push(PSEUDO_DISABLED);
     }
     if element.pseudos.focused {
         pseudos.push(PSEUDO_FOCUSED);
     }
+    if element.pseudos.focus_visible {
+        pseudos.push(PSEUDO_FOCUS_VISIBLE);
+    }
     pseudos
+}
+
+fn resolve_semantics(
+    element: &Element,
+    widget: Option<&dyn Widget>,
+    disabled: bool,
+) -> SemanticInfo {
+    let role = widget
+        .map(|widget| widget.semantic_role())
+        .unwrap_or_else(|| role_for_type_tag(element.type_tag()));
+    let name = widget
+        .and_then(|widget| widget.semantic_name())
+        .map(CowIntoBoxStr::into_box_str)
+        .or_else(|| element.display_name().map(Box::from));
+    let value = widget
+        .and_then(|widget| widget.semantic_value())
+        .map(CowIntoBoxStr::into_box_str);
+    let busy = widget.is_some_and(|widget| widget.semantic_busy());
+
+    SemanticInfo {
+        role,
+        name,
+        value,
+        state: SemanticState {
+            disabled,
+            focused: element.pseudos.focused,
+            focus_visible: element.pseudos.focus_visible,
+            hovered: element.pseudos.hovered,
+            pressed: element.pseudos.pressed,
+            busy,
+        },
+    }
+}
+
+fn role_for_type_tag(type_tag: TypeTag) -> SemanticRole {
+    match type_tag {
+        TYPE_ROOT | TYPE_PANEL | TYPE_ROW | TYPE_COLUMN => SemanticRole::Group,
+        TYPE_BUTTON => SemanticRole::Button,
+        TYPE_SCROLL_VIEW => SemanticRole::ScrollArea,
+        TYPE_TEXT_BLOCK => SemanticRole::Text,
+        TYPE_TEXT_INPUT => SemanticRole::TextInput,
+        TYPE_TOOLTIP => SemanticRole::Tooltip,
+        TYPE_SPLITTER => SemanticRole::Splitter,
+        TYPE_DIVIDER => SemanticRole::Separator,
+        TYPE_SPINNER => SemanticRole::ProgressIndicator,
+        _ => SemanticRole::Generic,
+    }
+}
+
+trait CowIntoBoxStr {
+    fn into_box_str(self) -> Box<str>;
+}
+
+impl CowIntoBoxStr for Cow<'_, str> {
+    fn into_box_str(self) -> Box<str> {
+        match self {
+            Cow::Borrowed(text) => Box::from(text),
+            Cow::Owned(text) => text.into_boxed_str(),
+        }
+    }
 }
 
 /// Clamps an explicit dimension to the available space.

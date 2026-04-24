@@ -3,15 +3,15 @@
 
 //! Text block widget for multiline wrapped text.
 
-use alloc::{boxed::Box, vec::Vec};
+use alloc::{borrow::Cow, boxed::Box, vec::Vec};
 
 use kurbo::Size;
 use peniko::Brush;
 use understory_display::{DisplayNode, Insets};
 
 use crate::{
-    AppendSpec, ElementId, MeasureCtx, MeasureStyle, MessageClass, ResolvedElement, Ui, Widget,
-    compose, text_label_node,
+    AppendSpec, ElementId, MeasureCtx, MeasureStyle, MessageClass, ResolvedElement, SemanticRole,
+    Ui, Widget, compose, text_label_node,
 };
 
 /// Multiline wrapped text block widget.
@@ -164,6 +164,14 @@ impl Widget for TextBlock {
             Insets::uniform(resolved.label_padding),
             text_node,
         ));
+    }
+
+    fn semantic_role(&self) -> SemanticRole {
+        SemanticRole::Text
+    }
+
+    fn semantic_name(&self) -> Option<Cow<'_, str>> {
+        self.text().map(Cow::Borrowed)
     }
 
     crate::impl_widget_any!();
