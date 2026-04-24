@@ -6,8 +6,8 @@ use core::fmt::Display;
 
 use overstory::{Color, Ui};
 use overstory_tree::{
-    TreeRowAction, TreeRowIds, TreeRowPresentation, TreeViewController, TreeViewRealizedRow,
-    TreeViewStyle,
+    TreeKeyboardAction, TreeRowAction, TreeRowIds, TreeRowPresentation, TreeViewController,
+    TreeViewRealizedRow, TreeViewStyle,
 };
 use understory_inspector::{Inspector, InspectorModel};
 
@@ -31,6 +31,19 @@ pub struct InspectorTreeClick<K> {
     pub key: K,
     /// Whether the click toggled expansion instead of selecting the row.
     pub toggled: bool,
+}
+
+/// Keyboard/navigation action produced by the inspector tree surface.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum InspectorTreeKeyboardAction<K> {
+    /// Move focus to another row.
+    Focus(K),
+    /// Activate/select the focused row.
+    Activate(K),
+    /// Expand the focused row.
+    Expand(K),
+    /// Collapse the focused row.
+    Collapse(K),
 }
 
 /// Overstory-facing adapter that renders an [`understory_inspector::Inspector`]
@@ -128,6 +141,7 @@ where
                     row.has_children,
                     row.is_expanded,
                     selected_key == Some(&row.key),
+                    self.inspector.focus() == Some(&row.key),
                 )
             })
             .collect::<Vec<_>>();
@@ -150,6 +164,23 @@ where
             }
         }
     }
+
+    /// Maps a keyboard event into a tree navigation action using the current
+    /// focused row state.
+    pub fn handle_keyboard_event(
+        &self,
+        event: &overstory::ui_events::keyboard::KeyboardEvent,
+    ) -> Option<InspectorTreeKeyboardAction<M::Key>>
+    where
+        M::Key: Clone,
+    {
+        match self.tree.handle_keyboard_event(event)? {
+            TreeKeyboardAction::Focus(key) => Some(InspectorTreeKeyboardAction::Focus(key)),
+            TreeKeyboardAction::Activate(key) => Some(InspectorTreeKeyboardAction::Activate(key)),
+            TreeKeyboardAction::Expand(key) => Some(InspectorTreeKeyboardAction::Expand(key)),
+            TreeKeyboardAction::Collapse(key) => Some(InspectorTreeKeyboardAction::Collapse(key)),
+        }
+    }
 }
 
 /// Returns a theme-tinted inspector tree style.
@@ -158,5 +189,6 @@ pub fn themed_tree_style(background: Color, selected_background: Color) -> Inspe
     let mut style = InspectorTreeStyle::default();
     style.tree.background = background;
     style.tree.selected_background = selected_background;
+    style.tree.focused_background = selected_background;
     style
 }

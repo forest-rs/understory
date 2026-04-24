@@ -164,6 +164,12 @@ impl Ui {
         self.cursor_icon_for(target)
     }
 
+    /// Returns the currently focused element, if any.
+    #[must_use]
+    pub fn focused_element(&self) -> Option<ElementId> {
+        self.runtime.focused
+    }
+
     /// Sets the current view rectangle and marks layout/paint dirty.
     pub fn set_view_rect(&mut self, view_rect: Rect) {
         if self.view_rect != view_rect {

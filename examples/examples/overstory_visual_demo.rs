@@ -26,8 +26,8 @@ use overstory::{
     default_theme,
 };
 use overstory_inspector::{
-    InspectorTreeController, PropertyBadge, PropertyGridController, PropertyGridRow, PropertyValue,
-    themed_tree_style,
+    InspectorTreeController, InspectorTreeKeyboardAction, PropertyBadge, PropertyGridController,
+    PropertyGridRow, PropertyValue, themed_tree_style,
 };
 use overstory_transcript::TranscriptViewController;
 use ui_events_winit::{WindowEventReducer, WindowEventTranslation};
@@ -897,6 +897,38 @@ impl DemoApp {
             });
     }
 
+    fn handle_inspector_tree_keyboard(
+        &mut self,
+        keyboard: &overstory::ui_events::keyboard::KeyboardEvent,
+    ) -> bool {
+        let Some(action) = self.inspector.handle_keyboard_event(keyboard) else {
+            return false;
+        };
+        match action {
+            InspectorTreeKeyboardAction::Focus(key) => {
+                let _ = self.inspector.inspector_mut().set_focus(Some(key));
+                self.sync_inspector();
+            }
+            InspectorTreeKeyboardAction::Activate(key) => {
+                let _ = self.inspector.inspector_mut().set_focus(Some(key));
+                self.selected_element = Some(key);
+                self.sync_inspector();
+                self.sync_property_grid();
+            }
+            InspectorTreeKeyboardAction::Expand(key) => {
+                let _ = self.inspector.inspector_mut().set_focus(Some(key));
+                let _ = self.inspector.inspector_mut().expand(key);
+                self.sync_inspector();
+            }
+            InspectorTreeKeyboardAction::Collapse(key) => {
+                let _ = self.inspector.inspector_mut().set_focus(Some(key));
+                let _ = self.inspector.inspector_mut().collapse(key);
+                self.sync_inspector();
+            }
+        }
+        true
+    }
+
     fn process_pointer_translation(
         &mut self,
         pointer: ui_events_winit::WindowEventTranslation,
@@ -958,6 +990,8 @@ impl DemoApp {
                     _ => {
                         // Check if it's an inspector tree row click.
                         if let Some(click) = self.inspector.handle_row_click(target) {
+                            let _ = self.inspector.inspector_mut().set_focus(Some(click.key));
+                            self.ui.set_focus(self.ids.inspector_tree);
                             if !click.toggled {
                                 self.selected_element = Some(click.key);
                                 self.sync_property_grid();
@@ -1399,6 +1433,12 @@ impl ApplicationHandler for DemoApp {
                         event_loop.exit();
                         return;
                     }
+                    if self.ui.focused_element() == Some(self.ids.inspector_tree)
+                        && self.handle_inspector_tree_keyboard(keyboard)
+                    {
+                        window.request_redraw();
+                        return;
+                    }
                     let interactions = self.ui.handle_keyboard_event(keyboard);
                     self.apply_interactions(&interactions);
                     window.request_redraw();
@@ -1532,6 +1572,7 @@ fn build_demo_ui() -> (Ui, DemoIds) {
             .gap(0.0)
             .background(Color::TRANSPARENT),
     );
+    ui.set_local(inspector_tree, ui.properties().focusable, true);
 
     let _ = ui.append(inspector_column, Divider::default());
 
