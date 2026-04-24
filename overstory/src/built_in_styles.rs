@@ -123,7 +123,7 @@ fn button_styles(props: &BuiltInProperties) -> StyleCascade {
     let base = StyleBuilder::new()
         .set_resource(props.background, ThemeKeys::CONTROL_BACKGROUND)
         .set_resource(props.border_color, ThemeKeys::BORDER_COLOR)
-        .set(props.border_width, 1.0)
+        .set(props.border_width, 2.0)
         .set_resource(props.height, ThemeKeys::BUTTON_HEIGHT)
         .build();
     let focused = StyleBuilder::new()
@@ -287,7 +287,7 @@ fn text_input_styles(props: &BuiltInProperties) -> StyleCascade {
             StyleBuilder::new()
                 .set_resource(props.background, ThemeKeys::SURFACE_BACKGROUND)
                 .set_resource(props.border_color, ThemeKeys::BORDER_COLOR)
-                .set(props.border_width, 1.0)
+                .set(props.border_width, 2.0)
                 .set_resource(props.height, ThemeKeys::BUTTON_HEIGHT)
                 .build(),
         )

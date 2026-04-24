@@ -1199,7 +1199,7 @@ pub fn default_theme() -> Theme {
         )
         .set(
             ThemeKeys::FOCUS_RING_COLOR,
-            Color::from_rgba8(24, 92, 72, 255),
+            Color::from_rgba8(199, 122, 36, 255),
         )
         .set(ThemeKeys::CORNER_RADIUS, 10.0_f64)
         .set(ThemeKeys::PADDING, 16.0_f64)
@@ -2144,7 +2144,7 @@ mod tests {
         let resolved = scene.resolved_element(button).expect("button resolved");
 
         assert_eq!(resolved.border.color, theme_focus_ring);
-        assert_eq!(resolved.border.width, 1.0);
+        assert_eq!(resolved.border.width, 2.0);
     }
 
     #[test]
@@ -2163,6 +2163,6 @@ mod tests {
         let resolved = scene.resolved_element(input).expect("text input resolved");
 
         assert_eq!(resolved.border.color, theme_focus_ring);
-        assert_eq!(resolved.border.width, 1.0);
+        assert_eq!(resolved.border.width, 2.0);
     }
 }
