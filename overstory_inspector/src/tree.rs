@@ -107,11 +107,29 @@ where
         self.tree.realized_rows()
     }
 
+    /// Returns the currently selected tree row key, if any.
+    #[must_use]
+    pub fn selected_key(&self) -> Option<&M::Key> {
+        self.tree.selected_key()
+    }
+
+    /// Returns the currently focused tree row key, if any.
+    #[must_use]
+    pub fn focused_key(&self) -> Option<&M::Key> {
+        self.tree.focused_key()
+    }
+
+    /// Replaces the currently selected tree row key.
+    pub fn set_selected_key(&mut self, key: Option<M::Key>) {
+        self.tree.set_selected_key(key);
+    }
+
     /// Syncs the current inspector projection into Overstory using the
     /// inspector item's `Display` output.
     pub fn sync_default(&mut self, ui: &mut Ui, selected_key: Option<&M::Key>)
     where
         M::Item: Display,
+        M::Key: Clone,
     {
         self.sync_with(ui, selected_key, |item| format!("{item}"));
     }
@@ -123,8 +141,12 @@ where
         ui: &mut Ui,
         selected_key: Option<&M::Key>,
         mut format_item: impl FnMut(M::Item) -> String,
-    ) {
+    ) where
+        M::Key: Clone + PartialEq,
+    {
         self.inspector.sync();
+        self.tree.set_selected_key(selected_key.cloned());
+        self.tree.set_focused_key(self.inspector.focus().cloned());
         let visible_rows = self.inspector.visible_rows().to_vec();
         let rows = visible_rows
             .iter()
@@ -140,8 +162,6 @@ where
                     row.depth,
                     row.has_children,
                     row.is_expanded,
-                    selected_key == Some(&row.key),
-                    self.inspector.focus() == Some(&row.key),
                 )
             })
             .collect::<Vec<_>>();
@@ -153,7 +173,7 @@ where
         &mut self,
         target: overstory::ElementId,
     ) -> Option<InspectorTreeClick<M::Key>> {
-        match self.tree.handle_click(target)? {
+        let action = match self.tree.handle_click(target)? {
             TreeRowAction::Select(key) => Some(InspectorTreeClick {
                 key,
                 toggled: false,
@@ -162,24 +182,32 @@ where
                 let toggled = self.inspector.toggle(key.clone());
                 Some(InspectorTreeClick { key, toggled })
             }
+        }?;
+        if let Some(focused) = self.tree.focused_key().cloned() {
+            let _ = self.inspector.set_focus(Some(focused));
         }
+        Some(action)
     }
 
     /// Maps a keyboard event into a tree navigation action using the current
     /// focused row state.
     pub fn handle_keyboard_event(
-        &self,
+        &mut self,
         event: &overstory::ui_events::keyboard::KeyboardEvent,
     ) -> Option<InspectorTreeKeyboardAction<M::Key>>
     where
         M::Key: Clone,
     {
-        match self.tree.handle_keyboard_event(event)? {
+        let action = match self.tree.handle_keyboard_event(event)? {
             TreeKeyboardAction::Focus(key) => Some(InspectorTreeKeyboardAction::Focus(key)),
             TreeKeyboardAction::Activate(key) => Some(InspectorTreeKeyboardAction::Activate(key)),
             TreeKeyboardAction::Expand(key) => Some(InspectorTreeKeyboardAction::Expand(key)),
             TreeKeyboardAction::Collapse(key) => Some(InspectorTreeKeyboardAction::Collapse(key)),
+        }?;
+        if let Some(focused) = self.tree.focused_key().cloned() {
+            let _ = self.inspector.set_focus(Some(focused));
         }
+        Some(action)
     }
 }
 

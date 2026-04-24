@@ -19,10 +19,6 @@ pub struct TreeRowPresentation<K> {
     pub has_children: bool,
     /// Whether the row is currently expanded.
     pub is_expanded: bool,
-    /// Whether the row is currently selected.
-    pub selected: bool,
-    /// Whether the row is currently focused for keyboard navigation.
-    pub focused: bool,
 }
 
 impl<K> TreeRowPresentation<K> {
@@ -34,8 +30,6 @@ impl<K> TreeRowPresentation<K> {
         depth: usize,
         has_children: bool,
         is_expanded: bool,
-        selected: bool,
-        focused: bool,
     ) -> Self {
         Self {
             key,
@@ -43,8 +37,6 @@ impl<K> TreeRowPresentation<K> {
             depth,
             has_children,
             is_expanded,
-            selected,
-            focused,
         }
     }
 }
@@ -151,6 +143,8 @@ pub struct TreeViewController<K> {
     scroll_view: ElementId,
     style: TreeViewStyle,
     rows: Vec<TreeViewRealizedRow<K>>,
+    selected_key: Option<K>,
+    focused_key: Option<K>,
 }
 
 impl<K> TreeViewController<K> {
@@ -161,6 +155,8 @@ impl<K> TreeViewController<K> {
             scroll_view,
             style: TreeViewStyle::default(),
             rows: Vec::new(),
+            selected_key: None,
+            focused_key: None,
         }
     }
 
@@ -187,10 +183,32 @@ impl<K> TreeViewController<K> {
         &self.rows
     }
 
+    /// Returns the currently selected row key, if any.
+    #[must_use]
+    pub fn selected_key(&self) -> Option<&K> {
+        self.selected_key.as_ref()
+    }
+
+    /// Returns the currently focused row key, if any.
+    #[must_use]
+    pub fn focused_key(&self) -> Option<&K> {
+        self.focused_key.as_ref()
+    }
+
+    /// Replaces the currently selected row key.
+    pub fn set_selected_key(&mut self, key: Option<K>) {
+        self.selected_key = key;
+    }
+
+    /// Replaces the currently focused row key.
+    pub fn set_focused_key(&mut self, key: Option<K>) {
+        self.focused_key = key;
+    }
+
     /// Syncs projected tree rows into Overstory.
     pub fn sync(&mut self, ui: &mut Ui, rows: &[TreeRowPresentation<K>])
     where
-        K: Clone,
+        K: Clone + PartialEq,
     {
         while self.rows.len() < rows.len() {
             let key = rows[self.rows.len()].key.clone();
@@ -203,16 +221,50 @@ impl<K> TreeViewController<K> {
                 realized.depth = row.depth;
                 realized.can_toggle = row.has_children;
                 realized.is_expanded = row.is_expanded;
-                realized.focused = row.focused;
-                apply_row(&self.style, ui, realized, row);
+                realized.focused = self.focused_key.as_ref() == Some(&row.key);
+                apply_row(
+                    &self.style,
+                    ui,
+                    realized,
+                    row,
+                    self.selected_key.as_ref() == Some(&row.key),
+                    realized.focused,
+                );
             } else {
                 hide_row(ui, realized);
+            }
+        }
+
+        if !rows.is_empty() {
+            let visible = |key: &K| rows.iter().any(|row| &row.key == key);
+            if self.focused_key.as_ref().is_none_or(|key| !visible(key)) {
+                self.focused_key = rows.first().map(|row| row.key.clone());
+            }
+            if self.selected_key.as_ref().is_some_and(|key| !visible(key)) {
+                self.selected_key = None;
+            }
+        } else {
+            self.focused_key = None;
+            self.selected_key = None;
+        }
+
+        for (index, realized) in self.rows.iter_mut().enumerate() {
+            if let Some(row) = rows.get(index) {
+                realized.focused = self.focused_key.as_ref() == Some(&row.key);
+                apply_row(
+                    &self.style,
+                    ui,
+                    realized,
+                    row,
+                    self.selected_key.as_ref() == Some(&row.key),
+                    realized.focused,
+                );
             }
         }
     }
 
     /// Maps a clicked Overstory element back into a tree row action.
-    pub fn handle_click(&self, target: ElementId) -> Option<TreeRowAction<K>>
+    pub fn handle_click(&mut self, target: ElementId) -> Option<TreeRowAction<K>>
     where
         K: Clone,
     {
@@ -220,49 +272,56 @@ impl<K> TreeViewController<K> {
             let ids = row.ids;
             target == ids.content || target == ids.label || target == ids.disclosure
         })?;
+        self.focused_key = Some(realized.key.clone());
         if target == realized.ids.disclosure && realized.can_toggle {
             Some(TreeRowAction::Toggle(realized.key.clone()))
         } else {
+            self.selected_key = Some(realized.key.clone());
             Some(TreeRowAction::Select(realized.key.clone()))
         }
     }
 
     /// Maps a keyboard event into a tree navigation action using the current
     /// focused row and visible row order.
-    pub fn handle_keyboard_event(&self, event: &KeyboardEvent) -> Option<TreeKeyboardAction<K>>
+    pub fn handle_keyboard_event(&mut self, event: &KeyboardEvent) -> Option<TreeKeyboardAction<K>>
     where
-        K: Clone,
+        K: Clone + PartialEq,
     {
         if !event.state.is_down() {
             return None;
         }
-        let focused_index = self.rows.iter().position(|row| row.focused)?;
+        let focused_index = self.focused_index()?;
         let focused = self.rows.get(focused_index)?;
-        let parent = self.parent_row(focused_index);
+        let parent_key = self.parent_row(focused_index).map(|row| row.key.clone());
         match &event.key {
             Key::Named(NamedKey::ArrowUp) => focused_index
                 .checked_sub(1)
                 .and_then(|index| self.rows.get(index))
-                .map(|row| TreeKeyboardAction::Focus(row.key.clone())),
-            Key::Named(NamedKey::ArrowDown) => self
-                .rows
-                .get(focused_index + 1)
-                .map(|row| TreeKeyboardAction::Focus(row.key.clone())),
-            Key::Named(NamedKey::Home) => self
-                .rows
-                .first()
-                .map(|row| TreeKeyboardAction::Focus(row.key.clone())),
-            Key::Named(NamedKey::End) => self
-                .rows
-                .last()
-                .map(|row| TreeKeyboardAction::Focus(row.key.clone())),
+                .map(|row| {
+                    self.focused_key = Some(row.key.clone());
+                    TreeKeyboardAction::Focus(row.key.clone())
+                }),
+            Key::Named(NamedKey::ArrowDown) => self.rows.get(focused_index + 1).map(|row| {
+                self.focused_key = Some(row.key.clone());
+                TreeKeyboardAction::Focus(row.key.clone())
+            }),
+            Key::Named(NamedKey::Home) => self.rows.first().map(|row| {
+                self.focused_key = Some(row.key.clone());
+                TreeKeyboardAction::Focus(row.key.clone())
+            }),
+            Key::Named(NamedKey::End) => self.rows.last().map(|row| {
+                self.focused_key = Some(row.key.clone());
+                TreeKeyboardAction::Focus(row.key.clone())
+            }),
             Key::Named(NamedKey::ArrowRight) => {
                 if focused.can_toggle && !focused.is_expanded {
                     Some(TreeKeyboardAction::Expand(focused.key.clone()))
                 } else {
                     self.rows.get(focused_index + 1).and_then(|row| {
-                        (row.depth == focused.depth + 1)
-                            .then(|| TreeKeyboardAction::Focus(row.key.clone()))
+                        (row.depth == focused.depth + 1).then(|| {
+                            self.focused_key = Some(row.key.clone());
+                            TreeKeyboardAction::Focus(row.key.clone())
+                        })
                     })
                 }
             }
@@ -270,15 +329,32 @@ impl<K> TreeViewController<K> {
                 if focused.can_toggle && focused.is_expanded {
                     Some(TreeKeyboardAction::Collapse(focused.key.clone()))
                 } else {
-                    parent.map(|row| TreeKeyboardAction::Focus(row.key.clone()))
+                    parent_key.map(|key| {
+                        self.focused_key = Some(key.clone());
+                        TreeKeyboardAction::Focus(key)
+                    })
                 }
             }
-            Key::Named(NamedKey::Enter) => Some(TreeKeyboardAction::Activate(focused.key.clone())),
+            Key::Named(NamedKey::Enter) => {
+                self.selected_key = Some(focused.key.clone());
+                Some(TreeKeyboardAction::Activate(focused.key.clone()))
+            }
             Key::Character(space) if &**space == " " => {
+                self.selected_key = Some(focused.key.clone());
                 Some(TreeKeyboardAction::Activate(focused.key.clone()))
             }
             _ => None,
         }
+    }
+
+    fn focused_index(&self) -> Option<usize>
+    where
+        K: PartialEq,
+    {
+        self.focused_key
+            .as_ref()
+            .and_then(|key| self.rows.iter().position(|row| &row.key == key))
+            .or_else(|| (!self.rows.is_empty()).then_some(0))
     }
 
     fn parent_row(&self, focused_index: usize) -> Option<&TreeViewRealizedRow<K>> {
@@ -358,14 +434,16 @@ fn apply_row<K>(
     ui: &mut Ui,
     realized: &TreeViewRealizedRow<K>,
     row: &TreeRowPresentation<K>,
+    selected: bool,
+    focused: bool,
 ) {
     ui.set_local(realized.ids.row, ui.properties().visible, true);
     ui.set_local(
         realized.ids.row,
         ui.properties().background,
-        if row.selected {
+        if selected {
             style.selected_background
-        } else if row.focused {
+        } else if focused {
             style.focused_background
         } else {
             style.background
@@ -413,22 +491,17 @@ mod tests {
         let mut tree = TreeViewController::<u32>::new(scroll);
         tree.sync(
             &mut ui,
-            &[TreeRowPresentation::new(
-                7, "Node", 0, true, false, false, false,
-            )],
+            &[TreeRowPresentation::new(7, "Node", 0, true, false)],
         );
 
-        let row = &tree.realized_rows()[0];
+        let ids = tree.realized_rows()[0].ids;
         assert_eq!(
-            tree.handle_click(row.ids.disclosure),
+            tree.handle_click(ids.disclosure),
             Some(TreeRowAction::Toggle(7))
         );
+        assert_eq!(tree.handle_click(ids.label), Some(TreeRowAction::Select(7)));
         assert_eq!(
-            tree.handle_click(row.ids.label),
-            Some(TreeRowAction::Select(7))
-        );
-        assert_eq!(
-            tree.handle_click(row.ids.content),
+            tree.handle_click(ids.content),
             Some(TreeRowAction::Select(7))
         );
     }
@@ -441,11 +514,10 @@ mod tests {
         let mut style = tree.style().clone();
         style.selected_background = Color::from_rgba8(1, 2, 3, 255);
         tree.set_style(style);
+        tree.set_selected_key(Some(1));
         tree.sync(
             &mut ui,
-            &[TreeRowPresentation::new(
-                1, "Selected", 1, false, false, true, false,
-            )],
+            &[TreeRowPresentation::new(1, "Selected", 1, false, false)],
         );
 
         let resolved = ui
@@ -460,12 +532,13 @@ mod tests {
         let mut ui = Ui::new(default_theme());
         let scroll = ui.append(ui.root(), ScrollView::new().fill());
         let mut tree = TreeViewController::<u32>::new(scroll);
+        tree.set_focused_key(Some(2));
         tree.sync(
             &mut ui,
             &[
-                TreeRowPresentation::new(1, "One", 0, true, false, false, false),
-                TreeRowPresentation::new(2, "Two", 1, false, false, false, true),
-                TreeRowPresentation::new(3, "Three", 1, false, false, false, false),
+                TreeRowPresentation::new(1, "One", 0, true, false),
+                TreeRowPresentation::new(2, "Two", 1, false, false),
+                TreeRowPresentation::new(3, "Three", 1, false, false),
             ],
         );
 
@@ -476,6 +549,7 @@ mod tests {
             )),
             Some(TreeKeyboardAction::Focus(1))
         );
+        tree.set_focused_key(Some(2));
         assert_eq!(
             tree.handle_keyboard_event(&KeyboardEvent::key_down(
                 Key::Named(NamedKey::ArrowDown),
@@ -483,6 +557,7 @@ mod tests {
             )),
             Some(TreeKeyboardAction::Focus(3))
         );
+        tree.set_focused_key(Some(2));
         assert_eq!(
             tree.handle_keyboard_event(&KeyboardEvent::key_down(
                 Key::Named(NamedKey::Home),
@@ -490,6 +565,7 @@ mod tests {
             )),
             Some(TreeKeyboardAction::Focus(1))
         );
+        tree.set_focused_key(Some(2));
         assert_eq!(
             tree.handle_keyboard_event(&KeyboardEvent::key_down(
                 Key::Named(NamedKey::End),
@@ -497,6 +573,7 @@ mod tests {
             )),
             Some(TreeKeyboardAction::Focus(3))
         );
+        tree.set_focused_key(Some(2));
         assert_eq!(
             tree.handle_keyboard_event(&KeyboardEvent::key_down(
                 Key::Named(NamedKey::Enter),
@@ -511,12 +588,13 @@ mod tests {
         let mut ui = Ui::new(default_theme());
         let scroll = ui.append(ui.root(), ScrollView::new().fill());
         let mut tree = TreeViewController::<u32>::new(scroll);
+        tree.set_focused_key(Some(1));
         tree.sync(
             &mut ui,
             &[
-                TreeRowPresentation::new(1, "Root", 0, true, true, false, true),
-                TreeRowPresentation::new(2, "Child", 1, false, false, false, false),
-                TreeRowPresentation::new(3, "Sibling", 0, true, false, false, false),
+                TreeRowPresentation::new(1, "Root", 0, true, true),
+                TreeRowPresentation::new(2, "Child", 1, false, false),
+                TreeRowPresentation::new(3, "Sibling", 0, true, false),
             ],
         );
 
@@ -528,12 +606,13 @@ mod tests {
             Some(TreeKeyboardAction::Focus(2))
         );
 
+        tree.set_focused_key(Some(2));
         tree.sync(
             &mut ui,
             &[
-                TreeRowPresentation::new(1, "Root", 0, true, true, false, false),
-                TreeRowPresentation::new(2, "Child", 1, false, false, false, true),
-                TreeRowPresentation::new(3, "Sibling", 0, true, false, false, false),
+                TreeRowPresentation::new(1, "Root", 0, true, true),
+                TreeRowPresentation::new(2, "Child", 1, false, false),
+                TreeRowPresentation::new(3, "Sibling", 0, true, false),
             ],
         );
         assert_eq!(

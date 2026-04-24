@@ -905,27 +905,18 @@ impl DemoApp {
             return false;
         };
         match action {
-            InspectorTreeKeyboardAction::Focus(key) => {
-                let _ = self.inspector.inspector_mut().set_focus(Some(key));
-                self.sync_inspector();
-            }
-            InspectorTreeKeyboardAction::Activate(key) => {
-                let _ = self.inspector.inspector_mut().set_focus(Some(key));
-                self.selected_element = Some(key);
-                self.sync_inspector();
-                self.sync_property_grid();
-            }
+            InspectorTreeKeyboardAction::Focus(_) => {}
+            InspectorTreeKeyboardAction::Activate(key) => self.selected_element = Some(key),
             InspectorTreeKeyboardAction::Expand(key) => {
-                let _ = self.inspector.inspector_mut().set_focus(Some(key));
                 let _ = self.inspector.inspector_mut().expand(key);
-                self.sync_inspector();
             }
             InspectorTreeKeyboardAction::Collapse(key) => {
-                let _ = self.inspector.inspector_mut().set_focus(Some(key));
                 let _ = self.inspector.inspector_mut().collapse(key);
-                self.sync_inspector();
             }
         }
+        self.sync_inspector();
+        self.selected_element = self.inspector.selected_key().copied();
+        self.sync_property_grid();
         true
     }
 
@@ -990,13 +981,13 @@ impl DemoApp {
                     _ => {
                         // Check if it's an inspector tree row click.
                         if let Some(click) = self.inspector.handle_row_click(target) {
-                            let _ = self.inspector.inspector_mut().set_focus(Some(click.key));
                             self.ui.set_focus(self.ids.inspector_tree);
                             if !click.toggled {
                                 self.selected_element = Some(click.key);
-                                self.sync_property_grid();
                             }
                             self.sync_inspector();
+                            self.selected_element = self.inspector.selected_key().copied();
+                            self.sync_property_grid();
                         }
                     }
                 }
