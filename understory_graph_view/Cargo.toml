@@ -1,0 +1,28 @@
+[package]
+name = "understory_graph_view"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Headless graph document, projection, session, and derived-state primitives"
+readme = "README.md"
+keywords = ["graph", "node-editor", "ui", "no_std"]
+categories = ["data-structures", "no-std"]
+
+[dependencies]
+hashbrown.workspace = true
+invalidation.workspace = true
+kurbo.workspace = true
+understory_selection = { path = "../understory_selection" }
+understory_view2d = { path = "../understory_view2d" }
+
+[lints]
+workspace = true
+
+[features]
+default = []
+
+[package.metadata.docs.rs]
+all-features = true
+default-target = "x86_64-unknown-linux-gnu"
+targets = []
