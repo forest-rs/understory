@@ -32,6 +32,10 @@ pub struct TypeTag(pub u32);
 /// `Button::icon`, `Toggle::track`, or `Slider::thumb`; non-UI embedders can
 /// use it for any addressable subject they want to style. The name is
 /// intentionally not tied to any particular widget, slot, or template system.
+///
+/// `PartTag` values are not globally namespaced by this crate. Embedders should
+/// usually anchor part selectors under an owner [`TypeTag`] so unrelated
+/// widgets can reuse local part IDs without accidentally matching each other.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PartTag(pub u32);
 
@@ -179,6 +183,77 @@ impl<'a> SelectorInputs<'a> {
             classes,
             pseudos,
         }
+    }
+}
+
+/// An owned selector-input snapshot with sorted, deduplicated class and pseudo sets.
+///
+/// Use this when inputs are assembled from unsorted application data or need to
+/// be stored before matching. Borrowed [`SelectorInputs`] remains the cheapest
+/// call-site shape when the embedder already owns sorted stable slices.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SelectorInputsOwned {
+    type_tag: Option<TypeTag>,
+    part_tag: Option<PartTag>,
+    classes: Box<[ClassId]>,
+    pseudos: Box<[PseudoClassId]>,
+}
+
+impl SelectorInputsOwned {
+    /// Constructs owned selector inputs without a part tag.
+    #[must_use]
+    pub fn new(
+        type_tag: Option<TypeTag>,
+        classes: impl IntoIterator<Item = ClassId>,
+        pseudos: impl IntoIterator<Item = PseudoClassId>,
+    ) -> Self {
+        Self::with_part(type_tag, None, classes, pseudos)
+    }
+
+    /// Constructs owned selector inputs with an owner-local part tag.
+    #[must_use]
+    pub fn with_part(
+        type_tag: Option<TypeTag>,
+        part_tag: Option<PartTag>,
+        classes: impl IntoIterator<Item = ClassId>,
+        pseudos: impl IntoIterator<Item = PseudoClassId>,
+    ) -> Self {
+        Self {
+            type_tag,
+            part_tag,
+            classes: IdSet::from_ids(classes).0,
+            pseudos: IdSet::from_ids(pseudos).0,
+        }
+    }
+
+    /// Borrows this owned snapshot as selector inputs.
+    #[must_use]
+    pub fn as_inputs(&self) -> SelectorInputs<'_> {
+        SelectorInputs::with_part(self.type_tag, self.part_tag, &self.classes, &self.pseudos)
+    }
+
+    /// Returns the optional type tag.
+    #[must_use]
+    pub fn type_tag(&self) -> Option<TypeTag> {
+        self.type_tag
+    }
+
+    /// Returns the optional part tag.
+    #[must_use]
+    pub fn part_tag(&self) -> Option<PartTag> {
+        self.part_tag
+    }
+
+    /// Returns sorted, deduplicated class IDs.
+    #[must_use]
+    pub fn classes(&self) -> &[ClassId] {
+        &self.classes
+    }
+
+    /// Returns sorted, deduplicated pseudoclass IDs.
+    #[must_use]
+    pub fn pseudos(&self) -> &[PseudoClassId] {
+        &self.pseudos
     }
 }
 
@@ -338,6 +413,45 @@ pub enum SelectorCombinator {
     Descendant,
 }
 
+/// Why a selector did not match a subject path.
+///
+/// This is a local diagnostic for the current child/descendant path grammar. It
+/// reports the first point where the matcher could not continue; it is not a
+/// global proof that no alternate browser-CSS-style match exists.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum SelectorMismatch {
+    /// The selector has no steps but the subject path is not empty.
+    EmptySelectorWithNonEmptyPath,
+    /// The subject path ended before `step_index` could be matched.
+    MissingSubject {
+        /// Selector step that needed a subject.
+        step_index: usize,
+        /// Path index that was expected to exist.
+        path_index: usize,
+    },
+    /// A selector step did not match the subject inputs at the path index.
+    StepMismatch {
+        /// Selector step that failed.
+        step_index: usize,
+        /// Subject path index that failed.
+        path_index: usize,
+    },
+    /// A complete selector matched before the subject path ended.
+    TrailingSubjects {
+        /// Number of selector steps consumed.
+        step_count: usize,
+        /// First trailing subject path index.
+        path_index: usize,
+    },
+    /// A descendant combinator could not find a later subject matching the next step.
+    MissingDescendant {
+        /// Selector step searched for below the previous matched step.
+        step_index: usize,
+        /// First descendant path index that was searched.
+        after_path_index: usize,
+    },
+}
+
 /// A declarative selector over a root-to-subject path.
 ///
 /// Plain step paths use [`SelectorCombinator::Child`] between every step, so
@@ -348,6 +462,52 @@ pub enum SelectorCombinator {
 pub struct Selector {
     steps: Box<[SelectorStep]>,
     combinators: Box<[SelectorCombinator]>,
+}
+
+/// Builder for mixed child/descendant selector paths.
+///
+/// This is intentionally small: it only expresses the current path grammar and
+/// does not add sibling, nth, or parent-query semantics.
+#[derive(Clone, Debug)]
+pub struct SelectorBuilder {
+    steps: Vec<SelectorStep>,
+    combinators: Vec<SelectorCombinator>,
+}
+
+impl SelectorBuilder {
+    /// Starts a selector with its first step.
+    #[must_use]
+    pub fn new(first: SelectorStep) -> Self {
+        Self {
+            steps: Vec::from([first]),
+            combinators: Vec::new(),
+        }
+    }
+
+    /// Appends an immediate child step.
+    #[must_use]
+    pub fn child(mut self, step: SelectorStep) -> Self {
+        self.combinators.push(SelectorCombinator::Child);
+        self.steps.push(step);
+        self
+    }
+
+    /// Appends a descendant step.
+    #[must_use]
+    pub fn descendant(mut self, step: SelectorStep) -> Self {
+        self.combinators.push(SelectorCombinator::Descendant);
+        self.steps.push(step);
+        self
+    }
+
+    /// Builds the selector.
+    #[must_use]
+    pub fn build(self) -> Selector {
+        Selector {
+            steps: self.steps.into_boxed_slice(),
+            combinators: self.combinators.into_boxed_slice(),
+        }
+    }
 }
 
 impl Selector {
@@ -365,6 +525,15 @@ impl Selector {
         }
     }
 
+    /// Constructs an exact child-path selector from ordered steps.
+    ///
+    /// This is an alias for [`Selector::from_steps`] with a shorter
+    /// author-facing name.
+    #[must_use]
+    pub fn path(steps: impl IntoIterator<Item = SelectorStep>) -> Self {
+        Self::from_steps(steps)
+    }
+
     /// Constructs a single-subject path selector.
     #[must_use]
     pub fn single(step: SelectorStep) -> Self {
@@ -372,6 +541,12 @@ impl Selector {
             steps: Box::new([step]),
             combinators: Box::default(),
         }
+    }
+
+    /// Constructs a two-step child selector.
+    #[must_use]
+    pub fn child(parent: SelectorStep, child: SelectorStep) -> Self {
+        Self::from_steps([parent, child])
     }
 
     /// Constructs a selector from steps and explicit adjacent combinators.
@@ -460,6 +635,12 @@ impl Selector {
         Self::from_segments(ancestor, [(SelectorCombinator::Descendant, descendant)])
     }
 
+    /// Starts a mixed child/descendant selector builder.
+    #[must_use]
+    pub fn builder(first: SelectorStep) -> SelectorBuilder {
+        SelectorBuilder::new(first)
+    }
+
     /// Returns the ordered steps in this path selector.
     #[must_use]
     pub fn steps(&self) -> &[SelectorStep] {
@@ -508,6 +689,20 @@ impl Selector {
         self.matches_path_from(0, 0, path)
     }
 
+    /// Explains why this selector does not match a subject path.
+    ///
+    /// Returns `Ok(())` when [`Selector::matches_path`] would return `true`.
+    pub fn diagnose_path(&self, path: &[SelectorInputs<'_>]) -> Result<(), SelectorMismatch> {
+        if self.steps.is_empty() {
+            return if path.is_empty() {
+                Ok(())
+            } else {
+                Err(SelectorMismatch::EmptySelectorWithNonEmptyPath)
+            };
+        }
+        self.diagnose_path_from(0, 0, path)
+    }
+
     /// Returns the aggregate specificity for this selector path.
     ///
     /// The current exact-path grammar sums each step's contribution using
@@ -546,6 +741,62 @@ impl Selector {
             SelectorCombinator::Child => self.matches_path_from(next_step, path_index + 1, path),
             SelectorCombinator::Descendant => (path_index + 1..path.len())
                 .any(|index| self.matches_path_from(next_step, index, path)),
+        }
+    }
+
+    fn diagnose_path_from(
+        &self,
+        step_index: usize,
+        path_index: usize,
+        path: &[SelectorInputs<'_>],
+    ) -> Result<(), SelectorMismatch> {
+        let Some(step) = self.steps.get(step_index) else {
+            return Ok(());
+        };
+        let Some(inputs) = path.get(path_index) else {
+            return Err(SelectorMismatch::MissingSubject {
+                step_index,
+                path_index,
+            });
+        };
+        if !step.matches(inputs) {
+            return Err(SelectorMismatch::StepMismatch {
+                step_index,
+                path_index,
+            });
+        }
+
+        let next_step = step_index + 1;
+        if next_step == self.steps.len() {
+            return if path_index + 1 == path.len() {
+                Ok(())
+            } else {
+                Err(SelectorMismatch::TrailingSubjects {
+                    step_count: self.steps.len(),
+                    path_index: path_index + 1,
+                })
+            };
+        }
+
+        match self.combinators[step_index] {
+            SelectorCombinator::Child => self.diagnose_path_from(next_step, path_index + 1, path),
+            SelectorCombinator::Descendant => {
+                let mut later_failure = None;
+                for index in path_index + 1..path.len() {
+                    let result = self.diagnose_path_from(next_step, index, path);
+                    match result {
+                        Ok(()) => return Ok(()),
+                        Err(SelectorMismatch::StepMismatch { .. }) => {}
+                        Err(error) => later_failure = Some(error),
+                    }
+                }
+                Err(
+                    later_failure.unwrap_or(SelectorMismatch::MissingDescendant {
+                        step_index: next_step,
+                        after_path_index: path_index + 1,
+                    }),
+                )
+            }
         }
     }
 }
@@ -623,6 +874,25 @@ mod tests {
         assert_eq!(set.as_slice(), &[ClassId(1), ClassId(2), ClassId(3)]);
         assert!(set.contains(ClassId(2)));
         assert!(!set.contains(ClassId(4)));
+    }
+
+    #[test]
+    fn owned_selector_inputs_sort_and_dedup() {
+        let owned = SelectorInputsOwned::with_part(
+            Some(TypeTag(1)),
+            Some(PartTag(2)),
+            [ClassId(3), ClassId(1), ClassId(3)],
+            [PseudoClassId(4), PseudoClassId(2), PseudoClassId(4)],
+        );
+
+        assert_eq!(owned.type_tag(), Some(TypeTag(1)));
+        assert_eq!(owned.part_tag(), Some(PartTag(2)));
+        assert_eq!(owned.classes(), &[ClassId(1), ClassId(3)]);
+        assert_eq!(owned.pseudos(), &[PseudoClassId(2), PseudoClassId(4)]);
+
+        let inputs = owned.as_inputs();
+        assert_eq!(inputs.classes, &[ClassId(1), ClassId(3)]);
+        assert_eq!(inputs.pseudos, &[PseudoClassId(2), PseudoClassId(4)]);
     }
 
     #[test]
@@ -770,6 +1040,20 @@ mod tests {
     }
 
     #[test]
+    fn path_and_child_constructors_are_child_paths() {
+        let steps = [
+            SelectorStep::type_tag(TypeTag(1)),
+            SelectorStep::part_tag(PartTag(2)),
+        ];
+
+        let from_path = Selector::path(steps.clone());
+        let from_child = Selector::child(steps[0].clone(), steps[1].clone());
+
+        assert_eq!(from_path.steps(), from_child.steps());
+        assert_eq!(from_child.combinators(), &[SelectorCombinator::Child]);
+    }
+
+    #[test]
     fn path_selector_matches_nested_part_path() {
         const TOGGLE: TypeTag = TypeTag(1);
         const TRACK: PartTag = PartTag(10);
@@ -838,6 +1122,59 @@ mod tests {
 
         assert_eq!(selector.combinators(), &[SelectorCombinator::Descendant]);
         assert!(selector.matches_path(&[root, badge, text]));
+    }
+
+    #[test]
+    fn selector_builder_mixes_child_and_descendant_steps() {
+        const ROW: TypeTag = TypeTag(1);
+        const CONTENT: PartTag = PartTag(10);
+        const TEXT: PartTag = PartTag(11);
+
+        let selector = Selector::builder(SelectorStep::type_tag(ROW))
+            .descendant(SelectorStep::part_tag(CONTENT))
+            .child(SelectorStep::part_tag(TEXT))
+            .build();
+
+        assert_eq!(
+            selector.combinators(),
+            &[SelectorCombinator::Descendant, SelectorCombinator::Child]
+        );
+
+        let root = SelectorInputs::new(Some(ROW), &[], &[]);
+        let wrapper = SelectorInputs::with_part(None, Some(PartTag(99)), &[], &[]);
+        let content = SelectorInputs::with_part(None, Some(CONTENT), &[], &[]);
+        let text = SelectorInputs::with_part(None, Some(TEXT), &[], &[]);
+
+        assert!(selector.matches_path(&[root, wrapper, content, text]));
+    }
+
+    #[test]
+    fn selector_diagnoses_path_mismatches() {
+        const ROW: TypeTag = TypeTag(1);
+        const CONTENT: PartTag = PartTag(10);
+        const TEXT: PartTag = PartTag(11);
+
+        let selector = Selector::child(SelectorStep::type_tag(ROW), SelectorStep::part_tag(TEXT));
+        let root = SelectorInputs::new(Some(ROW), &[], &[]);
+        let content = SelectorInputs::with_part(None, Some(CONTENT), &[], &[]);
+
+        assert_eq!(
+            selector.diagnose_path(&[root, content]),
+            Err(SelectorMismatch::StepMismatch {
+                step_index: 1,
+                path_index: 1,
+            })
+        );
+
+        let descendant =
+            Selector::descendant(SelectorStep::type_tag(ROW), SelectorStep::part_tag(TEXT));
+        assert_eq!(
+            descendant.diagnose_path(&[root, content]),
+            Err(SelectorMismatch::MissingDescendant {
+                step_index: 1,
+                after_path_index: 1,
+            })
+        );
     }
 
     #[test]

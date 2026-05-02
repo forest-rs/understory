@@ -136,6 +136,10 @@
 //! assert_eq!(icon_inputs.part_tag, Some(ICON));
 //! ```
 //!
+//! [`PartTag`] values are application-defined. In UI code, prefer anchoring
+//! part selectors under an owner [`TypeTag`] (for example, `Button > icon`) so
+//! unrelated widgets can reuse local part IDs without colliding.
+//!
 //! ### Path Matching And Style Changes
 //!
 //! [`StyleCascade`] is path-aware. Embedders walk their own style subject tree
@@ -233,6 +237,11 @@
 //! whose winning style source changes; it does not compare concrete typed
 //! values for equality.
 //!
+//! For inspection and update loops, [`StyleCascade`] also exposes
+//! [`StyleCascade::matching_rules`], [`StyleCascade::winning_source`], and
+//! [`StyleCascade::restyle_subject`]. For selector authoring diagnostics, use
+//! [`Selector::diagnose_path`] to get the first path mismatch.
+//!
 //! ## `no_std` Support
 //!
 //! This crate is `no_std` and uses `alloc`. It does not depend on `std`.
@@ -250,12 +259,12 @@ mod theme;
 
 pub use matcher::{
     MatchRule, MatchState, Matcher, MatcherBuilder, RuleCursor, StyleCascade, StyleCascadeBuilder,
-    StyleChangeSet,
+    StyleChangeSet, SubjectRestyle, WinningStyleSource,
 };
 pub use resolve::ResolveCx;
 pub use selector::{
-    ClassId, IdSet, PartTag, PseudoClassId, Selector, SelectorCombinator, SelectorInputs,
-    SelectorStep, Specificity, TypeTag,
+    ClassId, IdSet, PartTag, PseudoClassId, Selector, SelectorBuilder, SelectorCombinator,
+    SelectorInputs, SelectorInputsOwned, SelectorMismatch, SelectorStep, Specificity, TypeTag,
 };
 pub use style::{Style, StyleBuilder, StyleValueRef};
 pub use stylesheet::StyleOrigin;

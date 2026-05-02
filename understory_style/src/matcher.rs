@@ -534,6 +534,88 @@ impl StyleChangeSet {
     }
 }
 
+/// Result of re-entering one style subject and comparing it with its old state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SubjectRestyle {
+    state: MatchState,
+    changed_properties: StyleChangeSet,
+    changed_channels: ChannelSet,
+}
+
+impl SubjectRestyle {
+    /// Returns the new matcher state for the subject.
+    #[must_use]
+    pub fn state(&self) -> MatchState {
+        self.state
+    }
+
+    /// Returns properties whose winning style source changed.
+    #[must_use]
+    pub fn changed_properties(&self) -> &StyleChangeSet {
+        &self.changed_properties
+    }
+
+    /// Returns the invalidation channels affected by the changed properties.
+    #[must_use]
+    pub fn changed_channels(&self) -> ChannelSet {
+        self.changed_channels
+    }
+}
+
+/// The style source that wins a property at a matched state.
+#[derive(Copy, Clone, Debug)]
+pub enum WinningStyleSource<'a> {
+    /// A direct style source wins.
+    Direct {
+        /// The winning style origin.
+        origin: StyleOrigin,
+        /// Source index used for cascade ordering.
+        source_index: usize,
+        /// The winning direct style.
+        style: &'a Style,
+    },
+    /// A selector rule wins.
+    Rule(&'a MatchRule),
+}
+
+impl WinningStyleSource<'_> {
+    /// Returns the winning source's cascade origin.
+    #[must_use]
+    pub fn origin(&self) -> StyleOrigin {
+        match self {
+            Self::Direct { origin, .. } => *origin,
+            Self::Rule(rule) => rule.origin(),
+        }
+    }
+
+    /// Returns the winning source index.
+    #[must_use]
+    pub fn source_index(&self) -> usize {
+        match self {
+            Self::Direct { source_index, .. } => *source_index,
+            Self::Rule(rule) => rule.source_index(),
+        }
+    }
+
+    /// Returns the winning style payload.
+    #[must_use]
+    pub fn style(&self) -> &Style {
+        match self {
+            Self::Direct { style, .. } => style,
+            Self::Rule(rule) => rule.style(),
+        }
+    }
+
+    /// Returns the winning selector rule, if the source is rule-based.
+    #[must_use]
+    pub fn rule(&self) -> Option<&MatchRule> {
+        match self {
+            Self::Direct { .. } => None,
+            Self::Rule(rule) => Some(rule),
+        }
+    }
+}
+
 /// A path-aware style cascade.
 ///
 /// The cascade preserves origin, specificity, source order, and rule order.
@@ -567,6 +649,38 @@ impl StyleCascade {
     #[must_use]
     pub fn enter_subject(&self, parent: MatchState, inputs: &SelectorInputs<'_>) -> MatchState {
         self.inner.matcher.enter_subject(parent, inputs)
+    }
+
+    /// Advances one subject and returns the changed properties and channels.
+    ///
+    /// This is a convenience for the common update path where an embedder has a
+    /// previous subject state, a current parent state, and freshly computed
+    /// selector inputs.
+    #[must_use]
+    pub fn restyle_subject(
+        &self,
+        registry: &PropertyRegistry,
+        old_state: MatchState,
+        parent: MatchState,
+        inputs: &SelectorInputs<'_>,
+    ) -> SubjectRestyle {
+        let state = self.enter_subject(parent, inputs);
+        let changed_properties = self.changed_properties(old_state, state);
+        let changed_channels = changed_properties.affected_channels(registry);
+        SubjectRestyle {
+            state,
+            changed_properties,
+            changed_channels,
+        }
+    }
+
+    /// Returns the selector rules that match the given state.
+    ///
+    /// This is a diagnostic view over the same matched-rule set used by style
+    /// resolution.
+    #[must_use]
+    pub fn matching_rules(&self, state: MatchState) -> RuleCursor<'_> {
+        self.inner.matcher.matching_rules(state)
     }
 
     /// Returns the best Style-layer entry for a property at this state.
@@ -678,6 +792,19 @@ impl StyleCascade {
             .affected_channels(registry)
     }
 
+    /// Returns the style source that wins a property at this state.
+    ///
+    /// This is intended for diagnostics and inspection. It reports direct
+    /// styles as well as selector rules.
+    #[must_use]
+    pub fn winning_source<T: Clone + 'static>(
+        &self,
+        state: MatchState,
+        property: Property<T>,
+    ) -> Option<WinningStyleSource<'_>> {
+        self.compute_winning_source(state, property.id())
+    }
+
     fn candidate_property_ids(&self, old: MatchState, new: MatchState) -> Vec<PropertyId> {
         let mut property_ids = Vec::new();
 
@@ -776,6 +903,57 @@ impl StyleCascade {
         }
 
         best
+    }
+
+    fn compute_winning_source(
+        &self,
+        state: MatchState,
+        property_id: PropertyId,
+    ) -> Option<WinningStyleSource<'_>> {
+        let mut best = None;
+
+        for source in &self.inner.direct_styles {
+            if !source.style.contains_id(property_id) {
+                continue;
+            }
+            let key = CascadeEntryKey {
+                origin: source.origin,
+                specificity: Specificity::default(),
+                source_index: source.source_index,
+                order: 0,
+            };
+            if best.as_ref().is_none_or(
+                |(best_key, _): &(CascadeEntryKey, WinningStyleSource<'_>)| key > *best_key,
+            ) {
+                best = Some((
+                    key,
+                    WinningStyleSource::Direct {
+                        origin: source.origin,
+                        source_index: source.source_index,
+                        style: &source.style,
+                    },
+                ));
+            }
+        }
+
+        for rule in self.inner.matcher.matching_rules(state) {
+            if !rule.style.contains_id(property_id) {
+                continue;
+            }
+            let key = CascadeEntryKey {
+                origin: rule.origin,
+                specificity: rule.selector.specificity(),
+                source_index: rule.source_index,
+                order: rule.order,
+            };
+            if best.as_ref().is_none_or(
+                |(best_key, _): &(CascadeEntryKey, WinningStyleSource<'_>)| key > *best_key,
+            ) {
+                best = Some((key, WinningStyleSource::Rule(rule)));
+            }
+        }
+
+        best.map(|(_, source)| source)
     }
 }
 
@@ -1387,6 +1565,89 @@ mod tests {
 
         assert_eq!(cascade.get_value_ref(root, width), Some(&10));
         assert_eq!(cascade.get_value_ref(track, width), Some(&20));
+    }
+
+    #[test]
+    fn cascade_diagnostics_report_matched_rules_and_winning_source() {
+        let mut registry = PropertyRegistry::new();
+        let width = registry.register("Width", PropertyMetadataBuilder::new(0_u32).build());
+        let background =
+            registry.register("Background", PropertyMetadataBuilder::new(0_u32).build());
+
+        let cascade = StyleCascadeBuilder::new()
+            .push_style(
+                StyleOrigin::Base,
+                StyleBuilder::new().set(background, 10_u32).build(),
+            )
+            .push_rules(
+                StyleOrigin::Sheet,
+                [
+                    (
+                        SelectorStep::type_tag(TOGGLE),
+                        StyleBuilder::new().set(width, 20_u32).build(),
+                    ),
+                    (
+                        SelectorStep::type_tag(TOGGLE).with_pseudo(CHECKED),
+                        StyleBuilder::new().set(width, 30_u32).build(),
+                    ),
+                ],
+            )
+            .build();
+
+        let checked = [CHECKED];
+        let root = cascade.enter_subject(
+            cascade.root_state(),
+            &SelectorInputs::new(Some(TOGGLE), &[], &checked),
+        );
+
+        assert_eq!(cascade.matching_rules(root).count(), 2);
+
+        let width_source = cascade.winning_source(root, width).expect("width source");
+        let width_rule = width_source.rule().expect("width should be rule-backed");
+        assert_eq!(width_source.origin(), StyleOrigin::Sheet);
+        assert_eq!(width_rule.style().get(width), Some(&30));
+
+        let background_source = cascade
+            .winning_source(root, background)
+            .expect("background source");
+        assert!(background_source.rule().is_none());
+        assert_eq!(background_source.origin(), StyleOrigin::Base);
+        assert_eq!(background_source.style().get(background), Some(&10));
+    }
+
+    #[test]
+    fn restyle_subject_returns_state_properties_and_channels() {
+        let mut registry = PropertyRegistry::new();
+        let width = registry.register(
+            "Width",
+            PropertyMetadataBuilder::new(0_u32)
+                .affects_channels(LAYOUT.into_set())
+                .build(),
+        );
+
+        let cascade = StyleCascadeBuilder::new()
+            .push_rule(
+                StyleOrigin::Sheet,
+                SelectorStep::type_tag(TOGGLE).with_pseudo(CHECKED),
+                StyleBuilder::new().set(width, 20_u32).build(),
+            )
+            .build();
+
+        let unchecked = cascade.enter_subject(
+            cascade.root_state(),
+            &SelectorInputs::new(Some(TOGGLE), &[], &[]),
+        );
+        let checked = [CHECKED];
+        let restyle = cascade.restyle_subject(
+            &registry,
+            unchecked,
+            cascade.root_state(),
+            &SelectorInputs::new(Some(TOGGLE), &[], &checked),
+        );
+
+        assert_eq!(cascade.get_value_ref(restyle.state(), width), Some(&20));
+        assert_eq!(restyle.changed_properties().property_ids(), &[width.id()]);
+        assert!(restyle.changed_channels().contains(LAYOUT));
     }
 
     #[test]
