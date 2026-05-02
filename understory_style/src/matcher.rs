@@ -23,6 +23,8 @@ use crate::selector::{
 use crate::style::{Style, StyleValueRef};
 use crate::stylesheet::StyleOrigin;
 
+const LINEAR_LOOKUP_LIMIT: usize = 8;
+
 /// Compact handle to a matcher state during a root-to-leaf subject walk.
 ///
 /// A state represents selector progress after entering a subject. Embedders
@@ -89,13 +91,13 @@ impl MatchRule {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct StateData {
     active: Box<[Cursor]>,
     matched_rules: Box<[u32]>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct SubjectKey {
     type_tag: Option<TypeTag>,
     part_tag: Option<PartTag>,
@@ -113,25 +115,43 @@ impl SubjectKey {
         }
     }
 
-    fn matches(&self, inputs: &SelectorInputs<'_>) -> bool {
-        self.type_tag == inputs.type_tag
-            && self.part_tag == inputs.part_tag
-            && self.classes.as_ref() == inputs.classes
-            && self.pseudos.as_ref() == inputs.pseudos
+    fn cmp_inputs(&self, inputs: &SelectorInputs<'_>) -> core::cmp::Ordering {
+        self.type_tag
+            .cmp(&inputs.type_tag)
+            .then_with(|| self.part_tag.cmp(&inputs.part_tag))
+            .then_with(|| self.classes.as_ref().cmp(inputs.classes))
+            .then_with(|| self.pseudos.as_ref().cmp(inputs.pseudos))
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct TransitionEntry {
-    parent: MatchState,
     inputs: SubjectKey,
     child: MatchState,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+struct StateLookupEntry {
+    state_index: u32,
+}
+
+impl StateLookupEntry {
+    fn new(state_index: usize) -> Self {
+        Self {
+            state_index: u32::try_from(state_index).expect("too many matcher states"),
+        }
+    }
+
+    fn index(self) -> usize {
+        usize::try_from(self.state_index).expect("match state index must fit in usize")
+    }
 }
 
 #[derive(Debug, Default)]
 struct MatcherData {
     rules: Vec<MatchRule>,
     states: RefCell<Vec<StateData>>,
+    state_lookup: RefCell<Vec<StateLookupEntry>>,
     transitions_by_parent: RefCell<Vec<Vec<TransitionEntry>>>,
 }
 
@@ -291,12 +311,38 @@ impl Matcher {
 
     fn intern_state(&self, state: StateData) -> MatchState {
         let mut states = self.inner.states.borrow_mut();
-        if let Some(index) = states.iter().position(|existing| existing == &state) {
+        if states.len() <= LINEAR_LOOKUP_LIMIT {
+            if let Some(index) = states.iter().position(|existing| existing == &state) {
+                return self.make_state(index);
+            }
+
+            let index = states.len();
+            states.push(state);
+            let mut state_lookup = self.inner.state_lookup.borrow_mut();
+            state_lookup.push(StateLookupEntry::new(index));
+            if states.len() == LINEAR_LOOKUP_LIMIT + 1 {
+                state_lookup
+                    .sort_by(|left, right| states[left.index()].cmp(&states[right.index()]));
+            }
+            self.inner
+                .transitions_by_parent
+                .borrow_mut()
+                .push(Vec::new());
             return self.make_state(index);
+        }
+
+        let mut state_lookup = self.inner.state_lookup.borrow_mut();
+        let lookup_index = state_lookup.binary_search_by(|entry| states[entry.index()].cmp(&state));
+        if let Ok(index) = lookup_index {
+            return self.make_state(state_lookup[index].index());
         }
 
         let index = states.len();
         states.push(state);
+        state_lookup.insert(
+            lookup_index.expect_err("state lookup must be missing before insert"),
+            StateLookupEntry::new(index),
+        );
         self.inner
             .transitions_by_parent
             .borrow_mut()
@@ -309,22 +355,47 @@ impl Matcher {
         parent: MatchState,
         inputs: &SelectorInputs<'_>,
     ) -> Option<MatchState> {
-        self.inner
-            .transitions_by_parent
-            .borrow()
-            .get(state_index(parent))?
-            .iter()
-            .find(|entry| entry.parent == parent && entry.inputs.matches(inputs))
-            .map(|entry| entry.child)
+        let transitions_by_parent = self.inner.transitions_by_parent.borrow();
+        let transitions = transitions_by_parent.get(state_index(parent))?;
+        if transitions.len() <= LINEAR_LOOKUP_LIMIT {
+            return transitions
+                .iter()
+                .find(|entry| entry.inputs.cmp_inputs(inputs).is_eq())
+                .map(|entry| entry.child);
+        }
+
+        transitions
+            .binary_search_by(|entry| entry.inputs.cmp_inputs(inputs))
+            .ok()
+            .map(|index| transitions[index].child)
     }
 
     fn cache_transition(&self, parent: MatchState, inputs: &SelectorInputs<'_>, child: MatchState) {
         let mut transitions_by_parent = self.inner.transitions_by_parent.borrow_mut();
-        transitions_by_parent[state_index(parent)].push(TransitionEntry {
-            parent,
-            inputs: SubjectKey::from_inputs(inputs),
-            child,
-        });
+        let transitions = &mut transitions_by_parent[state_index(parent)];
+        if transitions.len() < LINEAR_LOOKUP_LIMIT {
+            if let Some(entry) = transitions
+                .iter_mut()
+                .find(|entry| entry.inputs.cmp_inputs(inputs).is_eq())
+            {
+                entry.child = child;
+            } else {
+                transitions.push(TransitionEntry {
+                    inputs: SubjectKey::from_inputs(inputs),
+                    child,
+                });
+            }
+            return;
+        }
+
+        let key = SubjectKey::from_inputs(inputs);
+        if transitions.len() == LINEAR_LOOKUP_LIMIT {
+            transitions.sort_by(|left, right| left.inputs.cmp(&right.inputs));
+        }
+        match transitions.binary_search_by(|entry| entry.inputs.cmp(&key)) {
+            Ok(index) => transitions[index].child = child,
+            Err(index) => transitions.insert(index, TransitionEntry { inputs: key, child }),
+        }
     }
 
     fn assert_valid_state(&self, state: MatchState) {
@@ -852,6 +923,7 @@ fn build_matcher(rules: Vec<MatchRule>) -> Matcher {
                 active: root_active,
                 matched_rules: Box::default(),
             }])),
+            state_lookup: RefCell::new(Vec::from([StateLookupEntry::new(0)])),
             transitions_by_parent: RefCell::new(Vec::from([Vec::new()])),
         }),
     }
@@ -989,6 +1061,60 @@ mod tests {
             &SelectorInputs::with_part(None, Some(CONTENT), &[], &[]),
         );
         assert_eq!(matcher.matching_rules(leaked).count(), 0);
+    }
+
+    #[test]
+    fn transition_cache_keeps_parent_entries_sorted_and_reused() {
+        let matcher = MatcherBuilder::new().build();
+        let root = matcher.root_state();
+
+        for part in [THUMB, CONTENT, TRACK] {
+            let _ =
+                matcher.enter_subject(root, &SelectorInputs::with_part(None, Some(part), &[], &[]));
+        }
+
+        let _ = matcher.enter_subject(
+            root,
+            &SelectorInputs::with_part(None, Some(TRACK), &[], &[]),
+        );
+        assert_eq!(
+            matcher.inner.transitions_by_parent.borrow()[state_index(root)].len(),
+            3
+        );
+
+        for part in (20..30).rev().map(PartTag) {
+            let _ =
+                matcher.enter_subject(root, &SelectorInputs::with_part(None, Some(part), &[], &[]));
+        }
+
+        let transitions = matcher.inner.transitions_by_parent.borrow();
+        let root_transitions = &transitions[state_index(root)];
+        assert_eq!(root_transitions.len(), 13);
+        assert!(
+            root_transitions
+                .windows(2)
+                .all(|window| window[0].inputs < window[1].inputs)
+        );
+    }
+
+    #[test]
+    fn state_interning_reuses_equal_states_from_different_inputs() {
+        let matcher = MatcherBuilder::new()
+            .rule(
+                Selector::single(SelectorStep::type_tag(TOGGLE)),
+                StyleBuilder::new().build(),
+            )
+            .build();
+        let root = matcher.root_state();
+
+        let first_unmatched =
+            matcher.enter_subject(root, &SelectorInputs::new(Some(TypeTag(98)), &[], &[]));
+        let second_unmatched =
+            matcher.enter_subject(root, &SelectorInputs::new(Some(TypeTag(99)), &[], &[]));
+
+        assert_eq!(first_unmatched, second_unmatched);
+        assert_eq!(matcher.inner.states.borrow().len(), 2);
+        assert_eq!(matcher.inner.state_lookup.borrow().len(), 2);
     }
 
     #[cfg(debug_assertions)]
