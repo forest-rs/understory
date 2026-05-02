@@ -54,6 +54,10 @@ These examples form a short, progressive walkthrough from routing basics to inte
   - Drive `understory_inspector` over a property-grid-style domain model, then inspect expansion sync, visible-row focus, range selection, and collapse pruning.
   - Run: `cargo run -p understory_examples --example outline_inspector`
 
+- style_subject_walk
+  - Walk an embedder-owned style subject tree, restyle one part after owner state changes, and inspect matched rules and winning style sources.
+  - Run: `cargo run -p understory_examples --example style_subject_walk`
+
 - transcript_agent_run
   - Record a small agent-style run with user input, tool lifecycle, streamed stdout, and annotation entries using `understory_transcript`.
   - Run: `cargo run -p understory_examples --example transcript_agent_run`

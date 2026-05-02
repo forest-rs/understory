@@ -11,6 +11,7 @@ understory_responder = { workspace = true, features = [
   "hit2d_adapter",
   "std",
 ] }
+invalidation.workspace = true
 kurbo = { workspace = true, default-features = true }
 understory_box_tree = { workspace = true, features = ["std"] }
 understory_event_state = { workspace = true, features = [
@@ -26,6 +27,7 @@ understory_presentation = { workspace = true, features = ["std"] }
 understory_precise_hit = { workspace = true, features = ["std"] }
 understory_property.workspace = true
 understory_property_binding.workspace = true
+understory_style.workspace = true
 understory_timing.workspace = true
 understory_transcript = { workspace = true, features = ["std"] }
 understory_virtual_list = { workspace = true, features = ["std"] }
