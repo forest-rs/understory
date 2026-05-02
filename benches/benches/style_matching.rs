@@ -3,7 +3,9 @@
 
 //! Benchmarks for path-aware style matching.
 
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{
+    BatchSize, BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main,
+};
 use understory_property::{Property, PropertyMetadataBuilder, PropertyRegistry};
 use understory_style::{
     ClassId, MatchState, PartTag, PseudoClassId, Selector, SelectorCombinator, SelectorInputs,
@@ -257,6 +259,24 @@ fn make_heavy_descendant_cascade(color: Property<u32>) -> StyleCascade {
         .build()
 }
 
+fn make_rule_pressure_cascade(color: Property<u32>, rule_count: usize) -> StyleCascade {
+    let rules = (0..rule_count)
+        .map(|index| {
+            let part = PartTag(1_000 + u32::try_from(index).unwrap_or(u32::MAX));
+            (
+                Selector::descendant(SelectorStep::type_tag(ROW), SelectorStep::part_tag(part)),
+                StyleBuilder::new()
+                    .set(color, 100_u32 + u32::try_from(index % 1_000).unwrap_or(0))
+                    .build(),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    StyleCascadeBuilder::new()
+        .push_rules(StyleOrigin::Sheet, rules)
+        .build()
+}
+
 fn make_buttons(count: usize, hovered: Option<usize>) -> Vec<Subject> {
     let mut subjects = Vec::with_capacity(count * 3);
     for i in 0..count {
@@ -335,6 +355,25 @@ fn make_deep_rows(count: usize) -> Vec<Subject> {
         let detail = subjects.len();
         subjects.push(Subject::part(badge, DETAIL));
         subjects.push(Subject::part(detail, META));
+    }
+    subjects
+}
+
+fn make_rule_pressure_rows(count: usize, depth: usize, part_count: usize) -> Vec<Subject> {
+    let mut subjects = Vec::with_capacity(count * (depth + 1));
+    let part_count = part_count.max(1);
+    for row_index in 0..count {
+        let root = subjects.len();
+        subjects.push(Subject::root(ROW));
+
+        let mut parent = root;
+        for depth_index in 0..depth {
+            let part_index = (row_index + depth_index) % part_count;
+            let part = PartTag(1_000 + u32::try_from(part_index).unwrap_or(u32::MAX));
+            let subject = subjects.len();
+            subjects.push(Subject::part(parent, part));
+            parent = subject;
+        }
     }
     subjects
 }
@@ -429,6 +468,41 @@ fn bench_style_matching(c: &mut Criterion) {
             },
         );
     }
+    group.finish();
+
+    let rule_pressure_subjects = make_rule_pressure_rows(1_000, 8, 512);
+    let mut group = c.benchmark_group("style_matching/cold_rule_pressure_restyle");
+    for rule_count in [128, 512] {
+        group.throughput(Throughput::Elements(rule_pressure_subjects.len() as u64));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(format!("{rule_count}_descendant_rules")),
+            &rule_count,
+            |b, rule_count| {
+                b.iter_batched(
+                    || make_rule_pressure_cascade(color, *rule_count),
+                    |cascade| black_box(restyle(&cascade, &rule_pressure_subjects, color)),
+                    BatchSize::SmallInput,
+                );
+            },
+        );
+    }
+    group.finish();
+
+    let cache_subjects = make_rule_pressure_rows(1_000, 8, 512);
+    let hot_cache_cascade = make_rule_pressure_cascade(color, 512);
+    black_box(restyle(&hot_cache_cascade, &cache_subjects, color));
+    let mut group = c.benchmark_group("style_matching/transition_cache");
+    group.throughput(Throughput::Elements(cache_subjects.len() as u64));
+    group.bench_function("hot_cache_512_rules", |b| {
+        b.iter(|| black_box(restyle(&hot_cache_cascade, &cache_subjects, color)));
+    });
+    group.bench_function("cold_cache_512_rules", |b| {
+        b.iter_batched(
+            || make_rule_pressure_cascade(color, 512),
+            |cascade| black_box(restyle(&cascade, &cache_subjects, color)),
+            BatchSize::SmallInput,
+        );
+    });
     group.finish();
 
     let old_buttons = make_buttons(1_000, None);
