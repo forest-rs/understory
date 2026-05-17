@@ -282,7 +282,7 @@ impl<S: Scalar> ResizableExtentModel for SparsePrefixSumExtentModel<S> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{PrefixSumExtentModel, compute_visible_strip};
+    use crate::{PrefixSumExtentModel, compute_materialized_strip};
 
     use super::{ExtentModel, SparsePrefixSumExtentModel};
 
@@ -409,7 +409,7 @@ mod tests {
         for i in 0..100 {
             dense_model.set_extent(i, 51.);
         }
-        let dense_strip = compute_visible_strip(&mut dense_model, 0., 640., 320., 320.);
+        let dense_strip = compute_materialized_strip(&mut dense_model, 0., 640., 320., 320.);
 
         let mut sparse_model = SparsePrefixSumExtentModel::new(51., 100);
         assert_eq!(sparse_model.total_extent(), 5100.);
@@ -417,7 +417,7 @@ mod tests {
             sparse_model.set_extent(i, 51.);
         }
         assert_eq!(sparse_model.total_extent(), 5100.);
-        let sparse_strip = compute_visible_strip(&mut sparse_model, 0., 640., 320., 320.);
+        let sparse_strip = compute_materialized_strip(&mut sparse_model, 0., 640., 320., 320.);
 
         assert_eq!(dense_strip, sparse_strip);
     }

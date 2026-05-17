@@ -6,8 +6,8 @@
 use core::ops::Range;
 
 use crate::{
-    ExtentModel, ResizableExtentModel, Scalar, TailAnchoredExtentModel, VisibleStrip,
-    compute_visible_strip,
+    ExtentModel, IndexStrip, ResizableExtentModel, Scalar, TailAnchoredExtentModel,
+    compute_materialized_strip,
 };
 
 /// Alignment mode when scrolling a specific index into view.
@@ -29,7 +29,7 @@ pub enum ScrollAlign {
 /// This type:
 /// - stores scroll offset, viewport extent, and asymmetric overscan,
 /// - owns an [`ExtentModel`],
-/// - caches the last computed [`VisibleStrip`],
+/// - caches the last computed materialized [`IndexStrip`],
 /// - exposes helpers for visibility queries and index-aligned scrolling.
 ///
 /// It does *not* know about any widget/view system; host frameworks are expected
@@ -43,7 +43,7 @@ pub struct VirtualList<M: ExtentModel> {
     overscan_after: M::Scalar,
 
     dirty: bool,
-    last_strip: VisibleStrip<M::Scalar>,
+    last_strip: IndexStrip<M::Scalar>,
 }
 
 impl<M: ExtentModel> VirtualList<M> {
@@ -57,7 +57,7 @@ impl<M: ExtentModel> VirtualList<M> {
             overscan_before: overscan.max(M::Scalar::zero()),
             overscan_after: overscan.max(M::Scalar::zero()),
             dirty: true,
-            last_strip: VisibleStrip {
+            last_strip: IndexStrip {
                 start: 0,
                 end: 0,
                 before_extent: M::Scalar::zero(),
@@ -202,9 +202,9 @@ impl<M: ExtentModel> VirtualList<M> {
     ///
     /// This strip includes the configured overscan before and after the viewport.
     #[must_use]
-    pub fn visible_strip(&mut self) -> VisibleStrip<M::Scalar> {
+    pub fn materialized_strip(&mut self) -> IndexStrip<M::Scalar> {
         if self.dirty {
-            self.last_strip = compute_visible_strip(
+            self.last_strip = compute_materialized_strip(
                 &mut self.model,
                 self.scroll_offset,
                 self.viewport_extent,
@@ -216,12 +216,24 @@ impl<M: ExtentModel> VirtualList<M> {
         self.last_strip
     }
 
+    /// Computes or returns the cached materialized strip.
+    ///
+    /// This strip includes the configured overscan before and after the viewport.
+    #[deprecated(
+        since = "0.1.2",
+        note = "use `materialized_strip`; this range includes overscan and is not limited to the viewport"
+    )]
+    #[must_use]
+    pub fn visible_strip(&mut self) -> IndexStrip<M::Scalar> {
+        self.materialized_strip()
+    }
+
     /// Returns the half-open materialized index range, including overscan.
     ///
-    /// This is equivalent to `self.visible_strip().range()`.
+    /// This is equivalent to `self.materialized_strip().range()`.
     #[must_use]
-    pub fn visible_range(&mut self) -> Range<usize> {
-        self.visible_strip().range()
+    pub fn materialized_range(&mut self) -> Range<usize> {
+        self.materialized_strip().range()
     }
 
     /// Computes the viewport strip without overscan.
@@ -229,10 +241,10 @@ impl<M: ExtentModel> VirtualList<M> {
     /// Use this when host code needs the indices that overlap the viewport
     /// itself, rather than the larger materialized range. The returned strip
     /// uses the same half-open `[start, end)` convention as
-    /// [`VirtualList::visible_strip`].
+    /// [`VirtualList::materialized_strip`].
     #[must_use]
-    pub fn viewport_strip(&mut self) -> VisibleStrip<M::Scalar> {
-        compute_visible_strip(
+    pub fn viewport_strip(&mut self) -> IndexStrip<M::Scalar> {
+        compute_materialized_strip(
             &mut self.model,
             self.scroll_offset,
             self.viewport_extent,
@@ -251,16 +263,27 @@ impl<M: ExtentModel> VirtualList<M> {
     }
 
     /// Convenience iterator over materialized indices, including overscan.
+    pub fn materialized_indices(
+        &mut self,
+    ) -> impl DoubleEndedIterator<Item = usize> + ExactSizeIterator + use<M> {
+        self.materialized_range()
+    }
+
+    /// Convenience iterator over materialized indices, including overscan.
+    #[deprecated(
+        since = "0.1.2",
+        note = "use `materialized_indices`; these indices include overscan and are not limited to the viewport"
+    )]
     pub fn visible_indices(
         &mut self,
     ) -> impl DoubleEndedIterator<Item = usize> + ExactSizeIterator + use<M> {
-        self.visible_range()
+        self.materialized_indices()
     }
 
-    /// Returns the first visible index, if any.
+    /// Returns the first materialized index, if any.
     #[must_use]
-    pub fn first_visible_index(&mut self) -> Option<usize> {
-        let strip = self.visible_strip();
+    pub fn first_materialized_index(&mut self) -> Option<usize> {
+        let strip = self.materialized_strip();
         if strip.is_empty() {
             None
         } else {
@@ -268,15 +291,35 @@ impl<M: ExtentModel> VirtualList<M> {
         }
     }
 
-    /// Returns the last visible index, if any.
+    /// Returns the first materialized index, if any.
+    #[deprecated(
+        since = "0.1.2",
+        note = "use `first_materialized_index`; this index may be in overscan and outside the viewport"
+    )]
     #[must_use]
-    pub fn last_visible_index(&mut self) -> Option<usize> {
-        let strip = self.visible_strip();
+    pub fn first_visible_index(&mut self) -> Option<usize> {
+        self.first_materialized_index()
+    }
+
+    /// Returns the last materialized index, if any.
+    #[must_use]
+    pub fn last_materialized_index(&mut self) -> Option<usize> {
+        let strip = self.materialized_strip();
         if strip.is_empty() {
             None
         } else {
             Some(strip.end - 1)
         }
+    }
+
+    /// Returns the last materialized index, if any.
+    #[deprecated(
+        since = "0.1.2",
+        note = "use `last_materialized_index`; this index may be in overscan and outside the viewport"
+    )]
+    #[must_use]
+    pub fn last_visible_index(&mut self) -> Option<usize> {
+        self.last_materialized_index()
     }
 
     /// Returns `true` if the given index is fully visible within the viewport.
@@ -311,7 +354,7 @@ impl<M: ExtentModel> VirtualList<M> {
     ///
     /// This is useful for hosts that want to hard-cap scrolling at the start/end of content.
     pub fn clamp_scroll_to_content(&mut self) {
-        let strip = self.visible_strip();
+        let strip = self.materialized_strip();
         let content = strip.content_extent;
         let max_offset = if content > self.viewport_extent {
             content - self.viewport_extent
@@ -534,22 +577,22 @@ mod tests {
     }
 
     #[test]
-    fn visible_strip_tracks_scroll_and_viewport() {
+    fn materialized_strip_tracks_scroll_and_viewport() {
         let model = FixedExtentModel::new(100, 10.0_f32);
         let mut list = VirtualList::new(model, 50.0, 0.0);
 
         // At top: items 0..5.
-        let strip = list.visible_strip();
+        let strip = list.materialized_strip();
         assert_eq!(strip.start, 0);
         assert_eq!(strip.end, 5);
 
         // Scroll down by 10 units: items 1..6.
         list.scroll_by(10.0);
-        let strip = list.visible_strip();
+        let strip = list.materialized_strip();
         assert_eq!(strip.start, 1);
         assert_eq!(strip.end, 6);
-        assert_eq!(list.first_visible_index(), Some(1));
-        assert_eq!(list.last_visible_index(), Some(5));
+        assert_eq!(list.first_materialized_index(), Some(1));
+        assert_eq!(list.last_materialized_index(), Some(5));
     }
 
     #[test]
@@ -558,9 +601,9 @@ mod tests {
         let mut list = VirtualList::new(model, 20.0_f32, 10.0_f32);
         list.set_scroll_offset(10.0_f32);
 
-        assert_eq!(list.visible_range(), 0..4);
+        assert_eq!(list.materialized_range(), 0..4);
         assert_eq!(
-            list.visible_indices().collect::<alloc::vec::Vec<_>>(),
+            list.materialized_indices().collect::<alloc::vec::Vec<_>>(),
             alloc::vec![0, 1, 2, 3]
         );
         assert_eq!(list.viewport_range(), 1..3);
@@ -569,6 +612,25 @@ mod tests {
         assert_eq!(viewport.range(), 1..3);
         assert_eq!(viewport.start, 1);
         assert_eq!(viewport.end, 3);
+    }
+
+    #[test]
+    #[allow(
+        deprecated,
+        reason = "the test verifies deprecated aliases forward to the replacement API"
+    )]
+    fn deprecated_visible_helpers_forward_to_materialized_helpers() {
+        let model = FixedExtentModel::new(10, 10.0_f32);
+        let mut list = VirtualList::new(model, 20.0_f32, 10.0_f32);
+        list.set_scroll_offset(10.0_f32);
+
+        assert_eq!(list.visible_strip(), list.materialized_strip());
+        assert_eq!(
+            list.visible_indices().collect::<alloc::vec::Vec<_>>(),
+            list.materialized_indices().collect::<alloc::vec::Vec<_>>()
+        );
+        assert_eq!(list.first_visible_index(), list.first_materialized_index());
+        assert_eq!(list.last_visible_index(), list.last_materialized_index());
     }
 
     #[test]
@@ -660,16 +722,16 @@ mod tests {
         let model = FixedExtentModel::new(2, 10.0_f32);
         let mut list = VirtualList::new(model, 30.0_f32, 0.0);
 
-        assert_eq!(list.visible_range(), 0..2);
+        assert_eq!(list.materialized_range(), 0..2);
 
         list.set_len(5);
         assert_eq!(list.len(), 5);
         assert!(!list.is_empty());
-        assert_eq!(list.visible_range(), 0..3);
+        assert_eq!(list.materialized_range(), 0..3);
 
         list.set_len(0);
         assert!(list.is_empty());
-        assert_eq!(list.visible_range(), 0..0);
+        assert_eq!(list.materialized_range(), 0..0);
     }
 
     #[test]
@@ -681,7 +743,7 @@ mod tests {
         list.set_len(5);
 
         assert_eq!(list.len(), 5);
-        assert_eq!(list.visible_range(), 0..3);
+        assert_eq!(list.materialized_range(), 0..3);
     }
 
     #[test]
@@ -689,7 +751,7 @@ mod tests {
         let model = CountingModel::new(5, 10.0_f32);
         let mut list = VirtualList::new(model, 30.0_f32, 0.0);
 
-        assert_eq!(list.visible_range(), 0..3);
+        assert_eq!(list.materialized_range(), 0..3);
         let total_extent_calls = list.model().total_extent_calls;
 
         assert_eq!(list.total_extent(), 50.0_f32);
@@ -698,7 +760,7 @@ mod tests {
         assert_eq!(list.index_at_offset(25.0_f32), 2);
         assert_eq!(list.try_index_at_offset(45.0_f32), Some(4));
 
-        assert_eq!(list.visible_range(), 0..3);
+        assert_eq!(list.materialized_range(), 0..3);
         assert_eq!(list.model().total_extent_calls, total_extent_calls + 1);
     }
 
@@ -716,7 +778,7 @@ mod tests {
         // Viewport is 3 tracks tall → 3 * 10.
         let mut list = VirtualList::new(grid_model, 30.0_f32, 0.0);
 
-        let strip = list.visible_strip();
+        let strip = list.materialized_strip();
         // At scroll_offset = 0, we expect the first three tracks to be visible:
         // 3 tracks × 3 cells per track = 9 cells (indices 0..9).
         assert_eq!(strip.start, 0);

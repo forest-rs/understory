@@ -15,12 +15,27 @@ You can find its changes [documented below](#011-2026-05-17).
 
 ### Added
 
-- Added half-open range helpers for materialized and viewport ranges:
-  `VisibleStrip::range`, `VirtualList::visible_range`, `VirtualList::viewport_strip`,
-  and `VirtualList::viewport_range`. ([#169][] by [@waywardmonkeys][])
+- Added `IndexStrip`, `IndexStrip::range`, `IndexStrip::covered_extent`,
+  `compute_materialized_strip`, `VirtualList::viewport_strip`, and
+  `VirtualList::viewport_range` for half-open materialized and viewport ranges.
+  ([#169][] and [#171][] by [@waywardmonkeys][])
 - Added `VirtualList::set_len` for resizable models, `ResizableExtentModel` for
   `TailAnchoredExtentModel`, and model query wrappers on `VirtualList` that do
-  not invalidate its cached visible strip. ([#170][] by [@waywardmonkeys][])
+  not invalidate its cached materialized strip. ([#170][] by [@waywardmonkeys][])
+- Added `VirtualList::materialized_strip`, `VirtualList::materialized_range`,
+  `VirtualList::materialized_indices`, `VirtualList::first_materialized_index`,
+  and `VirtualList::last_materialized_index` for the overscanned range that host
+  code should instantiate. ([#171][] by [@waywardmonkeys][])
+
+### Deprecated
+
+- Deprecated `VirtualList::visible_strip`, `VirtualList::visible_indices`,
+  `VirtualList::first_visible_index`, and `VirtualList::last_visible_index`;
+  these names implied viewport visibility, but their results include overscan.
+  ([#171][] by [@waywardmonkeys][])
+- Deprecated `VisibleStrip`, `VisibleStrip::visible_extent`, and
+  `compute_visible_strip`; these names implied viewport visibility, but the
+  result may include overscan. ([#171][] by [@waywardmonkeys][])
 
 ## [0.1.1][] (2026-05-17)
 
@@ -55,6 +70,7 @@ This is the initial release.
 [#166]: https://github.com/forest-rs/understory/pull/166
 [#169]: https://github.com/forest-rs/understory/pull/169
 [#170]: https://github.com/forest-rs/understory/pull/170
+[#171]: https://github.com/forest-rs/understory/pull/171
 
 [Unreleased]: https://github.com/forest-rs/understory/compare/understory_virtual_list-v0.1.1...HEAD
 [0.1.1]: https://github.com/forest-rs/understory/compare/understory_virtual_list-v0.1.0...understory_virtual_list-v0.1.1

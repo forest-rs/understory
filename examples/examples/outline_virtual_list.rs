@@ -152,7 +152,7 @@ fn print_visible_rows(
     outline: &mut Outline<InspectorModel<'_>>,
     list: &mut VirtualList<FixedExtentModel<f64>>,
 ) {
-    let strip = list.visible_strip();
+    let strip = list.materialized_strip();
     println!(
         "rows={} realized={}..{} scroll={} viewport={} overscan_before={} overscan_after={} before={} after={}",
         outline.visible_len(),

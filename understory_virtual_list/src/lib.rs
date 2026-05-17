@@ -16,12 +16,12 @@
 //!   and scroll positions.
 //! - [`ExtentModel`]: a trait describing a 1D strip of items with per-item extents
 //!   and prefix-sum-style queries.
-//! - [`compute_visible_strip`]: a helper that, given a scroll offset, viewport
+//! - [`compute_materialized_strip`]: a helper that, given a scroll offset, viewport
 //!   extent, and asymmetric overscan distances, returns which indices should be
-//!   realized plus how much padding exists before and after them.
+//!   materialized plus how much padding exists before and after them.
 //! - [`VirtualList`]: a small controller that wraps an [`ExtentModel`] implementation,
 //!   scroll state, viewport extent, and overscan, and caches the most recent
-//!   [`VisibleStrip`]. It also provides index-based scrolling via [`ScrollAlign`]
+//!   [`IndexStrip`]. It also provides index-based scrolling via [`ScrollAlign`]
 //!   and convenience methods for visibility queries and scroll clamping.
 //! - [`GridTrackModel`]: an adapter that maps a per-track [`ExtentModel`] onto a
 //!   per-cell view for grid-like layouts (tracks × cells).
@@ -32,9 +32,9 @@
 //! particular UI framework. Host frameworks are responsible for:
 //!
 //! - Owning the actual data and view/widget instances.
-//! - Calling [`VirtualList::visible_strip`] when scroll or viewport changes.
+//! - Calling [`VirtualList::materialized_strip`] when scroll or viewport changes.
 //! - Diffing the returned `[start, end)` index range to create/destroy children.
-//!   Use [`VirtualList::visible_range`] for the materialized range including
+//!   Use [`VirtualList::materialized_range`] for the materialized range including
 //!   overscan, and [`VirtualList::viewport_range`] for the range that overlaps
 //!   the viewport itself.
 //! - Calling [`VirtualList::set_len`] when the backing collection length changes
@@ -56,13 +56,13 @@
 //! // Scroll to 100px from the start.
 //! list.set_scroll_offset(100.0);
 //!
-//! let strip = list.visible_strip();
+//! let strip = list.materialized_strip();
 //! assert!(strip.start < strip.end);
 //! assert!(strip.content_extent > 0.0);
 //!
 //! // Host frameworks would now instantiate views for indices in `strip.range()`
 //! // and position them after `before_extent` worth of spacer.
-//! assert_eq!(strip.range(), list.visible_range());
+//! assert_eq!(strip.range(), list.materialized_range());
 //!
 //! // To report the non-overscanned range that overlaps the viewport:
 //! let range_in_viewport = list.viewport_range();
@@ -103,9 +103,9 @@
 //! let grid_model = GridTrackModel::new(row_model, columns, 12);
 //! let mut list = VirtualList::new(grid_model, 40.0, 0.0);
 //!
-//! let strip = list.visible_strip();
+//! let strip = list.materialized_strip();
 //! assert!(strip.start < strip.end);
-//! // Host code can map each visible cell index `i` to:
+//! // Host code can map each materialized cell index `i` to:
 //! //   let track = list.model().track_of_cell(i);
 //! //   let cell_in_track = list.model().cell_in_track(i);
 //! ```
@@ -127,7 +127,12 @@ mod virtual_list;
 
 pub use fixed::FixedExtentModel;
 pub use grid_track::GridTrackModel;
-pub use model::{ExtentModel, ResizableExtentModel, VisibleStrip, compute_visible_strip};
+pub use model::{ExtentModel, IndexStrip, ResizableExtentModel, compute_materialized_strip};
+#[allow(
+    deprecated,
+    reason = "deprecated public aliases are re-exported for compatibility"
+)]
+pub use model::{VisibleStrip, compute_visible_strip};
 pub use prefix_sum::PrefixSumExtentModel;
 pub use scalar::Scalar;
 pub use sparse::SparsePrefixSumExtentModel;

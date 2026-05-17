@@ -71,7 +71,7 @@ fn print_tail_state(
     transcript: &Transcript,
     list: &mut VirtualList<TailAnchoredExtentModel<PrefixSumExtentModel<f32>>>,
 ) {
-    let strip = list.visible_strip();
+    let strip = list.materialized_strip();
     println!(
         "scroll={:.1} is_at_tail={} realized={}..{} before={:.1} after={:.1} content={:.1}",
         list.scroll_offset(),
@@ -83,7 +83,7 @@ fn print_tail_state(
         strip.content_extent
     );
 
-    for index in list.visible_indices() {
+    for index in list.materialized_indices() {
         let entry = &transcript.entries()[index];
         println!("- [{}] {:?}", index, entry.kind);
     }

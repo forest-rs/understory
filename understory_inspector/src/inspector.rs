@@ -133,10 +133,10 @@ where
         self.outline.item(key)
     }
 
-    /// Returns the realized visible-row range for the current viewport and overscan.
+    /// Returns the realized row range for the current viewport and overscan.
     #[must_use]
     pub fn realized_range(&mut self) -> Range<usize> {
-        self.list.visible_range()
+        self.list.materialized_range()
     }
 
     /// Returns the current scroll offset.
