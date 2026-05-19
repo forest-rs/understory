@@ -7,12 +7,15 @@ use core::{cmp, ops::Range};
 
 use crate::Scalar;
 
-/// Result of a visibility query over a 1D strip.
+/// Result of an index-strip query over a 1D extent model.
+///
+/// Depending on the query that produced it, this may describe the overscanned
+/// materialized range or the non-overscanned viewport range.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct VisibleStrip<S: Scalar> {
-    /// First visible index (inclusive).
+pub struct IndexStrip<S: Scalar> {
+    /// First covered index (inclusive).
     pub start: usize,
-    /// One past the last visible index (exclusive).
+    /// One past the last covered index (exclusive).
     pub end: usize,
 
     /// Total extent of items before `start`.
@@ -23,7 +26,14 @@ pub struct VisibleStrip<S: Scalar> {
     pub content_extent: S,
 }
 
-impl<S: Scalar> VisibleStrip<S> {
+/// Deprecated name for [`IndexStrip`].
+#[deprecated(
+    since = "0.1.2",
+    note = "use `IndexStrip`; this type can describe materialized or viewport ranges"
+)]
+pub type VisibleStrip<S> = IndexStrip<S>;
+
+impl<S: Scalar> IndexStrip<S> {
     /// Returns the half-open index range covered by this strip.
     ///
     /// The returned range is always `start..end`, with `end` excluded. Empty
@@ -36,25 +46,35 @@ impl<S: Scalar> VisibleStrip<S> {
         }
     }
 
-    /// Returns `true` if there are no visible items.
+    /// Returns `true` if this strip covers no items.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.start == self.end
     }
 
-    /// Returns the number of visible items in this strip.
+    /// Returns the number of covered items in this strip.
     #[must_use]
     pub const fn len(&self) -> usize {
         self.end - self.start
     }
 
-    /// Returns the total extent of the visible items in this strip.
+    /// Returns the total extent of the covered items in this strip.
     ///
     /// This is `content_extent - before_extent - after_extent`, clamped to
     /// zero to guard against floating-point rounding.
     #[must_use]
-    pub fn visible_extent(&self) -> S {
+    pub fn covered_extent(&self) -> S {
         (self.content_extent - self.before_extent - self.after_extent).max(S::zero())
+    }
+
+    /// Returns the total extent of the covered items in this strip.
+    #[deprecated(
+        since = "0.1.2",
+        note = "use `covered_extent`; this strip may describe materialized or viewport ranges"
+    )]
+    #[must_use]
+    pub fn visible_extent(&self) -> S {
+        self.covered_extent()
     }
 }
 
@@ -143,31 +163,31 @@ pub trait ResizableExtentModel: ExtentModel {
     fn set_len(&mut self, len: usize);
 }
 
-/// Compute the visible slice of a strip, given scroll position, viewport size, and overscan.
+/// Computes the materialized strip for a scroll position, viewport size, and overscan.
 ///
 /// - `scroll_offset`: top of the viewport in strip coordinates (`>= 0`).
 /// - `viewport_extent`: size of the viewport in strip coordinates (`>= 0`).
 /// - `overscan_before`: extra margin *before* the viewport to reduce popping.
 /// - `overscan_after`: extra margin *after* the viewport to reduce popping.
 ///
-/// The returned [`VisibleStrip`] tells you:
+/// The returned [`IndexStrip`] tells you:
 /// - Which indices to materialize: `[start, end)`.
-/// - How much padding to place before/after the realized chunk.
+/// - How much padding to place before/after the materialized chunk.
 /// - The total content extent.
-pub fn compute_visible_strip<M>(
+pub fn compute_materialized_strip<M>(
     model: &mut M,
     scroll_offset: M::Scalar,
     viewport_extent: M::Scalar,
     overscan_before: M::Scalar,
     overscan_after: M::Scalar,
-) -> VisibleStrip<M::Scalar>
+) -> IndexStrip<M::Scalar>
 where
     M: ExtentModel,
 {
     type S<M> = <M as ExtentModel>::Scalar;
     let len = model.len();
     if len == 0 {
-        return VisibleStrip {
+        return IndexStrip {
             start: 0,
             end: 0,
             before_extent: S::<M>::zero(),
@@ -179,7 +199,7 @@ where
     let mut content_extent = model.total_extent().max(S::<M>::zero());
     if content_extent == S::<M>::zero() {
         // All items collapsed; treat as empty strip.
-        return VisibleStrip {
+        return IndexStrip {
             start: 0,
             end: 0,
             before_extent: S::<M>::zero(),
@@ -200,7 +220,7 @@ where
         // Very small viewport / overscan, or near-zero content.
         let anchor = min.min(content_extent);
         if anchor >= content_extent {
-            return VisibleStrip {
+            return IndexStrip {
                 start: len,
                 end: len,
                 before_extent: content_extent,
@@ -211,7 +231,7 @@ where
 
         let index = cmp::min(model.index_at_offset(anchor), len.saturating_sub(1));
         let before_extent = model.offset_of(index);
-        return VisibleStrip {
+        return IndexStrip {
             start: index,
             end: index,
             before_extent,
@@ -247,7 +267,7 @@ where
     };
     let after_extent = (content_extent - end_start).max(S::<M>::zero());
 
-    VisibleStrip {
+    IndexStrip {
         start,
         end,
         before_extent,
@@ -256,11 +276,35 @@ where
     }
 }
 
+/// Computes the materialized strip for a scroll position, viewport size, and overscan.
+#[deprecated(
+    since = "0.1.2",
+    note = "use `compute_materialized_strip`; this helper includes overscan and is not limited to the viewport"
+)]
+pub fn compute_visible_strip<M>(
+    model: &mut M,
+    scroll_offset: M::Scalar,
+    viewport_extent: M::Scalar,
+    overscan_before: M::Scalar,
+    overscan_after: M::Scalar,
+) -> IndexStrip<M::Scalar>
+where
+    M: ExtentModel,
+{
+    compute_materialized_strip(
+        model,
+        scroll_offset,
+        viewport_extent,
+        overscan_before,
+        overscan_after,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::vec::Vec;
 
-    use super::{ExtentModel, VisibleStrip, compute_visible_strip};
+    use super::{ExtentModel, IndexStrip, compute_materialized_strip};
     use crate::Scalar;
 
     #[derive(Clone, Debug)]
@@ -310,10 +354,10 @@ mod tests {
     #[test]
     fn empty_model_yields_empty_strip() {
         let mut model = SimpleModel::new(&[]);
-        let strip = compute_visible_strip(&mut model, 0.0, 100.0, 10.0, 10.0);
+        let strip = compute_materialized_strip(&mut model, 0.0, 100.0, 10.0, 10.0);
         assert_eq!(
             strip,
-            VisibleStrip {
+            IndexStrip {
                 start: 0,
                 end: 0,
                 before_extent: <f32 as Scalar>::zero(),
@@ -324,10 +368,10 @@ mod tests {
     }
 
     #[test]
-    fn simple_visible_range() {
+    fn simple_materialized_range() {
         // Three items, each 10 units tall.
         let mut model = SimpleModel::new(&[10.0, 10.0, 10.0]);
-        let strip = compute_visible_strip(&mut model, 5.0, 10.0, 0.0, 0.0);
+        let strip = compute_materialized_strip(&mut model, 5.0, 10.0, 0.0, 0.0);
         assert_eq!(strip.start, 0);
         assert_eq!(strip.end, 2);
         assert_eq!(strip.before_extent, 0.0);
@@ -336,48 +380,48 @@ mod tests {
     }
 
     #[test]
-    fn visible_strip_len_and_visible_extent() {
+    fn index_strip_len_and_covered_extent() {
         // Three items of 10 each, viewport at offset 5 with size 10 → items 0..2 visible.
         let mut model = SimpleModel::new(&[10.0, 10.0, 10.0]);
-        let strip = compute_visible_strip(&mut model, 5.0, 10.0, 0.0, 0.0);
+        let strip = compute_materialized_strip(&mut model, 5.0, 10.0, 0.0, 0.0);
         assert_eq!(strip.range(), 0..2);
         assert_eq!(strip.len(), 2);
-        assert!((strip.visible_extent() - 20.0_f32).abs() < 1e-5);
+        assert!((strip.covered_extent() - 20.0_f32).abs() < 1e-5);
 
-        // Empty model → len 0, visible_extent 0.
+        // Empty model → len 0, covered extent 0.
         let mut model = SimpleModel::new(&[]);
-        let strip = compute_visible_strip(&mut model, 0.0, 100.0, 0.0, 0.0);
+        let strip = compute_materialized_strip(&mut model, 0.0, 100.0, 0.0, 0.0);
         assert_eq!(strip.range(), 0..0);
         assert_eq!(strip.len(), 0);
         assert!(strip.is_empty());
-        assert!((strip.visible_extent() - 0.0_f32).abs() < 1e-5);
+        assert!((strip.covered_extent() - 0.0_f32).abs() < 1e-5);
     }
 
     #[test]
-    fn empty_visible_range_beyond_content_has_coherent_spacers() {
+    fn empty_materialized_range_beyond_content_has_coherent_spacers() {
         let mut model = SimpleModel::new(&[10.0, 10.0, 10.0]);
-        let strip = compute_visible_strip(&mut model, 100.0, 0.0, 0.0, 0.0);
+        let strip = compute_materialized_strip(&mut model, 100.0, 0.0, 0.0, 0.0);
 
         assert_eq!(strip.start, 3);
         assert_eq!(strip.end, 3);
         assert_eq!(strip.before_extent, 30.0);
         assert_eq!(strip.after_extent, 0.0);
         assert_eq!(strip.content_extent, 30.0);
-        assert_eq!(strip.visible_extent(), 0.0);
+        assert_eq!(strip.covered_extent(), 0.0);
         assert_eq!(strip.range(), 3..3);
     }
 
     #[test]
-    fn empty_visible_range_inside_content_has_coherent_spacers() {
+    fn empty_materialized_range_inside_content_has_coherent_spacers() {
         let mut model = SimpleModel::new(&[10.0, 10.0, 10.0]);
-        let strip = compute_visible_strip(&mut model, 15.0, 0.0, 0.0, 0.0);
+        let strip = compute_materialized_strip(&mut model, 15.0, 0.0, 0.0, 0.0);
 
         assert_eq!(strip.start, 1);
         assert_eq!(strip.end, 1);
         assert_eq!(strip.before_extent, 10.0);
         assert_eq!(strip.after_extent, 20.0);
         assert_eq!(strip.content_extent, 30.0);
-        assert_eq!(strip.visible_extent(), 0.0);
+        assert_eq!(strip.covered_extent(), 0.0);
         assert_eq!(strip.range(), 1..1);
     }
 
@@ -385,9 +429,26 @@ mod tests {
     fn asymmetric_overscan_extends_in_one_direction() {
         let mut model = SimpleModel::new(&[10.0, 10.0, 10.0, 10.0]);
         // Viewport covers roughly items 1 and 2 (offset 10..30). Overscan only after.
-        let strip = compute_visible_strip(&mut model, 10.0, 20.0, 0.0, 10.0);
+        let strip = compute_materialized_strip(&mut model, 10.0, 20.0, 0.0, 10.0);
         // We should still start at item 1, but extend end to include item 3.
         assert_eq!(strip.start, 1);
         assert_eq!(strip.end, 4);
+    }
+
+    #[test]
+    #[allow(
+        deprecated,
+        reason = "the test verifies deprecated visible names forward to the replacement API"
+    )]
+    fn deprecated_visible_names_forward_to_index_strip_names() {
+        let mut model = SimpleModel::new(&[10.0, 10.0, 10.0]);
+        let strip: super::VisibleStrip<f32> =
+            super::compute_visible_strip(&mut model, 5.0, 10.0, 0.0, 0.0);
+
+        assert_eq!(
+            strip,
+            compute_materialized_strip(&mut model, 5.0, 10.0, 0.0, 0.0)
+        );
+        assert_eq!(strip.visible_extent(), strip.covered_extent());
     }
 }

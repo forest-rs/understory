@@ -91,7 +91,7 @@ fn entry_extent(entry: &TranscriptEntry) -> f32 {
 }
 
 fn print_strip(transcript: &Transcript, list: &mut VirtualList<PrefixSumExtentModel<f32>>) {
-    let strip = list.visible_strip();
+    let strip = list.materialized_strip();
     println!(
         "scroll={:.1} viewport={:.1} overscan=({:.1},{:.1}) realized={}..{} before={:.1} after={:.1} content={:.1}",
         list.scroll_offset(),
@@ -105,7 +105,7 @@ fn print_strip(transcript: &Transcript, list: &mut VirtualList<PrefixSumExtentMo
         strip.content_extent
     );
 
-    for index in list.visible_indices() {
+    for index in list.materialized_indices() {
         let entry = &transcript.entries()[index];
         println!("- [{}] {:.1} {:?}", index, entry_extent(entry), entry.kind);
     }

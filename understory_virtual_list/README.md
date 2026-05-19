@@ -33,12 +33,12 @@ The core concepts are:
   and scroll positions.
 - [`ExtentModel`]: a trait describing a 1D strip of items with per-item extents
   and prefix-sum-style queries.
-- [`compute_visible_strip`]: a helper that, given a scroll offset, viewport
+- [`compute_materialized_strip`]: a helper that, given a scroll offset, viewport
   extent, and asymmetric overscan distances, returns which indices should be
-  realized plus how much padding exists before and after them.
+  materialized plus how much padding exists before and after them.
 - [`VirtualList`]: a small controller that wraps an [`ExtentModel`] implementation,
   scroll state, viewport extent, and overscan, and caches the most recent
-  [`VisibleStrip`]. It also provides index-based scrolling via [`ScrollAlign`]
+  [`IndexStrip`]. It also provides index-based scrolling via [`ScrollAlign`]
   and convenience methods for visibility queries and scroll clamping.
 - [`GridTrackModel`]: an adapter that maps a per-track [`ExtentModel`] onto a
   per-cell view for grid-like layouts (tracks × cells).
@@ -49,9 +49,9 @@ This crate deliberately does **not** know about widgets, display trees, or any
 particular UI framework. Host frameworks are responsible for:
 
 - Owning the actual data and view/widget instances.
-- Calling [`VirtualList::visible_strip`] when scroll or viewport changes.
+- Calling [`VirtualList::materialized_strip`] when scroll or viewport changes.
 - Diffing the returned `[start, end)` index range to create/destroy children.
-  Use [`VirtualList::visible_range`] for the materialized range including
+  Use [`VirtualList::materialized_range`] for the materialized range including
   overscan, and [`VirtualList::viewport_range`] for the range that overlaps
   the viewport itself.
 - Calling [`VirtualList::set_len`] when the backing collection length changes
@@ -73,13 +73,13 @@ let mut list = VirtualList::new(model, 200.0, 40.0);
 // Scroll to 100px from the start.
 list.set_scroll_offset(100.0);
 
-let strip = list.visible_strip();
+let strip = list.materialized_strip();
 assert!(strip.start < strip.end);
 assert!(strip.content_extent > 0.0);
 
 // Host frameworks would now instantiate views for indices in `strip.range()`
 // and position them after `before_extent` worth of spacer.
-assert_eq!(strip.range(), list.visible_range());
+assert_eq!(strip.range(), list.materialized_range());
 
 // To report the non-overscanned range that overlaps the viewport:
 let range_in_viewport = list.viewport_range();
@@ -120,9 +120,9 @@ let columns = NonZeroUsize::new(3).unwrap();
 let grid_model = GridTrackModel::new(row_model, columns, 12);
 let mut list = VirtualList::new(grid_model, 40.0, 0.0);
 
-let strip = list.visible_strip();
+let strip = list.materialized_strip();
 assert!(strip.start < strip.end);
-// Host code can map each visible cell index `i` to:
+// Host code can map each materialized cell index `i` to:
 //   let track = list.model().track_of_cell(i);
 //   let cell_in_track = list.model().cell_in_track(i);
 ```
@@ -131,9 +131,10 @@ This crate is `no_std` and uses `alloc`.
 
 <!-- cargo-rdme end -->
 
-[`compute_visible_strip`]: https://docs.rs/understory_virtual_list/latest/understory_virtual_list/fn.compute_visible_strip.html
+[`compute_materialized_strip`]: https://docs.rs/understory_virtual_list/latest/understory_virtual_list/fn.compute_materialized_strip.html
 [`ExtentModel`]: https://docs.rs/understory_virtual_list/latest/understory_virtual_list/trait.ExtentModel.html
 [`GridTrackModel`]: https://docs.rs/understory_virtual_list/latest/understory_virtual_list/struct.GridTrackModel.html
+[`IndexStrip`]: https://docs.rs/understory_virtual_list/latest/understory_virtual_list/struct.IndexStrip.html
 [`PrefixSumExtentModel`]: https://docs.rs/understory_virtual_list/latest/understory_virtual_list/struct.PrefixSumExtentModel.html
 [`PrefixSumExtentModel::index_at_offset_for_len`]: https://docs.rs/understory_virtual_list/latest/understory_virtual_list/struct.PrefixSumExtentModel.html#method.index_at_offset_for_len
 [`PrefixSumExtentModel::rebuild`]: https://docs.rs/understory_virtual_list/latest/understory_virtual_list/struct.PrefixSumExtentModel.html#method.rebuild
@@ -149,11 +150,10 @@ This crate is `no_std` and uses `alloc`.
 [`SparsePrefixSumExtentModel::total_extent_for_len`]: https://docs.rs/understory_virtual_list/latest/understory_virtual_list/struct.SparsePrefixSumExtentModel.html#method.total_extent_for_len
 [`TailAnchoredExtentModel`]: https://docs.rs/understory_virtual_list/latest/understory_virtual_list/struct.TailAnchoredExtentModel.html
 [`VirtualList`]: https://docs.rs/understory_virtual_list/latest/understory_virtual_list/struct.VirtualList.html
+[`VirtualList::materialized_range`]: https://docs.rs/understory_virtual_list/latest/understory_virtual_list/struct.VirtualList.html#method.materialized_range
+[`VirtualList::materialized_strip`]: https://docs.rs/understory_virtual_list/latest/understory_virtual_list/struct.VirtualList.html#method.materialized_strip
 [`VirtualList::set_len`]: https://docs.rs/understory_virtual_list/latest/understory_virtual_list/struct.VirtualList.html#method.set_len
 [`VirtualList::viewport_range`]: https://docs.rs/understory_virtual_list/latest/understory_virtual_list/struct.VirtualList.html#method.viewport_range
-[`VirtualList::visible_range`]: https://docs.rs/understory_virtual_list/latest/understory_virtual_list/struct.VirtualList.html#method.visible_range
-[`VirtualList::visible_strip`]: https://docs.rs/understory_virtual_list/latest/understory_virtual_list/struct.VirtualList.html#method.visible_strip
-[`VisibleStrip`]: https://docs.rs/understory_virtual_list/latest/understory_virtual_list/struct.VisibleStrip.html
 
 ## Minimum supported Rust Version (MSRV)
 
