@@ -33,11 +33,23 @@ support, and full precedence handling are provided by `understory_style`.
 
 [`PropertyStore`] holds Local and Animation values per-object:
 
-- **Local** - explicitly set values
-- **Animation** - temporary animation overrides (highest precedence)
+- **Local** — explicitly set values, layered by [`LocalValueSource`]
+- **Animation** — temporary animation overrides (highest precedence)
 
 Inheritance is handled by [`DependencyObjectExt::get_inherited`].
 Style and theme resolution are handled externally by `understory_style`.
+
+### Layered Local Values
+
+The local layer is split into one sparse slot per [`LocalValueSource`]:
+`Local`, `TemplateBinding`, `TemplateDefault`. A write goes to its source's
+own slot; reads resolve the highest source that currently has a value.
+Clearing the winning source therefore reveals whatever a lower source had
+previously written. The
+[`clear_local_by_source`](PropertyStore::clear_local_by_source) hook empties
+exactly one source's slot — useful when a template tears down and should
+drop only the values it installed. See [`LocalValueSource`] for the
+precedence order.
 
 ### Key Operations
 

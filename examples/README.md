@@ -27,7 +27,7 @@ These examples form a short, progressive walkthrough from routing basics to inte
   - Run: `cargo run -p understory_examples --example index_basics`
 
 - property_binding_loop
-  - Drive the canonical `understory_property_binding` host loop: mark source endpoints, drain bindings, apply successful and partial reports to app invalidation, and tear down retained owners.
+  - Drive the canonical `understory_property_binding` host loop over `understory_property` source slots: bindings write `TemplateBinding`, user `Local` values mask and reveal those writes, template teardown clears retained bindings, and partial reports still feed app invalidation.
   - Run: `cargo run -p understory_examples --example property_binding_loop`
 
 - box_tree_basics
