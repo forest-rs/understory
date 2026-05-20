@@ -13,6 +13,7 @@ env:
   # This should be limited to packages that are intended for publishing.
   RUST_MIN_VER_PKGS: >-
     -p understory_axis
+    -p understory_property_binding
     -p understory_box_tree
     -p understory_event_state
     -p understory_focus

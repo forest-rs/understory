@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
   "understory_axis",
+  "understory_property_binding",
   "understory_guide",
   "understory_index",
   "understory_box_tree",
@@ -45,6 +46,7 @@ smallvec = { version = "1.13.2", default-features = false }
 # Internal crate dependencies are centralized here so path dependencies carry
 # the version requirements needed for packaging.
 understory_axis = { version = "0.1.0", path = "understory_axis", default-features = false }
+understory_property_binding = { version = "0.1.0", path = "understory_property_binding", default-features = false }
 understory_box_tree = { version = "0.0.1", path = "understory_box_tree", default-features = false }
 understory_event_state = { version = "0.1.0", path = "understory_event_state", default-features = false }
 understory_focus = { version = "0.1.0", path = "understory_focus", default-features = false }

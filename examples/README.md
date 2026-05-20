@@ -26,6 +26,10 @@ These examples form a short, progressive walkthrough from routing basics to inte
   - Insert, update, commit damage, and query using `understory_index`.
   - Run: `cargo run -p understory_examples --example index_basics`
 
+- property_binding_loop
+  - Drive the canonical `understory_property_binding` host loop: mark source endpoints, drain bindings, apply successful and partial reports to app invalidation, and tear down retained owners.
+  - Run: `cargo run -p understory_examples --example property_binding_loop`
+
 - box_tree_basics
   - Build a small scene, commit, move a node, compute damage, and hit-test using `understory_box_tree`.
   - Run: `cargo run -p understory_examples --example box_tree_basics`
