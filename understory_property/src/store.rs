@@ -41,6 +41,8 @@
 //! `Option<Box<...>>` for the template slots).
 
 use alloc::vec::Vec;
+use core::any::TypeId;
+use invalidation::ChannelSet;
 use smallvec::SmallVec;
 
 use crate::id::{Property, PropertyId};
@@ -101,6 +103,15 @@ impl LocalValueSource {
 }
 
 type Entry = (PropertyId, ErasedValue);
+
+/// Type-id mismatch reported by checked type-erased setters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ErasedTypeMismatch {
+    /// The value type registered for the property.
+    pub expected: TypeId,
+    /// The value type carried by the supplied [`ErasedValue`].
+    pub actual: TypeId,
+}
 
 /// Shared helpers for the sorted sparse layouts of [`Entry`] used by every
 /// source's slot. Both `Vec<Entry>` and `SmallVec<[Entry; _]>` get the same
@@ -345,6 +356,49 @@ impl<K: Copy + Eq> PropertyStore<K> {
             .and_then(ErasedValue::downcast_ref)
     }
 
+    /// Returns the erased value from the winning local-layer source for `id`.
+    ///
+    /// This walks the [`LocalValueSource`] precedence order
+    /// (`Local` → `TemplateBinding` → `TemplateDefault`) and returns the first
+    /// value present. It does not consult animation values; use
+    /// [`effective_local_erased`](Self::effective_local_erased) for
+    /// `Animation` → local-layer resolution.
+    #[must_use]
+    #[inline]
+    pub fn local_winner_erased(&self, id: PropertyId) -> Option<&ErasedValue> {
+        self.local_layer_lookup(id).map(|(_, value)| value)
+    }
+
+    /// Returns the erased animation value for `id`, if one is set.
+    #[must_use]
+    #[inline]
+    pub fn animation_erased(&self, id: PropertyId) -> Option<&ErasedValue> {
+        self.animation_entries.entry_get(id)
+    }
+
+    /// Returns the erased effective-local value for `id`, if one is set.
+    ///
+    /// This resolves only `Animation` → winning local-layer value. It does not
+    /// include style, theme, inherited, or registry-default values; those are
+    /// resolved by higher-level crates.
+    #[must_use]
+    #[inline]
+    pub fn effective_local_erased(&self, id: PropertyId) -> Option<&ErasedValue> {
+        self.animation_erased(id)
+            .or_else(|| self.local_winner_erased(id))
+    }
+
+    /// Returns the erased value at a specific local-layer source slot.
+    #[must_use]
+    #[inline]
+    pub fn local_erased_at_source(
+        &self,
+        id: PropertyId,
+        source: LocalValueSource,
+    ) -> Option<&ErasedValue> {
+        self.slot_get(id, source)
+    }
+
     /// Returns `true` if any local-layer source has a value for `property`.
     #[must_use]
     #[inline]
@@ -420,6 +474,78 @@ impl<K: Copy + Eq> PropertyStore<K> {
         source: LocalValueSource,
     ) {
         self.slot_write(property.id(), source, ErasedValue::new(value));
+    }
+
+    /// Writes an erased value to the slot for `source`.
+    ///
+    /// # Type Contract
+    ///
+    /// `value.type_id()` must match the [`PropertyRegistration`] type for
+    /// `id`. This unchecked setter does not validate the contract; callers
+    /// should validate through [`PropertyRegistry::get`] or use
+    /// [`set_local_erased_with_source_checked`](Self::set_local_erased_with_source_checked).
+    ///
+    /// [`PropertyRegistration`]: crate::PropertyRegistration
+    pub fn set_local_erased_with_source(
+        &mut self,
+        id: PropertyId,
+        value: ErasedValue,
+        source: LocalValueSource,
+    ) {
+        self.slot_write(id, source, value);
+    }
+
+    /// Writes an erased value to the slot for `source` after checking its type.
+    ///
+    /// The value's [`TypeId`] is compared with the type registered for `id` in
+    /// `registry`. On mismatch the store is left unchanged and
+    /// [`ErasedTypeMismatch`] is returned.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `id` is not registered in `registry`.
+    pub fn set_local_erased_with_source_checked(
+        &mut self,
+        id: PropertyId,
+        value: ErasedValue,
+        source: LocalValueSource,
+        registry: &PropertyRegistry,
+    ) -> Result<(), ErasedTypeMismatch> {
+        let expected = registry
+            .get(id)
+            .unwrap_or_else(|| panic!("Property {id:?} not found in registry"))
+            .type_id();
+        let actual = value.type_id();
+        if actual != expected {
+            return Err(ErasedTypeMismatch { expected, actual });
+        }
+
+        self.set_local_erased_with_source(id, value, source);
+        Ok(())
+    }
+
+    /// Writes an erased source-tagged local value and returns affected channels.
+    ///
+    /// This uses the same type check as
+    /// [`set_local_erased_with_source_checked`](Self::set_local_erased_with_source_checked).
+    /// After a successful write it conservatively returns the full
+    /// `affects_channels` set for `id`: the erased path cannot compare the old
+    /// and new typed effective values, so it over-invalidates rather than
+    /// missing a possible change. Callers that need exact no-op suppression
+    /// should use the typed notifying path.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `id` is not registered in `registry`.
+    pub fn set_local_erased_with_source_notifying(
+        &mut self,
+        id: PropertyId,
+        value: ErasedValue,
+        source: LocalValueSource,
+        registry: &PropertyRegistry,
+    ) -> Result<ChannelSet, ErasedTypeMismatch> {
+        self.set_local_erased_with_source_checked(id, value, source, registry)?;
+        Ok(registry.affects_channels(id))
     }
 
     /// Clears the value at [`LocalValueSource::Local`] only.
@@ -695,6 +821,8 @@ mod tests {
     use crate::metadata::PropertyMetadataBuilder;
     use alloc::boxed::Box;
     use alloc::vec::Vec;
+    use core::any::TypeId;
+    use invalidation::Channel;
 
     fn setup_registry() -> (PropertyRegistry, Property<f64>, Property<i32>) {
         let mut registry = PropertyRegistry::new();
@@ -1086,5 +1214,173 @@ mod tests {
         assert_eq!(ids.len(), 2);
         assert!(ids.contains(&width.id()));
         assert!(ids.contains(&count.id()));
+    }
+
+    #[test]
+    fn local_winner_erased_returns_highest_source_entry() {
+        let (_, width, _) = setup_registry();
+        let mut store = PropertyStore::<u32>::new(1);
+
+        store.set_local_with_source(width, 10.0, LocalValueSource::TemplateDefault);
+        store.set_local_with_source(width, 20.0, LocalValueSource::TemplateBinding);
+
+        let erased = store.local_winner_erased(width.id()).unwrap();
+        assert_eq!(erased.downcast_ref::<f64>(), Some(&20.0));
+        assert_eq!(store.get_local(width), Some(&20.0));
+
+        store.set_local(width, 30.0);
+        let erased = store.local_winner_erased(width.id()).unwrap();
+        assert_eq!(erased.downcast_ref::<f64>(), Some(&30.0));
+        assert_eq!(store.get_local(width), Some(&30.0));
+    }
+
+    #[test]
+    fn local_winner_erased_returns_none_without_local_entries() {
+        let (_, width, _) = setup_registry();
+        let store = PropertyStore::<u32>::new(1);
+
+        assert!(store.local_winner_erased(width.id()).is_none());
+    }
+
+    #[test]
+    fn effective_local_erased_prefers_animation_over_local_winner() {
+        let (_, width, _) = setup_registry();
+        let mut store = PropertyStore::<u32>::new(1);
+
+        store.set_local(width, 100.0);
+        store.set_animation(width, 200.0);
+
+        let erased = store.effective_local_erased(width.id()).unwrap();
+        assert_eq!(erased.downcast_ref::<f64>(), Some(&200.0));
+    }
+
+    #[test]
+    fn animation_erased_returns_animation_slot_entry() {
+        let (_, width, _) = setup_registry();
+        let mut store = PropertyStore::<u32>::new(1);
+
+        assert!(store.animation_erased(width.id()).is_none());
+
+        store.set_local(width, 100.0);
+        store.set_animation(width, 200.0);
+
+        let erased = store.animation_erased(width.id()).unwrap();
+        assert_eq!(erased.downcast_ref::<f64>(), Some(&200.0));
+    }
+
+    #[test]
+    fn local_erased_at_source_reads_specific_slot() {
+        let (_, width, _) = setup_registry();
+        let mut store = PropertyStore::<u32>::new(1);
+
+        store.set_local_with_source(width, 10.0, LocalValueSource::TemplateDefault);
+        store.set_local(width, 30.0);
+
+        let erased = store
+            .local_erased_at_source(width.id(), LocalValueSource::TemplateDefault)
+            .unwrap();
+        assert_eq!(erased.downcast_ref::<f64>(), Some(&10.0));
+        let erased = store
+            .local_erased_at_source(width.id(), LocalValueSource::Local)
+            .unwrap();
+        assert_eq!(erased.downcast_ref::<f64>(), Some(&30.0));
+    }
+
+    #[test]
+    fn set_local_erased_with_source_checked_rejects_mismatch_and_leaves_store() {
+        let (registry, width, _) = setup_registry();
+        let mut store = PropertyStore::<u32>::new(1);
+        store.set_local_with_source(width, 10.0, LocalValueSource::TemplateDefault);
+
+        let err = store
+            .set_local_erased_with_source_checked(
+                width.id(),
+                ErasedValue::new(42_i32),
+                LocalValueSource::TemplateDefault,
+                &registry,
+            )
+            .unwrap_err();
+
+        assert_eq!(err.expected, TypeId::of::<f64>());
+        assert_eq!(err.actual, TypeId::of::<i32>());
+        assert_eq!(store.get_local(width), Some(&10.0));
+    }
+
+    #[test]
+    fn set_local_erased_with_source_round_trips_through_typed_read() {
+        let (_, width, _) = setup_registry();
+        let mut store = PropertyStore::<u32>::new(1);
+
+        store.set_local_erased_with_source(
+            width.id(),
+            ErasedValue::new(42.0_f64),
+            LocalValueSource::TemplateBinding,
+        );
+
+        assert_eq!(store.get_local(width), Some(&42.0));
+        assert_eq!(
+            store.get_local_source(width),
+            Some(LocalValueSource::TemplateBinding)
+        );
+    }
+
+    #[test]
+    fn set_local_erased_with_source_notifying_returns_channels_even_for_same_value() {
+        const LAYOUT: Channel = Channel::new(0);
+
+        let mut registry = PropertyRegistry::new();
+        let width: Property<f64> = registry.register(
+            "Width",
+            PropertyMetadataBuilder::new(0.0_f64)
+                .affects_channels(LAYOUT.into_set())
+                .build(),
+        );
+        let mut store = PropertyStore::<u32>::new(1);
+
+        let first = store
+            .set_local_erased_with_source_notifying(
+                width.id(),
+                ErasedValue::new(10.0_f64),
+                LocalValueSource::Local,
+                &registry,
+            )
+            .unwrap();
+        let second = store
+            .set_local_erased_with_source_notifying(
+                width.id(),
+                ErasedValue::new(10.0_f64),
+                LocalValueSource::Local,
+                &registry,
+            )
+            .unwrap();
+
+        assert!(first.contains(LAYOUT));
+        assert!(second.contains(LAYOUT));
+        assert_eq!(store.get_local(width), Some(&10.0));
+    }
+
+    #[test]
+    fn set_local_erased_with_source_notifying_mismatch_leaves_store_untouched() {
+        let (registry, width, _) = setup_registry();
+        let mut store = PropertyStore::<u32>::new(1);
+        store.set_local_with_source(width, 10.0, LocalValueSource::TemplateDefault);
+
+        let err = store
+            .set_local_erased_with_source_notifying(
+                width.id(),
+                ErasedValue::new(42_i32),
+                LocalValueSource::Local,
+                &registry,
+            )
+            .unwrap_err();
+
+        assert_eq!(err.expected, TypeId::of::<f64>());
+        assert_eq!(err.actual, TypeId::of::<i32>());
+        assert!(!store.has_local_at_source(width, LocalValueSource::Local));
+        assert_eq!(
+            store.get_local_at_source(width, LocalValueSource::TemplateDefault),
+            Some(&10.0)
+        );
+        assert_eq!(store.get_local(width), Some(&10.0));
     }
 }
