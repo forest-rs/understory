@@ -13,6 +13,11 @@ The focus is on clean separation of concerns, pluggable performance trade‑offs
   - Point and rectangle queries.
   - Batched updates via `commit()` with coarse damage (added, removed, moved).
 
+- `understory_property_binding`
+  - Small one-way property binding primitives for dependency-property endpoints.
+  - Tracks source/target endpoint indexes, dirty binding selection, dependency ordering, and deterministic drain reports.
+  - Host code owns property storage and application invalidation policy through the `BindingHost` boundary.
+
 - `understory_box_tree`
   - A Kurbo‑native, spatially indexed box tree for scene geometry: local bounds, transforms, optional clips, and z‑order.
   - Computes world‑space AABBs and synchronizes them into `understory_index` for fast hit‑testing and visibility.
@@ -130,6 +135,7 @@ For example, a canvas or DWG or DXF viewer can reuse the box and index layers wi
   - `understory_timing/README.md` documents host-driven timer queue scheduling, expiration, and repeat policy.
   - `understory_transcript/README.md` documents append-order transcript storage, generic payloads, explicit update semantics, typed entry kinds, and chat/tool/process-style usage.
   - `understory_view2d/README.md` documents the 2D and 1D viewport types, clamping/fit modes, and examples of using visible regions for culling.
+  - `understory_property_binding/README.md` documents one-way property bindings, host endpoint adapters, and binding-local invalidation.
 - Run examples.
   - `cargo run -p understory_examples --example index_basics`
   - `cargo run -p understory_examples --example box_tree_basics`

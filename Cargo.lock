@@ -554,6 +554,7 @@ dependencies = [
 name = "understory_examples"
 version = "0.1.0"
 dependencies = [
+ "invalidation",
  "kurbo",
  "understory_box_tree",
  "understory_event_state",
@@ -562,6 +563,8 @@ dependencies = [
  "understory_inspector",
  "understory_outline",
  "understory_precise_hit",
+ "understory_property",
+ "understory_property_binding",
  "understory_responder",
  "understory_timing",
  "understory_transcript",
@@ -623,6 +626,15 @@ dependencies = [
  "hashbrown",
  "invalidation",
  "smallvec",
+]
+
+[[package]]
+name = "understory_property_binding"
+version = "0.1.0"
+dependencies = [
+ "hashbrown",
+ "invalidation",
+ "understory_property",
 ]
 
 [[package]]
