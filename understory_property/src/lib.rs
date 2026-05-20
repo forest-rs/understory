@@ -130,5 +130,5 @@ pub use object::{
     DependencyObject, DependencyObjectExt, ParentLookup, walk_inherited, walk_inherited_ref,
 };
 pub use registry::{PropertyRegistration, PropertyRegistry};
-pub use store::{LocalValueSource, PropertyStore};
+pub use store::{ErasedTypeMismatch, LocalValueSource, PropertyStore};
 pub use value::ErasedValue;
