@@ -201,8 +201,8 @@
 //!
 //! ```rust
 //! use understory_style::{
-//!     ClassId, SelectorStep, PseudoClassId, ResolveCx, SelectorInputs, StyleCascade,
-//!     StyleCascadeBuilder, StyleBuilder, StyleOrigin, PartTag, ThemeBuilder,
+//!     ClassId, NoResolveParentLookup, SelectorStep, PseudoClassId, ResolveCx, SelectorInputs,
+//!     StyleCascade, StyleCascadeBuilder, StyleBuilder, StyleOrigin, PartTag, ThemeBuilder,
 //! };
 //! use understory_property::{
 //!     DependencyObject, PropertyMetadataBuilder, PropertyRegistry, PropertyStore,
@@ -251,7 +251,7 @@
 //! };
 //!
 //! // Create resolution context
-//! let cx = ResolveCx::new(&registry, &theme, |_key| None);
+//! let cx = ResolveCx::new(&registry, &theme, NoResolveParentLookup);
 //!
 //! // Resolve with style (no hover)
 //! let inputs = SelectorInputs::new(None, &[PRIMARY], &[]);
@@ -395,7 +395,9 @@ pub use matcher::{
     MatchRule, MatchState, Matcher, MatcherBuilder, RuleCursor, StyleCascade, StyleCascadeBuilder,
     StyleChangeSet, SubjectRestyle, WinningStyleSource,
 };
-pub use resolve::ResolveCx;
+pub use resolve::{
+    NoResolveParentLookup, PropertyParentLookup, ResolveCx, ResolveParent, ResolveParentLookup,
+};
 pub use selector::{
     ClassId, IdSet, PartTag, PseudoClassId, Selector, SelectorBuilder, SelectorCombinator,
     SelectorInputs, SelectorInputsOwned, SelectorMismatch, SelectorStep, Specificity, TypeTag,

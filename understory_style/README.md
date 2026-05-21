@@ -218,8 +218,8 @@ to resolution functions.
 
 ```rust
 use understory_style::{
-    ClassId, SelectorStep, PseudoClassId, ResolveCx, SelectorInputs, StyleCascade,
-    StyleCascadeBuilder, StyleBuilder, StyleOrigin, PartTag, ThemeBuilder,
+    ClassId, NoResolveParentLookup, SelectorStep, PseudoClassId, ResolveCx, SelectorInputs,
+    StyleCascade, StyleCascadeBuilder, StyleBuilder, StyleOrigin, PartTag, ThemeBuilder,
 };
 use understory_property::{
     DependencyObject, PropertyMetadataBuilder, PropertyRegistry, PropertyStore,
@@ -268,7 +268,7 @@ let element = Element {
 };
 
 // Create resolution context
-let cx = ResolveCx::new(&registry, &theme, |_key| None);
+let cx = ResolveCx::new(&registry, &theme, NoResolveParentLookup);
 
 // Resolve with style (no hover)
 let inputs = SelectorInputs::new(None, &[PRIMARY], &[]);
