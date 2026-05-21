@@ -6,7 +6,9 @@
 //! The matcher exposes a compact [`MatchState`] so embedders can walk their own
 //! tree of style subjects without giving `understory_style` access to widget or
 //! template nodes. The matcher compiles child and descendant selector paths into
-//! interned NFA states.
+//! interned NFA states. Selectors are unanchored: every entered subject can
+//! start a selector, while ancestor-entered state carries child/descendant
+//! progress to the current subject.
 
 use alloc::boxed::Box;
 use alloc::rc::Rc;
@@ -221,7 +223,7 @@ impl Matcher {
 
         let state = {
             let states = self.inner.states.borrow();
-            self.advance_state(&states[state_index(parent)], inputs)
+            self.advance_state(&states[0], &states[state_index(parent)], inputs)
         };
         let child = self.intern_state(state);
         self.cache_transition(parent, inputs, child);
@@ -284,11 +286,16 @@ impl Matcher {
         }
     }
 
-    fn advance_state(&self, parent: &StateData, inputs: &SelectorInputs<'_>) -> StateData {
+    fn advance_state(
+        &self,
+        root: &StateData,
+        parent: &StateData,
+        inputs: &SelectorInputs<'_>,
+    ) -> StateData {
         let mut active = Vec::new();
         let mut matched_rules = Vec::new();
 
-        for cursor in parent.active.iter().copied() {
+        for cursor in parent.active.iter().chain(root.active.iter()).copied() {
             let rule_index = cursor_rule_index(cursor);
             let step_index = usize::from(cursor.step_index);
             let rule = &self.inner.rules[rule_index];
@@ -1129,6 +1136,95 @@ mod tests {
         assert_eq!(matcher.get_value_ref(root, width), Some(&10));
         assert_eq!(matcher.get_value_ref(track, width), Some(&20));
         assert_eq!(matcher.get_value_ref(thumb, width), Some(&30));
+    }
+
+    #[test]
+    fn matcher_starts_selectors_at_each_subject() {
+        let mut registry = PropertyRegistry::new();
+        let width = registry.register("Width", PropertyMetadataBuilder::new(0_u32).build());
+
+        let nested_type = TypeTag(2);
+        let matcher = MatcherBuilder::new()
+            .rule(
+                Selector::single(SelectorStep::type_tag(nested_type)),
+                StyleBuilder::new().set(width, 10_u32).build(),
+            )
+            .build();
+
+        let root = matcher.enter_subject(matcher.root_state(), &SelectorInputs::typed(TOGGLE));
+        let nested = matcher.enter_subject(root, &SelectorInputs::typed(nested_type));
+
+        assert_eq!(matcher.get_value_ref(nested, width), Some(&10));
+    }
+
+    #[test]
+    fn owner_pseudo_child_selector_matches_nested_type_subject() {
+        let mut registry = PropertyRegistry::new();
+        let width = registry.register("Width", PropertyMetadataBuilder::new(0_u32).build());
+
+        const BUTTON: TypeTag = TypeTag(30);
+        const TEXT: TypeTag = TypeTag(31);
+        const PRESSED: PseudoClassId = PseudoClassId(32);
+
+        let matcher = MatcherBuilder::new()
+            .rule(
+                Selector::child(
+                    SelectorStep::type_tag(BUTTON).with_pseudo(PRESSED),
+                    SelectorStep::type_tag(TEXT),
+                ),
+                StyleBuilder::new().set(width, 20_u32).build(),
+            )
+            .build();
+
+        let pressed = [PRESSED];
+        let button = matcher.enter_subject(
+            matcher.root_state(),
+            &SelectorInputs::typed_with_pseudos(BUTTON, &pressed),
+        );
+        let text = matcher.enter_subject(button, &SelectorInputs::typed(TEXT));
+        assert_eq!(matcher.get_value_ref(text, width), Some(&20));
+
+        let idle_button =
+            matcher.enter_subject(matcher.root_state(), &SelectorInputs::typed(BUTTON));
+        let idle_text = matcher.enter_subject(idle_button, &SelectorInputs::typed(TEXT));
+        assert_eq!(matcher.get_value_ref(idle_text, width), None);
+    }
+
+    #[test]
+    fn owner_qualified_child_rule_wins_over_nested_type_rule() {
+        let mut registry = PropertyRegistry::new();
+        let width = registry.register("Width", PropertyMetadataBuilder::new(0_u32).build());
+
+        const BUTTON: TypeTag = TypeTag(40);
+        const TEXT: TypeTag = TypeTag(41);
+        const PRESSED: PseudoClassId = PseudoClassId(42);
+
+        let matcher = MatcherBuilder::new()
+            .rule(
+                Selector::single(SelectorStep::type_tag(TEXT)),
+                StyleBuilder::new().set(width, 10_u32).build(),
+            )
+            .rule(
+                Selector::child(
+                    SelectorStep::type_tag(BUTTON).with_pseudo(PRESSED),
+                    SelectorStep::type_tag(TEXT),
+                ),
+                StyleBuilder::new().set(width, 20_u32).build(),
+            )
+            .build();
+
+        let idle_button =
+            matcher.enter_subject(matcher.root_state(), &SelectorInputs::typed(BUTTON));
+        let idle_text = matcher.enter_subject(idle_button, &SelectorInputs::typed(TEXT));
+        assert_eq!(matcher.get_value_ref(idle_text, width), Some(&10));
+
+        let pressed = [PRESSED];
+        let pressed_button = matcher.enter_subject(
+            matcher.root_state(),
+            &SelectorInputs::typed_with_pseudos(BUTTON, &pressed),
+        );
+        let pressed_text = matcher.enter_subject(pressed_button, &SelectorInputs::typed(TEXT));
+        assert_eq!(matcher.get_value_ref(pressed_text, width), Some(&20));
     }
 
     #[test]

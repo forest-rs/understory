@@ -16,7 +16,10 @@
 //! Use this crate when your application already owns a tree of UI, template, or
 //! model nodes and needs style matching over that tree. `understory_style` does
 //! not store the tree. The embedder walks its own style subjects and carries a
-//! compact [`MatchState`] from parent to child.
+//! compact [`MatchState`] from parent to child. Selectors can start at any
+//! entered subject, so a one-step selector such as `Button` or `SliderThumb`
+//! matches nested subjects as well as roots; parent state is still used to
+//! continue child and descendant selectors.
 //!
 //! The crate owns:
 //!
