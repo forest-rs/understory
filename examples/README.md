@@ -30,6 +30,10 @@ These examples form a short, progressive walkthrough from routing basics to inte
   - Drive the canonical `understory_property_binding` host loop over `understory_property` source slots: bindings write `TemplateBinding`, user `Local` values mask and reveal those writes, template teardown clears retained bindings, and partial reports still feed app invalidation.
   - Run: `cargo run -p understory_examples --example property_binding_loop`
 
+- basic_present
+  - Build a small `understory_presentation` store, mutate resolved surface/text primitives, drain dirty geometry keys, and show the paint-side lookup shape.
+  - Run: `cargo run -p understory_examples --example basic_present`
+
 - box_tree_basics
   - Build a small scene, commit, move a node, compute damage, and hit-test using `understory_box_tree`.
   - Run: `cargo run -p understory_examples --example box_tree_basics`

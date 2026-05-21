@@ -1,0 +1,29 @@
+[package]
+name = "understory_presentation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Retained resolved drawing primitives for Understory presentation trees"
+readme = "README.md"
+keywords = ["presentation", "render", "ui", "graphics", "no_std"]
+categories = ["data-structures", "graphics", "no-std"]
+
+[dependencies]
+hashbrown.workspace = true
+parlance.workspace = true
+peniko.workspace = true
+smallvec.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["libm"]
+std = ["parlance/std", "peniko/std"]
+libm = ["peniko/libm"]
+
+[package.metadata.docs.rs]
+all-features = true
+default-target = "x86_64-unknown-linux-gnu"
+targets = []

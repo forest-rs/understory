@@ -21,6 +21,7 @@ env:
     -p understory_index
     -p understory_inspector
     -p understory_outline
+    -p understory_presentation
     -p understory_precise_hit
     -p understory_property
     -p understory_responder
