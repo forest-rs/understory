@@ -9,6 +9,7 @@ members = [
   "understory_focus",
   "understory_inspector",
   "understory_outline",
+  "understory_presentation",
   "understory_precise_hit",
   "understory_property",
   "understory_responder",
@@ -41,6 +42,8 @@ hashbrown = { version = "0.17.0", default-features = false, features = [
   "default-hasher",
 ] }
 invalidation = "0.2.0"
+parlance = { version = "0.1.0", default-features = false }
+peniko = { version = "0.6.1", default-features = false }
 smallvec = { version = "1.13.2", default-features = false }
 
 # Internal crate dependencies are centralized here so path dependencies carry
@@ -54,6 +57,7 @@ understory_guide = { version = "0.1.0", path = "understory_guide", default-featu
 understory_index = { version = "0.0.1", path = "understory_index", default-features = false }
 understory_inspector = { version = "0.1.0", path = "understory_inspector", default-features = false }
 understory_outline = { version = "0.1.0", path = "understory_outline", default-features = false }
+understory_presentation = { version = "0.1.0", path = "understory_presentation", default-features = false }
 understory_precise_hit = { version = "0.1.0", path = "understory_precise_hit", default-features = false }
 understory_property = { version = "0.1.0", path = "understory_property", default-features = false }
 understory_responder = { version = "0.1.0", path = "understory_responder", default-features = false }

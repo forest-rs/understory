@@ -18,6 +18,11 @@ The focus is on clean separation of concerns, pluggable performance trade‑offs
   - Tracks source/target endpoint indexes, dirty binding selection, dependency ordering, and deterministic drain reports.
   - Host code owns property storage and application invalidation policy through the `BindingHost` boundary.
 
+- `understory_presentation`
+  - Retained, resolved drawing primitives keyed by caller-owned geometry ids.
+  - Stores source back-references, template part identities, surface/text primitives, and deduped dirty keys.
+  - Does not own layout, bounds, transforms, style/property resolution, behavior, or renderer command emission.
+
 - `understory_box_tree`
   - A Kurbo‑native, spatially indexed box tree for scene geometry: local bounds, transforms, optional clips, and z‑order.
   - Computes world‑space AABBs and synchronizes them into `understory_index` for fast hit‑testing and visibility.
@@ -91,7 +96,7 @@ We aim for a three‑tree model that scales and composes well.
 
 1) Widget tree — state and interaction
 2) Box tree — geometry and spatial indexing
-3) Render tree — display list (future crate)
+3) Presentation tree — resolved drawing intent
 
 This split makes debugging easier, enables incremental updates, and lets each layer evolve and be swapped independently.
 For example, a canvas or DWG or DXF viewer can reuse the box and index layers without any UI toolkit.
@@ -136,8 +141,10 @@ For example, a canvas or DWG or DXF viewer can reuse the box and index layers wi
   - `understory_transcript/README.md` documents append-order transcript storage, generic payloads, explicit update semantics, typed entry kinds, and chat/tool/process-style usage.
   - `understory_view2d/README.md` documents the 2D and 1D viewport types, clamping/fit modes, and examples of using visible regions for culling.
   - `understory_property_binding/README.md` documents one-way property bindings, host endpoint adapters, and binding-local invalidation.
+  - `understory_presentation/README.md` documents retained resolved drawing primitives, template part identities, and dirty-key draining.
 - Run examples.
   - `cargo run -p understory_examples --example index_basics`
+  - `cargo run -p understory_examples --example basic_present`
   - `cargo run -p understory_examples --example box_tree_basics`
   - `cargo run -p understory_examples --example box_tree_visible_list`
   - `cargo run -p understory_examples --example outline_property_grid`
