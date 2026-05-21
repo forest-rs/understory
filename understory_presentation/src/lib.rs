@@ -33,15 +33,23 @@
 //! - [`TextPrimitive`]: umbrella for resolved text drawing intent.
 //! - [`PlainTextPrimitive`]: resolved plain-text content, foreground brush, and
 //!   `parlance`-based single-run style.
+//! - [`ImagePrimitive`]: resolved image resource, sampling, fitting, and
+//!   optional nine-slice intent.
 //!
 //! ## Model
 //!
-//! The store is generic over two ids:
+//! The store is generic over three ids:
 //!
 //! - `NodeKey`: the caller's geometry key, often an `understory_box_tree`
 //!   node id.
 //! - `SourceKey`: the caller's widget, element, template part, or diagnostic
 //!   key, used for back-references.
+//! - `ImageKey`: the caller's image registry key, used by image primitives.
+//!   Defaults to `u64`.
+//!
+//! Use `PresentationStore::<NodeKey, SourceKey>::new()` for default `u64`
+//! image keys, or `PresentationStore::<NodeKey, SourceKey, ImageKey>::new()`
+//! when the host uses a custom image registry key type.
 //!
 //! The presentation store is intentionally flat. It stores no parent/child
 //! structure and no layout/scene geometry. Structural truth and traversal
@@ -115,10 +123,11 @@ pub use parlance::{
     BaseDirection, FontFamily, FontFamilyName, FontStyle, FontWeight, FontWidth, GenericFamily,
     Language, OverflowWrap, TextWrapMode, WordBreak,
 };
-pub use peniko::kurbo::RoundedRectRadii;
-pub use peniko::{Brush, Color};
+pub use peniko::kurbo::{Insets, RoundedRectRadii};
+pub use peniko::{Brush, Color, ImageBrush, ImageQuality, ImageSampler};
 pub use primitive::{
-    BackgroundLayer, Border, BorderSide, PlainTextPrimitive, Primitive, Shadow, SurfacePrimitive,
-    TextAlign, TextContent, TextLayout, TextLineHeight, TextOverflow, TextPrimitive, TextStyle,
+    BackgroundLayer, Border, BorderSide, ImageFit, ImagePrimitive, ImageSlice, NineSlice,
+    PlainTextPrimitive, Primitive, Shadow, SliceMode, SurfacePrimitive, TextAlign, TextContent,
+    TextLayout, TextLineHeight, TextOverflow, TextPrimitive, TextStyle,
 };
 pub use store::{PresentationNode, PresentationStore};

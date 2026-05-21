@@ -50,15 +50,23 @@ property/style resolution, behavior, or paint command emission.
 - [`TextPrimitive`]: umbrella for resolved text drawing intent.
 - [`PlainTextPrimitive`]: resolved plain-text content, foreground brush, and
   `parlance`-based single-run style.
+- [`ImagePrimitive`]: resolved image resource, sampling, fitting, and
+  optional nine-slice intent.
 
 ## Model
 
-The store is generic over two ids:
+The store is generic over three ids:
 
 - `NodeKey`: the caller's geometry key, often an `understory_box_tree`
   node id.
 - `SourceKey`: the caller's widget, element, template part, or diagnostic
   key, used for back-references.
+- `ImageKey`: the caller's image registry key, used by image primitives.
+  Defaults to `u64`.
+
+Use `PresentationStore::<NodeKey, SourceKey>::new()` for default `u64`
+image keys, or `PresentationStore::<NodeKey, SourceKey, ImageKey>::new()`
+when the host uses a custom image registry key type.
 
 The presentation store is intentionally flat. It stores no parent/child
 structure and no layout/scene geometry. Structural truth and traversal
@@ -125,7 +133,9 @@ assert!(matches!(label_node.primitives()[0], Primitive::Text(_)));
 
 [`PresentationNode`]: https://docs.rs/understory_presentation/latest/understory_presentation/struct.PresentationNode.html
 [`PresentationStore`]: https://docs.rs/understory_presentation/latest/understory_presentation/struct.PresentationStore.html
+[`PresentationStore::new`]: https://docs.rs/understory_presentation/latest/understory_presentation/struct.PresentationStore.html#method.new
 [`PresentationStore::take_dirty`]: https://docs.rs/understory_presentation/latest/understory_presentation/struct.PresentationStore.html#method.take_dirty
+[`ImagePrimitive`]: https://docs.rs/understory_presentation/latest/understory_presentation/struct.ImagePrimitive.html
 [`PlainTextPrimitive`]: https://docs.rs/understory_presentation/latest/understory_presentation/struct.PlainTextPrimitive.html
 [`Primitive`]: https://docs.rs/understory_presentation/latest/understory_presentation/enum.Primitive.html
 [`SurfacePrimitive`]: https://docs.rs/understory_presentation/latest/understory_presentation/struct.SurfacePrimitive.html
