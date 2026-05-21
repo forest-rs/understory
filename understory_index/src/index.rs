@@ -36,8 +36,13 @@ enum Mark {
 }
 
 #[derive(Clone, Debug)]
-struct Entry<T, P> {
+struct Slot<T, P> {
     generation: u32,
+    entry: Option<Entry<T, P>>,
+}
+
+#[derive(Clone, Debug)]
+struct Entry<T, P> {
     aabb: Aabb2D<T>,
     payload: P,
     mark: Option<Mark>,
@@ -47,7 +52,7 @@ struct Entry<T, P> {
 /// A generic AABB index parameterized by a spatial backend.
 #[derive(Debug)]
 pub struct IndexGeneric<T: Copy + PartialOrd + Debug, P: Copy + Debug, B: Backend<T>> {
-    entries: Vec<Option<Entry<T, P>>>,
+    entries: Vec<Slot<T, P>>,
     free_list: Vec<usize>,
     backend: B,
 }
@@ -101,28 +106,26 @@ where
     /// Insert a new AABB with payload. Returns a stable handle `Key`.
     pub fn insert(&mut self, aabb: Aabb2D<T>, payload: P) -> Key {
         let (idx, generation) = if let Some(idx) = self.free_list.pop() {
-            let generation = self.entries[idx]
-                .as_ref()
-                .map(|e| e.generation)
-                .unwrap_or(0)
-                + 1;
-            self.entries[idx] = Some(Entry {
-                generation,
+            let slot = &mut self.entries[idx];
+            slot.generation = next_generation(slot.generation);
+            slot.entry = Some(Entry {
                 aabb,
                 payload,
                 mark: Some(Mark::Added),
                 prev_aabb: None,
             });
-            (idx, generation)
+            (idx, slot.generation)
         } else {
             let generation = 1_u32;
-            self.entries.push(Some(Entry {
+            self.entries.push(Slot {
                 generation,
-                aabb,
-                payload,
-                mark: Some(Mark::Added),
-                prev_aabb: None,
-            }));
+                entry: Some(Entry {
+                    aabb,
+                    payload,
+                    mark: Some(Mark::Added),
+                    prev_aabb: None,
+                }),
+            });
             (self.entries.len() - 1, generation)
         };
         Key::new(idx, generation)
@@ -144,13 +147,20 @@ where
 
     /// Remove an existing AABB.
     pub fn remove(&mut self, key: Key) {
-        if let Some(e) = self.entry_mut(key) {
-            if matches!(e.mark, Some(Mark::Added)) {
-                self.entries[key.idx()] = None;
-                self.free_list.push(key.idx());
-            } else {
-                e.mark = Some(Mark::Removed);
-            }
+        let Some(slot) = self.entries.get_mut(key.idx()) else {
+            return;
+        };
+        if slot.generation != key.1 {
+            return;
+        }
+        let Some(e) = slot.entry.as_mut() else {
+            return;
+        };
+        if matches!(e.mark, Some(Mark::Added)) {
+            slot.entry = None;
+            self.free_list.push(key.idx());
+        } else {
+            e.mark = Some(Mark::Removed);
         }
     }
 
@@ -165,7 +175,7 @@ where
     pub fn commit(&mut self) -> Damage<T> {
         let mut dmg = Damage::default();
         for i in 0..self.entries.len() {
-            let Some(entry) = self.entries[i].as_mut() else {
+            let Some(entry) = self.entries[i].entry.as_mut() else {
                 continue;
             };
             match entry.mark.take() {
@@ -177,10 +187,8 @@ where
                     self.backend.remove(i);
                     dmg.removed
                         .push(entry.prev_aabb.take().unwrap_or(entry.aabb));
-                    let generation = entry.generation;
-                    self.entries[i] = None;
+                    self.entries[i].entry = None;
                     self.free_list.push(i);
-                    let _ = generation;
                 }
                 Some(Mark::Updated) => {
                     self.backend.update(i, entry.aabb);
@@ -208,8 +216,10 @@ where
     /// Calls `f(key, payload)` for each match. The order is backend-dependent.
     pub fn visit_point<F: FnMut(Key, P)>(&self, x: T, y: T, mut f: F) {
         self.backend.visit_point(x, y, |i| {
-            if let Some(Some(e)) = self.entries.get(i) {
-                f(Key::new(i, e.generation), e.payload);
+            if let Some(slot) = self.entries.get(i)
+                && let Some(e) = slot.entry.as_ref()
+            {
+                f(Key::new(i, slot.generation), e.payload);
             }
         });
     }
@@ -226,19 +236,26 @@ where
     /// Calls `f(key, payload)` for each match. The order is backend-dependent.
     pub fn visit_rect<F: FnMut(Key, P)>(&self, rect: Aabb2D<T>, mut f: F) {
         self.backend.visit_rect(rect, |i| {
-            if let Some(Some(e)) = self.entries.get(i) {
-                f(Key::new(i, e.generation), e.payload);
+            if let Some(slot) = self.entries.get(i)
+                && let Some(e) = slot.entry.as_ref()
+            {
+                f(Key::new(i, slot.generation), e.payload);
             }
         });
     }
 
     fn entry_mut(&mut self, key: Key) -> Option<&mut Entry<T, P>> {
-        let e = self.entries.get_mut(key.idx())?.as_mut()?;
-        if e.generation != key.1 {
+        let slot = self.entries.get_mut(key.idx())?;
+        if slot.generation != key.1 {
             return None;
         }
-        Some(e)
+        slot.entry.as_mut()
     }
+}
+
+fn next_generation(generation: u32) -> u32 {
+    let next = generation.wrapping_add(1);
+    if next == 0 { 1 } else { next }
 }
 
 // Debug is derived above; backends implement Debug with concise, partial output.
@@ -292,13 +309,15 @@ impl<P: Copy + Debug> Index<f64, P> {
         };
         let mut pairs: Vec<(usize, Aabb2D<f64>)> = Vec::with_capacity(entries.len());
         for (i, (aabb, payload)) in entries.iter().copied().enumerate() {
-            idx.entries.push(Some(Entry {
+            idx.entries.push(Slot {
                 generation: 1,
-                aabb,
-                payload,
-                mark: None,
-                prev_aabb: None,
-            }));
+                entry: Some(Entry {
+                    aabb,
+                    payload,
+                    mark: None,
+                    prev_aabb: None,
+                }),
+            });
             pairs.push((i, aabb));
         }
         idx.backend = crate::backends::rtree::RTreeF64::bulk_build_default(&pairs);
@@ -337,13 +356,15 @@ impl<P: Copy + Debug> Index<i64, P> {
         };
         let mut pairs: Vec<(usize, Aabb2D<i64>)> = Vec::with_capacity(entries.len());
         for (i, (aabb, payload)) in entries.iter().copied().enumerate() {
-            idx.entries.push(Some(Entry {
+            idx.entries.push(Slot {
                 generation: 1,
-                aabb,
-                payload,
-                mark: None,
-                prev_aabb: None,
-            }));
+                entry: Some(Entry {
+                    aabb,
+                    payload,
+                    mark: None,
+                    prev_aabb: None,
+                }),
+            });
             pairs.push((i, aabb));
         }
         idx.backend = crate::backends::rtree::RTreeI64::bulk_build_default(&pairs);
@@ -391,13 +412,15 @@ impl<P: Copy + Debug> Index<f32, P> {
         };
         let mut pairs: Vec<(usize, Aabb2D<f32>)> = Vec::with_capacity(entries.len());
         for (i, (aabb, payload)) in entries.iter().copied().enumerate() {
-            idx.entries.push(Some(Entry {
+            idx.entries.push(Slot {
                 generation: 1,
-                aabb,
-                payload,
-                mark: None,
-                prev_aabb: None,
-            }));
+                entry: Some(Entry {
+                    aabb,
+                    payload,
+                    mark: None,
+                    prev_aabb: None,
+                }),
+            });
             pairs.push((i, aabb));
         }
         idx.backend = crate::backends::rtree::RTreeF32::bulk_build_default(&pairs);
@@ -471,6 +494,27 @@ mod tests {
         assert_eq!(dmg.removed.as_slice(), &[Aabb2D::new(0, 0, 10, 10)]);
         assert!(dmg.moved.is_empty());
         assert!(dmg.added.is_empty());
+    }
+
+    #[test]
+    fn stale_key_does_not_match_reused_slot() {
+        let mut idx: Index<i64, u32> = Index::new();
+        let stale = idx.insert(Aabb2D::new(0, 0, 10, 10), 1);
+        let _ = idx.commit();
+
+        idx.remove(stale);
+        let _ = idx.commit();
+
+        let fresh = idx.insert(Aabb2D::new(20, 20, 30, 30), 2);
+        assert_ne!(stale, fresh);
+
+        idx.update(stale, Aabb2D::new(100, 100, 110, 110));
+        idx.remove(stale);
+        let _ = idx.commit();
+
+        let hits: Vec<_> = idx.query_point(25, 25).collect();
+        assert_eq!(hits.as_slice(), &[(fresh, 2)]);
+        assert_eq!(idx.query_point(105, 105).count(), 0);
     }
 
     #[test]
