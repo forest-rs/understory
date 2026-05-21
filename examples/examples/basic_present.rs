@@ -11,8 +11,8 @@
 //! - `cargo run -p understory_examples --example basic_present`
 
 use understory_presentation::{
-    Border, Brush, Color, FontWeight, PresentationStore, Primitive, RoundedRectRadii, TextAlign,
-    TextContent,
+    Border, Brush, Color, FontWeight, ImagePrimitive, ImageQuality, ImageSlice, Insets, NineSlice,
+    PresentationStore, Primitive, RoundedRectRadii, TextAlign, TextContent,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -39,7 +39,8 @@ fn main() {
     let button_label = GeometryNode(2);
     let geometry_order = [button_background, button_label];
 
-    let mut presentation: PresentationStore<GeometryNode, Source> = PresentationStore::new();
+    let mut presentation: PresentationStore<GeometryNode, Source, &'static str> =
+        PresentationStore::new();
     presentation.insert(
         button_background,
         Source {
@@ -61,6 +62,13 @@ fn main() {
     surface.set_background(Color::from_rgb8(38, 92, 142));
     surface.border = Border::uniform(Color::from_rgb8(15, 39, 64), 1.0);
     surface.corner_radii = RoundedRectRadii::from_single_radius(6.0);
+
+    let mut image = ImagePrimitive::new("button-background");
+    image.brush.sampler = image.brush.sampler.with_quality(ImageQuality::High);
+    image.slice = ImageSlice::Nine(NineSlice::new(Insets::uniform(8.0)));
+    presentation
+        .set_image(button_background, image)
+        .expect("background part was inserted");
 
     let text = presentation
         .plain_text_mut(button_label)
@@ -93,14 +101,14 @@ fn main() {
     print_paint_walk(&geometry_order, &presentation);
 }
 
-fn print_dirty(presentation: &mut PresentationStore<GeometryNode, Source>) {
+fn print_dirty(presentation: &mut PresentationStore<GeometryNode, Source, &'static str>) {
     let dirty: Vec<_> = presentation.take_dirty().collect();
     println!("dirty keys: {dirty:?}");
 }
 
 fn print_paint_walk(
     geometry_order: &[GeometryNode],
-    presentation: &PresentationStore<GeometryNode, Source>,
+    presentation: &PresentationStore<GeometryNode, Source, &'static str>,
 ) {
     for key in geometry_order {
         let Some(node) = presentation.node(*key) else {
@@ -133,6 +141,10 @@ fn print_paint_walk(
                         text.layout.align
                     );
                 }
+                Primitive::Image(image) => println!(
+                    "  image key={:?} quality={:?} slice={:?}",
+                    image.brush.image, image.brush.sampler.quality, image.slice
+                ),
                 _ => println!("  unknown primitive"),
             }
         }

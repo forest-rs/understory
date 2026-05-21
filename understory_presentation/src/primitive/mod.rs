@@ -5,9 +5,11 @@
 
 use alloc::boxed::Box;
 
+mod image;
 mod surface;
 mod text;
 
+pub use image::{ImageFit, ImagePrimitive, ImageSlice, NineSlice, SliceMode};
 pub use surface::{BackgroundLayer, Border, BorderSide, Shadow, SurfacePrimitive};
 pub use text::{
     PlainTextPrimitive, TextAlign, TextContent, TextLayout, TextLineHeight, TextOverflow,
@@ -27,15 +29,18 @@ pub use text::{
 /// [`PresentationNode`]: crate::PresentationNode
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
-pub enum Primitive {
+pub enum Primitive<ImageKey = u64> {
     /// A resolved box-decoration surface.
     Surface(Box<SurfacePrimitive>),
 
     /// Resolved text intent.
     Text(Box<TextPrimitive>),
+
+    /// Resolved image intent.
+    Image(Box<ImagePrimitive<ImageKey>>),
 }
 
-impl Primitive {
+impl<ImageKey> Primitive<ImageKey> {
     /// Creates a surface primitive.
     #[must_use]
     pub fn surface(surface: SurfacePrimitive) -> Self {
@@ -54,12 +59,18 @@ impl Primitive {
         Self::text(TextPrimitive::plain(text))
     }
 
+    /// Creates an image primitive.
+    #[must_use]
+    pub fn image(image: ImagePrimitive<ImageKey>) -> Self {
+        Self::Image(Box::new(image))
+    }
+
     /// Returns this primitive as a surface primitive, if it is one.
     #[must_use]
     pub fn as_surface(&self) -> Option<&SurfacePrimitive> {
         match self {
             Self::Surface(surface) => Some(surface.as_ref()),
-            Self::Text(_) => None,
+            Self::Text(_) | Self::Image(_) => None,
         }
     }
 
@@ -68,7 +79,7 @@ impl Primitive {
     pub fn as_surface_mut(&mut self) -> Option<&mut SurfacePrimitive> {
         match self {
             Self::Surface(surface) => Some(surface.as_mut()),
-            Self::Text(_) => None,
+            Self::Text(_) | Self::Image(_) => None,
         }
     }
 
@@ -76,7 +87,7 @@ impl Primitive {
     #[must_use]
     pub fn as_text(&self) -> Option<&TextPrimitive> {
         match self {
-            Self::Surface(_) => None,
+            Self::Surface(_) | Self::Image(_) => None,
             Self::Text(text) => Some(text.as_ref()),
         }
     }
@@ -85,8 +96,26 @@ impl Primitive {
     #[must_use]
     pub fn as_text_mut(&mut self) -> Option<&mut TextPrimitive> {
         match self {
-            Self::Surface(_) => None,
+            Self::Surface(_) | Self::Image(_) => None,
             Self::Text(text) => Some(text.as_mut()),
+        }
+    }
+
+    /// Returns this primitive as an image primitive, if it is one.
+    #[must_use]
+    pub fn as_image(&self) -> Option<&ImagePrimitive<ImageKey>> {
+        match self {
+            Self::Surface(_) | Self::Text(_) => None,
+            Self::Image(image) => Some(image.as_ref()),
+        }
+    }
+
+    /// Returns this primitive as a mutable image primitive, if it is one.
+    #[must_use]
+    pub fn as_image_mut(&mut self) -> Option<&mut ImagePrimitive<ImageKey>> {
+        match self {
+            Self::Surface(_) | Self::Text(_) => None,
+            Self::Image(image) => Some(image.as_mut()),
         }
     }
 }
