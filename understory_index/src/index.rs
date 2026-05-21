@@ -175,7 +175,8 @@ where
                 }
                 Some(Mark::Removed) => {
                     self.backend.remove(i);
-                    dmg.removed.push(entry.aabb);
+                    dmg.removed
+                        .push(entry.prev_aabb.take().unwrap_or(entry.aabb));
                     let generation = entry.generation;
                     self.entries[i] = None;
                     self.free_list.push(i);
@@ -455,6 +456,21 @@ mod tests {
         let (a, b) = dmg.moved[0];
         assert_eq!(a, Aabb2D::new(0, 0, 10, 10));
         assert_eq!(b, Aabb2D::new(5, 5, 15, 15));
+    }
+
+    #[test]
+    fn update_then_remove_reports_committed_aabb_removed() {
+        let mut idx: Index<i64, u32> = Index::new();
+        let k = idx.insert(Aabb2D::new(0, 0, 10, 10), 1);
+        let _ = idx.commit();
+
+        idx.update(k, Aabb2D::new(20, 20, 30, 30));
+        idx.remove(k);
+
+        let dmg = idx.commit();
+        assert_eq!(dmg.removed.as_slice(), &[Aabb2D::new(0, 0, 10, 10)]);
+        assert!(dmg.moved.is_empty());
+        assert!(dmg.added.is_empty());
     }
 
     #[test]
