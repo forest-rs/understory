@@ -53,9 +53,12 @@ impl<S: Scalar> IndexStrip<S> {
     }
 
     /// Returns the number of covered items in this strip.
+    ///
+    /// Returns `0` if `end` is before `start`, which can only happen when
+    /// callers manually construct an incoherent strip.
     #[must_use]
     pub const fn len(&self) -> usize {
-        self.end - self.start
+        self.end.saturating_sub(self.start)
     }
 
     /// Returns the total extent of the covered items in this strip.
@@ -395,6 +398,19 @@ mod tests {
         assert_eq!(strip.len(), 0);
         assert!(strip.is_empty());
         assert!((strip.covered_extent() - 0.0_f32).abs() < 1e-5);
+    }
+
+    #[test]
+    fn index_strip_len_saturates_for_incoherent_public_values() {
+        let strip = IndexStrip {
+            start: 5,
+            end: 3,
+            before_extent: 0.0_f32,
+            after_extent: 0.0_f32,
+            content_extent: 0.0_f32,
+        };
+
+        assert_eq!(strip.len(), 0);
     }
 
     #[test]
