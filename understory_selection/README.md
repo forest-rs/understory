@@ -42,6 +42,8 @@ The container is intentionally opinionated and compact:
   with existing ID types such as generational handles from a scene tree.
 - The API exposes simple operations that mirror common UI gestures like
   “replace with a single item”, “toggle one item”, and “replace/extend with a batch”.
+- Mutation methods return `true` when the semantic state changed; equivalently,
+  when the revision counter was bumped.
 
 ## Minimal example
 
@@ -52,16 +54,16 @@ use understory_selection::Selection;
 let mut selection = Selection::<u32>::new();
 
 // Simple click: replace selection with a single item.
-selection.select_only(10);
+assert!(selection.select_only(10));
 assert_eq!(selection.primary(), Some(&10));
 
 // Ctrl-click: toggle a single item.
-selection.toggle(10);
+assert!(selection.toggle(10));
 assert!(selection.is_empty());
 
 // Lasso or range gesture: compute the affected IDs elsewhere and
 // then replace the current selection with that batch.
-selection.replace_with([1, 2, 3]);
+assert!(selection.replace_with([1, 2, 3]));
 assert_eq!(selection.len(), 3);
 ```
 
@@ -102,17 +104,15 @@ fn handle_click(
     clicked: u32,
     mods: Modifiers,
     items_in_order: &[u32],
-) {
+) -> bool {
     if !mods.ctrl && !mods.shift {
         // Plain click: replace selection with a single item.
-        selection.select_only(clicked);
-        return;
+        return selection.select_only(clicked);
     }
 
     if mods.ctrl && !mods.shift {
         // Ctrl-click: toggle membership, keep anchor stable.
-        selection.toggle(clicked);
-        return;
+        return selection.toggle(clicked);
     }
 
     if mods.shift {
@@ -136,25 +136,29 @@ fn handle_click(
         let (start, end) = if a <= b { (a, b) } else { (b, a) };
 
         let range = items_in_order[start..=end].iter().copied();
-        selection.replace_with(range);
+        return selection.replace_with_roles(range, Some(&clicked), Some(&anchor));
     }
+
+    false
 }
 
 let items = [10_u32, 20, 30, 40];
 let mut sel = Selection::new();
 
 // Click on 20.
-handle_click(&mut sel, 20, Modifiers::default(), &items);
+assert!(handle_click(&mut sel, 20, Modifiers::default(), &items));
 assert_eq!(sel.items(), &[20]);
 
 // Shift-click on 40: select the range 20..=40.
-handle_click(
+assert!(handle_click(
     &mut sel,
     40,
     Modifiers { ctrl: false, shift: true },
     &items,
-);
+));
 assert_eq!(sel.items(), &[20, 30, 40]);
+assert_eq!(sel.primary(), Some(&40));
+assert_eq!(sel.anchor(), Some(&20));
 ```
 
 This crate is `no_std` and uses `alloc`.

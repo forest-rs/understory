@@ -304,9 +304,7 @@ where
         let Some(key) = self.focus.clone() else {
             return false;
         };
-        let revision = self.selection.revision();
-        self.selection.select_only(key);
-        self.selection.revision() != revision
+        self.selection.select_only(key)
     }
 
     /// Extends selection to the next visible row using the current anchor.
@@ -382,7 +380,8 @@ where
             .skip(start)
             .take(end - start + 1)
             .map(|row| row.key.clone());
-        self.selection.replace_with(range_keys);
+        self.selection
+            .replace_with_roles(range_keys, Some(&target), Some(&anchor));
     }
 
     fn reconcile_focus(&mut self) {
@@ -651,12 +650,16 @@ mod tests {
         assert!(inspector.extend_selection_next());
         assert_eq!(inspector.focus(), Some(&Key::ChildA));
         assert_eq!(inspector.selection().items(), &[Key::Root, Key::ChildA]);
+        assert_eq!(inspector.selection().primary(), Some(&Key::ChildA));
+        assert_eq!(inspector.selection().anchor(), Some(&Key::Root));
 
         assert!(inspector.extend_selection_next());
         assert_eq!(
             inspector.selection().items(),
             &[Key::Root, Key::ChildA, Key::ChildB]
         );
+        assert_eq!(inspector.selection().primary(), Some(&Key::ChildB));
+        assert_eq!(inspector.selection().anchor(), Some(&Key::Root));
     }
 
     #[test]
