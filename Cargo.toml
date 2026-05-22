@@ -66,7 +66,7 @@ understory_style = { version = "0.1.0", path = "understory_style", default-featu
 understory_timing = { version = "0.1.2", path = "understory_timing", default-features = false }
 understory_transcript = { version = "0.1.0", path = "understory_transcript", default-features = false }
 understory_view2d = { version = "0.1.0", path = "understory_view2d", default-features = false }
-understory_virtual_list = { version = "0.1.1", path = "understory_virtual_list", default-features = false }
+understory_virtual_list = { version = "0.1.2", path = "understory_virtual_list", default-features = false }
 
 [workspace.lints]
 # LINEBENDER LINT SET - Cargo.toml - v7
