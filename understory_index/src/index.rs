@@ -335,7 +335,7 @@ impl<P: Copy + Debug> Index<f64, P> {
     }
 
     /// Create an R-tree-backed index (f64 coordinates).
-    pub fn with_rtree() -> IndexGeneric<f64, P, crate::backends::rtree::RTreeF64<P>> {
+    pub fn with_rtree() -> IndexGeneric<f64, P, crate::backends::rtree::RTreeF64> {
         IndexGeneric {
             entries: Vec::new(),
             free_list: Vec::new(),
@@ -347,7 +347,7 @@ impl<P: Copy + Debug> Index<f64, P> {
     /// Build an R-tree-backed index in bulk from entries.
     pub fn with_rtree_bulk(
         entries: &[(Aabb2D<f64>, P)],
-    ) -> IndexGeneric<f64, P, crate::backends::rtree::RTreeF64<P>> {
+    ) -> IndexGeneric<f64, P, crate::backends::rtree::RTreeF64> {
         let mut idx = IndexGeneric {
             entries: Vec::with_capacity(entries.len()),
             free_list: Vec::new(),
@@ -385,7 +385,7 @@ impl<P: Copy + Debug> Index<i64, P> {
     }
 
     /// Create an i64 R-tree-backed index using integer SAH splits.
-    pub fn with_rtree() -> IndexGeneric<i64, P, crate::backends::rtree::RTreeI64<P>> {
+    pub fn with_rtree() -> IndexGeneric<i64, P, crate::backends::rtree::RTreeI64> {
         IndexGeneric {
             entries: Vec::new(),
             free_list: Vec::new(),
@@ -397,7 +397,7 @@ impl<P: Copy + Debug> Index<i64, P> {
     /// Build an i64 R-tree-backed index in bulk from entries.
     pub fn with_rtree_bulk(
         entries: &[(Aabb2D<i64>, P)],
-    ) -> IndexGeneric<i64, P, crate::backends::rtree::RTreeI64<P>> {
+    ) -> IndexGeneric<i64, P, crate::backends::rtree::RTreeI64> {
         let mut idx = IndexGeneric {
             entries: Vec::with_capacity(entries.len()),
             free_list: Vec::new(),
@@ -445,7 +445,7 @@ impl<P: Copy + Debug> Index<f32, P> {
     }
 
     /// Create an R-tree-backed index (f32 coordinates).
-    pub fn with_rtree() -> IndexGeneric<f32, P, crate::backends::rtree::RTreeF32<P>> {
+    pub fn with_rtree() -> IndexGeneric<f32, P, crate::backends::rtree::RTreeF32> {
         IndexGeneric {
             entries: Vec::new(),
             free_list: Vec::new(),
@@ -457,7 +457,7 @@ impl<P: Copy + Debug> Index<f32, P> {
     /// Build an f32 R-tree-backed index in bulk from entries.
     pub fn with_rtree_bulk(
         entries: &[(Aabb2D<f32>, P)],
-    ) -> IndexGeneric<f32, P, crate::backends::rtree::RTreeF32<P>> {
+    ) -> IndexGeneric<f32, P, crate::backends::rtree::RTreeF32> {
         let mut idx = IndexGeneric {
             entries: Vec::with_capacity(entries.len()),
             free_list: Vec::new(),

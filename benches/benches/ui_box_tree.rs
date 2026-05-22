@@ -586,7 +586,7 @@ fn ui_box_tree(c: &mut Criterion) {
         bench_hit_test(
             &mut g,
             "rtree_f64",
-            understory_index::backends::RTreeF64::<()>::default(),
+            understory_index::backends::RTreeF64::default(),
         );
         bench_hit_test(
             &mut g,
@@ -628,17 +628,17 @@ fn ui_box_tree(c: &mut Criterion) {
         bench_commit_noop(
             &mut g,
             "rtree_f64",
-            understory_index::backends::RTreeF64::<()>::default(),
+            understory_index::backends::RTreeF64::default(),
         );
         bench_commit_one_transform(
             &mut g,
             "rtree_f64",
-            understory_index::backends::RTreeF64::<()>::default(),
+            understory_index::backends::RTreeF64::default(),
         );
         bench_commit_one_bounds(
             &mut g,
             "rtree_f64",
-            understory_index::backends::RTreeF64::<()>::default(),
+            understory_index::backends::RTreeF64::default(),
         );
         bench_commit_noop(
             &mut g,
@@ -678,11 +678,11 @@ fn ui_box_tree(c: &mut Criterion) {
             dump.as_ref(),
             || understory_index::backends::GridF64::new(100.0),
         );
-        bench_build_and_commit::<understory_index::backends::RTreeF64<()>, _>(
+        bench_build_and_commit::<understory_index::backends::RTreeF64, _>(
             &mut g_build,
             "rtree_f64",
             dump.as_ref(),
-            understory_index::backends::RTreeF64::<()>::default,
+            understory_index::backends::RTreeF64::default,
         );
         bench_build_and_commit::<understory_index::backends::BvhF64, _>(
             &mut g_build,
