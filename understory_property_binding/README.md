@@ -94,7 +94,10 @@ application-level invalidation tracker with those returned channels.
 
 ## Gotchas and risks
 
-- Missing source values stop the drain with [`BindingError::MissingSource`].
+- Missing source values are non-fatal: the binding is skipped, stays clean,
+  and is counted in [`BindingReport::skipped_missing_source`]. It re-dirties
+  automatically when [`BindingSet::mark_endpoint_changed`] runs after the
+  source is written.
 - Runtime type mismatches stop the drain with
   [`BindingError::SourceTypeMismatch`].
 - Drain errors return [`BindingDrainError`]. Writes that already happened

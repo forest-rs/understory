@@ -31,6 +31,14 @@ pub enum BindingError<K> {
         existing: BindingId,
     },
     /// The host did not provide a source value for the endpoint.
+    ///
+    /// [`BindingSet::drain`] treats this as a non-fatal pending state: it
+    /// skips the binding and counts it in
+    /// [`BindingReport::skipped_missing_source`]. Other callers of a binding
+    /// evaluator may still observe this error directly.
+    ///
+    /// [`BindingSet::drain`]: crate::BindingSet::drain
+    /// [`BindingReport::skipped_missing_source`]: crate::BindingReport::skipped_missing_source
     MissingSource {
         /// The binding that failed to read its source.
         binding: BindingId,

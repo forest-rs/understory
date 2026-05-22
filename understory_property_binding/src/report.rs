@@ -49,11 +49,14 @@ impl BindingWrite {
     }
 }
 
-/// Summary returned by [`crate::BindingSet::drain`].
+/// Summary returned by [`BindingSet::drain`].
+///
+/// [`BindingSet::drain`]: crate::BindingSet::drain
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct BindingReport {
     evaluated_bindings: usize,
     changed_bindings: usize,
+    skipped_missing_source: usize,
     affected_channels: ChannelSet,
 }
 
@@ -70,6 +73,17 @@ impl BindingReport {
         self.changed_bindings
     }
 
+    /// Returns the number of bindings the drain skipped because the host
+    /// reported no value for the source endpoint. Those bindings stay clean
+    /// and will be re-dirtied via [`BindingSet::mark_endpoint_changed`]
+    /// when the source is written.
+    ///
+    /// [`BindingSet::mark_endpoint_changed`]: crate::BindingSet::mark_endpoint_changed
+    #[must_use]
+    pub const fn skipped_missing_source(self) -> usize {
+        self.skipped_missing_source
+    }
+
     /// Returns the union of application channels affected by binding target writes.
     #[must_use]
     pub const fn affected_channels(self) -> ChannelSet {
@@ -82,6 +96,10 @@ impl BindingReport {
             self.changed_bindings += 1;
         }
         self.affected_channels |= write.affected_channels();
+    }
+
+    pub(crate) fn record_skipped_missing_source(&mut self) {
+        self.skipped_missing_source += 1;
     }
 }
 
