@@ -54,6 +54,7 @@ struct Entry<T, P> {
 pub struct IndexGeneric<T: Copy + PartialOrd + Debug, P: Copy + Debug, B: Backend<T>> {
     entries: Vec<Slot<T, P>>,
     free_list: Vec<usize>,
+    dirty_slots: Vec<usize>,
     backend: B,
 }
 
@@ -68,6 +69,7 @@ where
         Self {
             entries: Vec::new(),
             free_list: Vec::new(),
+            dirty_slots: Vec::new(),
             backend: B::default(),
         }
     }
@@ -87,6 +89,7 @@ where
         Self {
             entries: Vec::new(),
             free_list: Vec::new(),
+            dirty_slots: Vec::new(),
             backend,
         }
     }
@@ -101,20 +104,25 @@ where
     /// Reserve space for at least `n` entries.
     pub fn reserve(&mut self, n: usize) {
         self.entries.reserve(n);
+        self.dirty_slots.reserve(n);
     }
 
     /// Insert a new AABB with payload. Returns a stable handle `Key`.
     pub fn insert(&mut self, aabb: Aabb2D<T>, payload: P) -> Key {
         let (idx, generation) = if let Some(idx) = self.free_list.pop() {
-            let slot = &mut self.entries[idx];
-            slot.generation = next_generation(slot.generation);
-            slot.entry = Some(Entry {
-                aabb,
-                payload,
-                mark: Some(Mark::Added),
-                prev_aabb: None,
-            });
-            (idx, slot.generation)
+            let generation = {
+                let slot = &mut self.entries[idx];
+                slot.generation = next_generation(slot.generation);
+                slot.entry = Some(Entry {
+                    aabb,
+                    payload,
+                    mark: Some(Mark::Added),
+                    prev_aabb: None,
+                });
+                slot.generation
+            };
+            self.queue_dirty_slot(idx);
+            (idx, generation)
         } else {
             let generation = 1_u32;
             self.entries.push(Slot {
@@ -126,16 +134,24 @@ where
                     prev_aabb: None,
                 }),
             });
-            (self.entries.len() - 1, generation)
+            let idx = self.entries.len() - 1;
+            self.queue_dirty_slot(idx);
+            (idx, generation)
         };
         Key::new(idx, generation)
     }
 
     /// Update an existing AABB.
     pub fn update(&mut self, key: Key, aabb: Aabb2D<T>) {
-        if let Some(e) = self.entry_mut(key) {
+        let idx = key.idx();
+        let mut queue_dirty = false;
+        {
+            let Some(e) = self.entry_mut(key) else {
+                return;
+            };
             if e.mark.is_none() {
                 e.prev_aabb = Some(e.aabb);
+                queue_dirty = true;
             }
             e.aabb = aabb;
             e.mark = Some(match e.mark {
@@ -143,24 +159,37 @@ where
                 _ => Mark::Updated,
             });
         }
+        if queue_dirty {
+            self.queue_dirty_slot(idx);
+        }
     }
 
     /// Remove an existing AABB.
     pub fn remove(&mut self, key: Key) {
-        let Some(slot) = self.entries.get_mut(key.idx()) else {
-            return;
-        };
-        if slot.generation != key.1 {
-            return;
-        }
-        let Some(e) = slot.entry.as_mut() else {
-            return;
-        };
-        if matches!(e.mark, Some(Mark::Added)) {
-            slot.entry = None;
-            self.free_list.push(key.idx());
-        } else {
+        let idx = key.idx();
+        let mut queue_dirty = false;
+        {
+            let Some(slot) = self.entries.get_mut(idx) else {
+                return;
+            };
+            if slot.generation != key.1 {
+                return;
+            }
+            let Some(e) = slot.entry.as_mut() else {
+                return;
+            };
+            if matches!(e.mark, Some(Mark::Added)) {
+                slot.entry = None;
+                self.free_list.push(idx);
+                return;
+            }
+            if e.mark.is_none() {
+                queue_dirty = true;
+            }
             e.mark = Some(Mark::Removed);
+        }
+        if queue_dirty {
+            self.queue_dirty_slot(idx);
         }
     }
 
@@ -168,39 +197,18 @@ where
     pub fn clear(&mut self) {
         self.entries.clear();
         self.free_list.clear();
+        self.dirty_slots.clear();
         self.backend.clear();
     }
 
     /// Apply pending changes and compute batched damage. Also synchronizes backend state.
     pub fn commit(&mut self) -> Damage<T> {
         let mut dmg = Damage::default();
-        for i in 0..self.entries.len() {
-            let Some(entry) = self.entries[i].entry.as_mut() else {
-                continue;
-            };
-            match entry.mark.take() {
-                Some(Mark::Added) => {
-                    self.backend.insert(i, entry.aabb);
-                    dmg.added.push(entry.aabb);
-                }
-                Some(Mark::Removed) => {
-                    self.backend.remove(i);
-                    dmg.removed
-                        .push(entry.prev_aabb.take().unwrap_or(entry.aabb));
-                    self.entries[i].entry = None;
-                    self.free_list.push(i);
-                }
-                Some(Mark::Updated) => {
-                    self.backend.update(i, entry.aabb);
-                    if let Some(prev) = entry.prev_aabb.take()
-                        && prev != entry.aabb
-                    {
-                        dmg.moved.push((prev, entry.aabb));
-                    }
-                }
-                None => {}
-            }
+        let mut dirty_slots = core::mem::take(&mut self.dirty_slots);
+        for i in dirty_slots.drain(..) {
+            self.commit_slot(i, &mut dmg);
         }
+        self.dirty_slots = dirty_slots;
         dmg
     }
 
@@ -251,6 +259,41 @@ where
         }
         slot.entry.as_mut()
     }
+
+    fn queue_dirty_slot(&mut self, idx: usize) {
+        self.dirty_slots.push(idx);
+    }
+
+    fn commit_slot(&mut self, i: usize, dmg: &mut Damage<T>) {
+        let Some(slot) = self.entries.get_mut(i) else {
+            return;
+        };
+        let Some(entry) = slot.entry.as_mut() else {
+            return;
+        };
+        match entry.mark.take() {
+            Some(Mark::Added) => {
+                self.backend.insert(i, entry.aabb);
+                dmg.added.push(entry.aabb);
+            }
+            Some(Mark::Removed) => {
+                self.backend.remove(i);
+                dmg.removed
+                    .push(entry.prev_aabb.take().unwrap_or(entry.aabb));
+                slot.entry = None;
+                self.free_list.push(i);
+            }
+            Some(Mark::Updated) => {
+                self.backend.update(i, entry.aabb);
+                if let Some(prev) = entry.prev_aabb.take()
+                    && prev != entry.aabb
+                {
+                    dmg.moved.push((prev, entry.aabb));
+                }
+            }
+            None => {}
+        }
+    }
 }
 
 fn next_generation(generation: u32) -> u32 {
@@ -275,6 +318,7 @@ impl<P: Copy + Debug> Index<f64, P> {
         IndexGeneric {
             entries: Vec::new(),
             free_list: Vec::new(),
+            dirty_slots: Vec::new(),
             backend: crate::backends::bvh::BvhF64::default(),
         }
     }
@@ -285,6 +329,7 @@ impl<P: Copy + Debug> Index<f64, P> {
         IndexGeneric {
             entries: Vec::new(),
             free_list: Vec::new(),
+            dirty_slots: Vec::new(),
             backend: crate::backends::GridF64::new(cell_size),
         }
     }
@@ -294,6 +339,7 @@ impl<P: Copy + Debug> Index<f64, P> {
         IndexGeneric {
             entries: Vec::new(),
             free_list: Vec::new(),
+            dirty_slots: Vec::new(),
             backend: crate::backends::rtree::RTreeF64::default(),
         }
     }
@@ -305,6 +351,7 @@ impl<P: Copy + Debug> Index<f64, P> {
         let mut idx = IndexGeneric {
             entries: Vec::with_capacity(entries.len()),
             free_list: Vec::new(),
+            dirty_slots: Vec::new(),
             backend: crate::backends::rtree::RTreeF64::default(),
         };
         let mut pairs: Vec<(usize, Aabb2D<f64>)> = Vec::with_capacity(entries.len());
@@ -332,6 +379,7 @@ impl<P: Copy + Debug> Index<i64, P> {
         IndexGeneric {
             entries: Vec::new(),
             free_list: Vec::new(),
+            dirty_slots: Vec::new(),
             backend: crate::backends::GridI64::new(cell_size),
         }
     }
@@ -341,6 +389,7 @@ impl<P: Copy + Debug> Index<i64, P> {
         IndexGeneric {
             entries: Vec::new(),
             free_list: Vec::new(),
+            dirty_slots: Vec::new(),
             backend: crate::backends::rtree::RTreeI64::default(),
         }
     }
@@ -352,6 +401,7 @@ impl<P: Copy + Debug> Index<i64, P> {
         let mut idx = IndexGeneric {
             entries: Vec::with_capacity(entries.len()),
             free_list: Vec::new(),
+            dirty_slots: Vec::new(),
             backend: crate::backends::rtree::RTreeI64::default(),
         };
         let mut pairs: Vec<(usize, Aabb2D<i64>)> = Vec::with_capacity(entries.len());
@@ -378,6 +428,7 @@ impl<P: Copy + Debug> Index<f32, P> {
         IndexGeneric {
             entries: Vec::new(),
             free_list: Vec::new(),
+            dirty_slots: Vec::new(),
             backend: crate::backends::bvh::BvhF32::default(),
         }
     }
@@ -388,6 +439,7 @@ impl<P: Copy + Debug> Index<f32, P> {
         IndexGeneric {
             entries: Vec::new(),
             free_list: Vec::new(),
+            dirty_slots: Vec::new(),
             backend: crate::backends::GridF32::new(cell_size),
         }
     }
@@ -397,6 +449,7 @@ impl<P: Copy + Debug> Index<f32, P> {
         IndexGeneric {
             entries: Vec::new(),
             free_list: Vec::new(),
+            dirty_slots: Vec::new(),
             backend: crate::backends::rtree::RTreeF32::default(),
         }
     }
@@ -408,6 +461,7 @@ impl<P: Copy + Debug> Index<f32, P> {
         let mut idx = IndexGeneric {
             entries: Vec::with_capacity(entries.len()),
             free_list: Vec::new(),
+            dirty_slots: Vec::new(),
             backend: crate::backends::rtree::RTreeF32::default(),
         };
         let mut pairs: Vec<(usize, Aabb2D<f32>)> = Vec::with_capacity(entries.len());
@@ -515,6 +569,22 @@ mod tests {
         let hits: Vec<_> = idx.query_point(25, 25).collect();
         assert_eq!(hits.as_slice(), &[(fresh, 2)]);
         assert_eq!(idx.query_point(105, 105).count(), 0);
+    }
+
+    #[test]
+    fn repeated_updates_before_commit_report_one_move_to_final_aabb() {
+        let mut idx: Index<i64, u32> = Index::new();
+        let k = idx.insert(Aabb2D::new(0, 0, 10, 10), 1);
+        let _ = idx.commit();
+
+        idx.update(k, Aabb2D::new(5, 5, 15, 15));
+        idx.update(k, Aabb2D::new(10, 10, 20, 20));
+
+        let dmg = idx.commit();
+        assert_eq!(dmg.moved.len(), 1);
+        assert_eq!(dmg.moved[0].0, Aabb2D::new(0, 0, 10, 10));
+        assert_eq!(dmg.moved[0].1, Aabb2D::new(10, 10, 20, 20));
+        assert!(idx.commit().is_empty());
     }
 
     #[test]

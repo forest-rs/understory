@@ -30,6 +30,10 @@ name = "index_compare_backends"
 harness = false
 
 [[bench]]
+name = "index_commit_dirty"
+harness = false
+
+[[bench]]
 name = "rtree_external_compare"
 harness = false
 required-features = ["compare_rstar"]
