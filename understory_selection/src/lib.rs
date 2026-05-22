@@ -25,6 +25,8 @@
 //!   with existing ID types such as generational handles from a scene tree.
 //! - The API exposes simple operations that mirror common UI gestures like
 //!   “replace with a single item”, “toggle one item”, and “replace/extend with a batch”.
+//! - Mutation methods return `true` when the semantic state changed; equivalently,
+//!   when the revision counter was bumped.
 //!
 //! ## Minimal example
 //!
@@ -35,16 +37,16 @@
 //! let mut selection = Selection::<u32>::new();
 //!
 //! // Simple click: replace selection with a single item.
-//! selection.select_only(10);
+//! assert!(selection.select_only(10));
 //! assert_eq!(selection.primary(), Some(&10));
 //!
 //! // Ctrl-click: toggle a single item.
-//! selection.toggle(10);
+//! assert!(selection.toggle(10));
 //! assert!(selection.is_empty());
 //!
 //! // Lasso or range gesture: compute the affected IDs elsewhere and
 //! // then replace the current selection with that batch.
-//! selection.replace_with([1, 2, 3]);
+//! assert!(selection.replace_with([1, 2, 3]));
 //! assert_eq!(selection.len(), 3);
 //! ```
 //!
@@ -85,17 +87,15 @@
 //!     clicked: u32,
 //!     mods: Modifiers,
 //!     items_in_order: &[u32],
-//! ) {
+//! ) -> bool {
 //!     if !mods.ctrl && !mods.shift {
 //!         // Plain click: replace selection with a single item.
-//!         selection.select_only(clicked);
-//!         return;
+//!         return selection.select_only(clicked);
 //!     }
 //!
 //!     if mods.ctrl && !mods.shift {
 //!         // Ctrl-click: toggle membership, keep anchor stable.
-//!         selection.toggle(clicked);
-//!         return;
+//!         return selection.toggle(clicked);
 //!     }
 //!
 //!     if mods.shift {
@@ -119,25 +119,29 @@
 //!         let (start, end) = if a <= b { (a, b) } else { (b, a) };
 //!
 //!         let range = items_in_order[start..=end].iter().copied();
-//!         selection.replace_with(range);
+//!         return selection.replace_with_roles(range, Some(&clicked), Some(&anchor));
 //!     }
+//!
+//!     false
 //! }
 //!
 //! let items = [10_u32, 20, 30, 40];
 //! let mut sel = Selection::new();
 //!
 //! // Click on 20.
-//! handle_click(&mut sel, 20, Modifiers::default(), &items);
+//! assert!(handle_click(&mut sel, 20, Modifiers::default(), &items));
 //! assert_eq!(sel.items(), &[20]);
 //!
 //! // Shift-click on 40: select the range 20..=40.
-//! handle_click(
+//! assert!(handle_click(
 //!     &mut sel,
 //!     40,
 //!     Modifiers { ctrl: false, shift: true },
 //!     &items,
-//! );
+//! ));
 //! assert_eq!(sel.items(), &[20, 30, 40]);
+//! assert_eq!(sel.primary(), Some(&40));
+//! assert_eq!(sel.anchor(), Some(&20));
 //! ```
 //!
 //! This crate is `no_std` and uses `alloc`.
@@ -237,15 +241,18 @@ impl<T> Selection<T> {
     }
 
     /// Removes all keys from the selection and clears primary/anchor.
-    pub fn clear(&mut self) {
+    ///
+    /// Returns `true` if the semantic selection state changed.
+    pub fn clear(&mut self) -> bool {
         if self.items.is_empty() && self.primary.is_none() && self.anchor.is_none() {
-            return;
+            return false;
         }
 
         self.items.clear();
         self.primary = None;
         self.anchor = None;
         self.bump_revision();
+        true
     }
 
     fn bump_revision(&mut self) {
@@ -266,13 +273,15 @@ where
     /// Replaces the selection with a single key, setting both primary and anchor.
     ///
     /// This is the typical mapping for a simple click without modifiers.
-    pub fn select_only(&mut self, key: T) {
+    ///
+    /// Returns `true` if the semantic selection state changed.
+    pub fn select_only(&mut self, key: T) -> bool {
         if self.items.len() == 1
             && self.items.first() == Some(&key)
             && self.primary == Some(0)
             && self.anchor == Some(0)
         {
-            return;
+            return false;
         }
 
         self.items.clear();
@@ -280,6 +289,7 @@ where
         self.primary = Some(0);
         self.anchor = Some(0);
         self.bump_revision();
+        true
     }
 
     /// Replaces the current selection with the provided batch of keys.
@@ -288,7 +298,9 @@ where
     /// - If the previous anchor key is still present, it remains the anchor.
     ///   Otherwise the first unique key becomes the anchor (if any keys are present).
     /// - The primary key defaults to the first unique key (if any keys are present).
-    pub fn replace_with<I>(&mut self, keys: I)
+    ///
+    /// Returns `true` if the semantic selection state changed.
+    pub fn replace_with<I>(&mut self, keys: I) -> bool
     where
         I: IntoIterator<Item = T>,
     {
@@ -312,14 +324,42 @@ where
             new_anchor = new_primary;
         }
 
-        if new_items == self.items && self.primary == new_primary && self.anchor == new_anchor {
-            return;
+        self.replace_state(new_items, new_primary, new_anchor)
+    }
+
+    /// Replaces the current selection and assigns primary/anchor roles in one change.
+    ///
+    /// Duplicates in the input are ignored. `primary` and `anchor` are exact role
+    /// requests for the new selection: `Some(key)` assigns the role to that key if
+    /// it is present, and clears the role if the key is absent. `None` clears that
+    /// role. Unlike [`replace_with`](Self::replace_with), this method does not
+    /// fall back to the first selected key.
+    ///
+    /// This is useful for range gestures that already know both the selected keys
+    /// and the desired roles. A caller can replace the range, set the clicked item
+    /// as primary, and keep the range pivot as anchor with a single revision bump.
+    ///
+    /// Returns `true` if the semantic selection state changed.
+    pub fn replace_with_roles<I>(
+        &mut self,
+        keys: I,
+        primary: Option<&T>,
+        anchor: Option<&T>,
+    ) -> bool
+    where
+        I: IntoIterator<Item = T>,
+    {
+        let mut new_items: Vec<T> = Vec::new();
+        for key in keys {
+            if !new_items.iter().any(|existing| existing == &key) {
+                new_items.push(key);
+            }
         }
 
-        self.items = new_items;
-        self.primary = new_primary;
-        self.anchor = new_anchor;
-        self.bump_revision();
+        let new_primary = primary.and_then(|key| new_items.iter().position(|item| item == key));
+        let new_anchor = anchor.and_then(|key| new_items.iter().position(|item| item == key));
+
+        self.replace_state(new_items, new_primary, new_anchor)
     }
 
     /// Extends the selection with the provided batch of keys.
@@ -328,7 +368,9 @@ where
     /// - New keys are appended; duplicates in the input are ignored.
     /// - The **primary** key is updated to the last unique key added, if any.
     /// - The **anchor** is left unchanged.
-    pub fn extend_with<I>(&mut self, keys: I)
+    ///
+    /// Returns `true` if the semantic selection state changed.
+    pub fn extend_with<I>(&mut self, keys: I) -> bool
     where
         I: IntoIterator<Item = T>,
     {
@@ -344,6 +386,9 @@ where
             // Even if primary already points at `idx`, new items were added.
             self.primary = Some(idx);
             self.bump_revision();
+            true
+        } else {
+            false
         }
     }
 
@@ -351,16 +396,22 @@ where
     ///
     /// - If `key` is newly added, it becomes the primary key.
     /// - The anchor is left unchanged.
-    pub fn add(&mut self, key: T) {
+    ///
+    /// Returns `true` if the semantic selection state changed.
+    pub fn add(&mut self, key: T) -> bool {
         if let Some(idx) = self.position_of(&key) {
             if self.primary != Some(idx) {
                 self.primary = Some(idx);
                 self.bump_revision();
+                true
+            } else {
+                false
             }
         } else {
             self.items.push(key);
             self.primary = Some(self.items.len() - 1);
             self.bump_revision();
+            true
         }
     }
 
@@ -368,10 +419,15 @@ where
     ///
     /// - If the removed key was primary or anchor, those roles are cleared.
     /// - If the selection becomes empty, both primary and anchor are cleared.
-    pub fn remove(&mut self, key: &T) {
+    ///
+    /// Returns `true` if the semantic selection state changed.
+    pub fn remove(&mut self, key: &T) -> bool {
         if let Some(idx) = self.position_of(key) {
             self.remove_at(idx);
             self.bump_revision();
+            true
+        } else {
+            false
         }
     }
 
@@ -380,7 +436,9 @@ where
     /// - If `key` is not selected, it is added and becomes the primary key.
     /// - If `key` is already selected, it is removed. If this empties the selection,
     ///   both primary and anchor are cleared.
-    pub fn toggle(&mut self, key: T) {
+    ///
+    /// Returns `true` if the semantic selection state changed.
+    pub fn toggle(&mut self, key: T) -> bool {
         if let Some(idx) = self.position_of(&key) {
             self.remove_at(idx);
             self.bump_revision();
@@ -389,39 +447,73 @@ where
             self.primary = Some(self.items.len() - 1);
             self.bump_revision();
         }
+        true
     }
 
     /// Sets the primary key to `key` if it is already selected.
-    pub fn set_primary(&mut self, key: &T) {
+    ///
+    /// Returns `true` if the semantic selection state changed.
+    pub fn set_primary(&mut self, key: &T) -> bool {
         if let Some(idx) = self.position_of(key)
             && self.primary != Some(idx)
         {
             self.primary = Some(idx);
             self.bump_revision();
+            true
+        } else {
+            false
         }
     }
 
     /// Sets the anchor key to `key` if it is already selected.
-    pub fn set_anchor(&mut self, key: &T) {
+    ///
+    /// Returns `true` if the semantic selection state changed.
+    pub fn set_anchor(&mut self, key: &T) -> bool {
         if let Some(idx) = self.position_of(key)
             && self.anchor != Some(idx)
         {
             self.anchor = Some(idx);
             self.bump_revision();
+            true
+        } else {
+            false
         }
     }
 
     /// Clears the anchor while leaving the selection and primary untouched.
-    pub fn clear_anchor(&mut self) {
+    ///
+    /// Returns `true` if the semantic selection state changed.
+    pub fn clear_anchor(&mut self) -> bool {
         if self.anchor.is_some() {
             self.anchor = None;
             self.bump_revision();
+            true
+        } else {
+            false
         }
     }
 
     /// Returns the position of `key` within the selection, if present.
     fn position_of(&self, key: &T) -> Option<usize> {
         self.items.iter().position(|k| k == key)
+    }
+
+    /// Replaces the internal state and bumps the revision if anything changed.
+    fn replace_state(
+        &mut self,
+        items: Vec<T>,
+        primary: Option<usize>,
+        anchor: Option<usize>,
+    ) -> bool {
+        if self.items == items && self.primary == primary && self.anchor == anchor {
+            return false;
+        }
+
+        self.items = items;
+        self.primary = primary;
+        self.anchor = anchor;
+        self.bump_revision();
+        true
     }
 
     /// Removes the item at `idx`, updating primary and anchor accordingly.
