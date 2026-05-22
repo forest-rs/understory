@@ -116,9 +116,14 @@ pub trait ExtentModel {
 
     /// Offset of the start of the given item from the start of the strip.
     ///
+    /// `index` is expected to be a valid item index in `0..len()`. Implementations
+    /// may choose how to handle out-of-range inputs, but callers should use
+    /// [`ExtentModel::total_extent`] when they need the end-of-content sentinel.
+    ///
     /// Implementations must guarantee that:
     /// - if `len() > 0`, `offset_of(0) == 0`,
-    /// - for all valid `i`, `offset_of(i + 1) >= offset_of(i) + extent_of(i)`.
+    /// - for every `i` where `i + 1 < len()`,
+    ///   `offset_of(i + 1) >= offset_of(i) + extent_of(i)`.
     fn offset_of(&mut self, index: usize) -> Self::Scalar;
 
     /// Given a scroll offset, find the greatest index `i` such that the item
