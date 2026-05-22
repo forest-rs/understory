@@ -12,8 +12,10 @@ pub struct BindingId(u32);
 impl BindingId {
     /// Creates a binding id from a raw integer.
     ///
-    /// This is primarily useful for tests and diagnostics. [`crate::BindingSet`]
+    /// This is primarily useful for tests and diagnostics. [`BindingSet`]
     /// assigns ids when bindings are registered.
+    ///
+    /// [`BindingSet`]: crate::BindingSet
     #[must_use]
     pub const fn new(raw: u32) -> Self {
         Self(raw)

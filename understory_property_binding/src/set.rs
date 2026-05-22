@@ -300,9 +300,18 @@ where
     /// dirty for a later pass unless they are already scheduled in the current
     /// pass.
     ///
-    /// If evaluation fails, writes that already happened are not rolled back.
-    /// The failed binding and the rest of the current dirty batch are marked
-    /// dirty again so the caller can repair the host state and retry.
+    /// A binding whose source has no value (the host returns `None` from
+    /// `get_erased`) is a no-op: the binding is skipped, stays clean, and
+    /// is recorded in [`BindingReport::skipped_missing_source`]. The
+    /// expectation is that the host will dirty the binding again via
+    /// [`Self::mark_endpoint_changed`] once the source becomes available.
+    /// This treats "source not yet provided" as a normal pending state
+    /// rather than a drain-aborting error.
+    ///
+    /// Other evaluation failures (type mismatch, …) abort the drain. Writes
+    /// that already happened are not rolled back. The failed binding and the
+    /// rest of the current dirty batch are marked dirty again so the caller
+    /// can repair the host state and retry.
     pub fn drain(
         &mut self,
         host: &mut dyn BindingHost<K>,
@@ -326,6 +335,9 @@ where
                         }
                     }
                     Ok(None) => {}
+                    Err(BindingError::MissingSource { .. }) => {
+                        report.record_skipped_missing_source();
+                    }
                     Err(error) => {
                         self.remark_dirty_batch(&raw_bindings[index..]);
                         return Err(BindingDrainError::new(error, report));
@@ -529,7 +541,7 @@ mod tests {
     };
 
     use crate::{
-        BindingError, BindingHost, BindingId, BindingReport, BindingSet, BindingWrite, EndpointKey,
+        BindingError, BindingHost, BindingId, BindingSet, BindingWrite, EndpointKey,
         PropertyEndpoint,
     };
 
@@ -923,7 +935,12 @@ mod tests {
     }
 
     #[test]
-    fn failed_drain_preserves_failed_and_remaining_dirty_bindings() {
+    fn missing_source_is_skipped_and_resumes_when_source_arrives() {
+        // Binding 0: first → second. Source has no value yet.
+        // Binding 1: second → third. Source already populated.
+        // First drain: 0 skips (counted as skipped_missing_source),
+        //              1 evaluates. No error. Binding 0 stays clean.
+        // After providing first's value + re-marking, binding 0 fires.
         let (_registry, width) = registry();
         let first = PropertyEndpoint::new(1, width);
         let second = PropertyEndpoint::new(2, width);
@@ -938,29 +955,29 @@ mod tests {
 
         bindings.mark_source_changed(first);
         bindings.mark_source_changed(second);
-        let error = bindings.drain(&mut host).unwrap_err();
-
-        assert!(matches!(
-            error.error(),
-            BindingError::MissingSource {
-                binding,
-                endpoint
-            } if *binding == BindingId::new(0) && *endpoint == first.key()
-        ));
-        assert_eq!(error.report(), BindingReport::default());
-        assert!(bindings.has_dirty_bindings());
-
-        host.set_initial(first, 10_u32);
         let report = bindings.drain(&mut host).unwrap();
 
-        assert_eq!(report.evaluated_bindings(), 2);
+        assert_eq!(report.evaluated_bindings(), 1);
         assert_eq!(report.changed_bindings(), 1);
-        assert_eq!(host.value(second), Some(&10));
+        assert_eq!(report.skipped_missing_source(), 1);
         assert_eq!(host.value(third), Some(&10));
+        assert!(!bindings.has_dirty_bindings());
+
+        host.set_initial(first, 20_u32);
+        bindings.mark_source_changed(first);
+        let retry = bindings.drain(&mut host).unwrap();
+
+        assert_eq!(retry.evaluated_bindings(), 2);
+        assert_eq!(retry.changed_bindings(), 2);
+        assert_eq!(retry.skipped_missing_source(), 0);
+        assert_eq!(host.value(second), Some(&20));
+        assert_eq!(host.value(third), Some(&20));
     }
 
     #[test]
-    fn failed_drain_returns_partial_report_for_completed_writes() {
+    fn missing_source_does_not_block_sibling_writes() {
+        // Sibling bindings: one with a source value, one without.
+        // The unsourced binding is skipped; the other still writes.
         let (_registry, width) = registry();
         let first_source = PropertyEndpoint::new(1, width);
         let first_target = PropertyEndpoint::new(2, width);
@@ -977,21 +994,17 @@ mod tests {
 
         bindings.mark_source_changed(first_source);
         bindings.mark_source_changed(missing_source);
-        let error = bindings.drain(&mut host).unwrap_err();
-        let report = error.report();
+        let report = bindings.drain(&mut host).unwrap();
 
-        assert!(matches!(
-            error.error(),
-            BindingError::MissingSource { binding, endpoint }
-                if *binding == BindingId::new(1) && *endpoint == missing_source.key()
-        ));
         assert_eq!(report.evaluated_bindings(), 1);
         assert_eq!(report.changed_bindings(), 1);
+        assert_eq!(report.skipped_missing_source(), 1);
         assert!(report.affected_channels().contains(LAYOUT));
         assert_eq!(host.value(first_target), Some(&10));
-        assert!(bindings.has_dirty_bindings());
+        assert!(!bindings.has_dirty_bindings());
 
         host.set_initial(missing_source, 20_u32);
+        bindings.mark_source_changed(missing_source);
         let retry = bindings.drain(&mut host).unwrap();
 
         assert_eq!(retry.evaluated_bindings(), 1);
