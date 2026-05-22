@@ -134,7 +134,7 @@ fn index_commit_dirty(c: &mut Criterion) {
         "flatvec",
         Index::<f64, u32>::new,
     );
-    bench_commit_noop::<understory_index::backends::RTreeF64<u32>, _>(
+    bench_commit_noop::<understory_index::backends::RTreeF64, _>(
         c,
         "index_commit_noop",
         "rtree",
@@ -147,7 +147,7 @@ fn index_commit_dirty(c: &mut Criterion) {
         "flatvec",
         Index::<f64, u32>::new,
     );
-    bench_commit_one_update::<understory_index::backends::RTreeF64<u32>, _>(
+    bench_commit_one_update::<understory_index::backends::RTreeF64, _>(
         c,
         "index_commit_one_update",
         "rtree",
@@ -160,7 +160,7 @@ fn index_commit_dirty(c: &mut Criterion) {
         "flatvec",
         Index::<f64, u32>::new,
     );
-    bench_commit_all_updates::<understory_index::backends::RTreeF64<u32>, _>(
+    bench_commit_all_updates::<understory_index::backends::RTreeF64, _>(
         c,
         "index_commit_all_updates",
         "rtree",

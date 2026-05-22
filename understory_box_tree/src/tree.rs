@@ -1542,7 +1542,7 @@ mod tests {
         use understory_index::backends::RTreeF64;
 
         // Use an R-tree backend and verify basic hit-testing still works.
-        let mut tree: Tree<RTreeF64<NodeId>> = Tree::with_backend(RTreeF64::<NodeId>::default());
+        let mut tree: Tree<RTreeF64> = Tree::with_backend(RTreeF64::default());
         let root = tree.insert(
             None,
             LocalNode {
