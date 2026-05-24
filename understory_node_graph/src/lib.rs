@@ -18,9 +18,11 @@
 //! [`GraphInvalidation`] provides explicit coarse invalidation channels for the
 //! derived phases. The current v0 implementation still recomputes whole phases,
 //! but it does so behind an explicit boundary instead of hiding the work.
-//! When callers provide targeted invalidation such as
-//! [`InvalidationTarget::Node`] or [`InvalidationTarget::Edge`], the computed
-//! layer narrows anchor and route recomputation to the affected neighborhood.
+//! When callers provide targeted invalidation without also changing document or
+//! projection revisions, the computed layer narrows anchor and route
+//! recomputation to the affected neighborhood. Document and projection revision
+//! changes force a full geometry rebuild so unmarked source edits cannot be
+//! hidden by a targeted hint.
 //! Hosts can also provide a [`PortCompatibility`] policy to drive edge-creation
 //! previews and optional connection validation without pushing a type system
 //! into the crate itself. Policies receive a [`ConnectionContext`] so they can
@@ -99,7 +101,13 @@
 //!
 //! Those can be added later as clear layers above or beside this one.
 //!
-//! This crate is `no_std` and uses `alloc`.
+//! This crate is `no_std` and uses `alloc`. The default `std` feature enables
+//! `kurbo/std` through the viewport stack. `no_std` consumers should disable
+//! default features and enable `libm`:
+//!
+//! ```text
+//! understory_node_graph = { version = "...", default-features = false, features = ["libm"] }
+//! ```
 
 #![no_std]
 

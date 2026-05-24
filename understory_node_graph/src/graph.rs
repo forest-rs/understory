@@ -31,7 +31,7 @@ pub struct NodeData<M = ()> {
 /// Directions are the only built-in connection rule: edges are always inserted
 /// from an [`Output`](Self::Output) port to an [`Input`](Self::Input) port.
 /// Domain-specific compatibility, such as value types or "only one edge per
-/// input", belongs in a [`PortCompatibility`](crate::PortCompatibility) policy.
+/// input", belongs in a [`PortCompatibility`] policy.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum PortDirection {
     /// Input/consumer side.
@@ -87,8 +87,8 @@ struct PortRecord<M> {
 /// Error returned when the semantic endpoint checks for a connection fail.
 ///
 /// These errors are about graph validity, not host policy. If the endpoints
-/// exist and have the right directions, a [`PortCompatibility`](crate::PortCompatibility)
-/// policy can still reject the connection without producing a `ConnectError`.
+/// exist and have the right directions, a [`PortCompatibility`] policy can still
+/// reject the connection without producing a `ConnectError`.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ConnectError {
     /// A requested port does not exist.

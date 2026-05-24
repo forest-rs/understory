@@ -18,7 +18,7 @@ use crate::observe::{DeriveMetrics, DerivePhase, GraphDeriveObserver};
 use crate::projection::GraphProjection;
 use crate::revision::Revision;
 use crate::routing::{EdgeRouter, RouteContext, RoutedEdge};
-use crate::session::GraphSession;
+use crate::session::{GraphSession, InteractionState};
 
 const DEFAULT_PORT_HIT_RADIUS: f64 = 8.0;
 const DEFAULT_EDGE_HIT_TOLERANCE: f64 = 6.0;
@@ -36,10 +36,11 @@ const DEFAULT_EDGE_HIT_TOLERANCE: f64 = 6.0;
 /// - edge-creation preview routes,
 /// - and hit-test surfaces.
 ///
-/// The current v0 implementation recomputes whole phases when broad source
-/// revisions change. When hosts provide targeted invalidation, it can narrow
-/// anchor and route recomputation to the affected neighborhood. This keeps the
-/// public API calm while leaving room for finer-grained backends later.
+/// The current v0 implementation recomputes whole phases when document or
+/// projection revisions change. When hosts provide targeted invalidation
+/// without changing those source revisions, it can narrow anchor and route
+/// recomputation to the affected neighborhood. This keeps the public API calm
+/// while leaving room for finer-grained backends later.
 ///
 /// `GraphComputed` is a cache, not an owner. If the document, projection, or
 /// session changes, call `rebuild` before using query or hit-test results.
@@ -60,9 +61,9 @@ pub struct GraphComputed {
 
 /// Derived edge-creation preview geometry.
 ///
-/// This appears while [`InteractionState::CreateEdge`](crate::InteractionState::CreateEdge)
-/// is active. A renderer can draw the route exactly like a normal edge while
-/// styling the target according to whether a hovered port is compatible.
+/// This appears while [`InteractionState::CreateEdge`] is active. A renderer can
+/// draw the route exactly like a normal edge while styling the target according
+/// to whether a hovered port is compatible.
 #[derive(Clone, Debug)]
 pub struct EdgePreview {
     /// Source/output port that started the gesture.
@@ -384,6 +385,10 @@ impl GraphComputed {
             return None;
         }
 
+        if doc_changed || projection_changed {
+            return Some(GeometryRebuild::Full);
+        }
+
         match self.collect_targeted_geometry(doc, invalidation) {
             Some(targets) if !targets.is_empty() => Some(GeometryRebuild::Targeted(targets)),
             _ => Some(GeometryRebuild::Full),
@@ -428,7 +433,7 @@ impl GraphComputed {
     /// world space, or when testing generated geometry without a viewport.
     ///
     /// Hit precedence is:
-    /// - ports,
+    /// - ports, ordered by nearest anchor then highest stable id,
     /// - nodes, ordered by highest `z_index` then highest stable id,
     /// - edges, ordered by highest `z_index`, nearest route, then highest stable id.
     #[must_use]
@@ -455,7 +460,7 @@ impl GraphComputed {
         session: &GraphSession,
         view_point: Point,
     ) -> Option<HitTarget> {
-        let world_point = session.viewport.view_to_world_point(view_point);
+        let world_point = session.viewport().view_to_world_point(view_point);
         self.hit_test_world(doc, projection, world_point)
     }
 
@@ -769,7 +774,8 @@ impl GraphComputed {
             }
 
             match best {
-                Some((_, best_distance_sq)) if distance_sq >= best_distance_sq => {}
+                Some((best_port, best_distance_sq))
+                    if !port_hit_precedes(*port, distance_sq, best_port, best_distance_sq) => {}
                 _ => best = Some((*port, distance_sq)),
             }
         }
@@ -845,8 +851,7 @@ impl GraphComputed {
         R: EdgeRouter,
         C: PortCompatibility<N, P, E>,
     {
-        let crate::session::InteractionState::CreateEdge { from, pointer } = session.interaction
-        else {
+        let &InteractionState::CreateEdge { from, pointer } = session.interaction() else {
             self.preview = None;
             return;
         };
@@ -856,8 +861,8 @@ impl GraphComputed {
             return;
         };
 
-        let pointer_world = session.viewport.view_to_world_point(pointer);
-        let snapped_target = match session.hover {
+        let pointer_world = session.viewport().view_to_world_point(pointer);
+        let snapped_target = match session.hover() {
             Some(HitTarget::Port(port)) if port != from => {
                 self.preview_target(doc, from, port, compatibility)
             }
@@ -964,6 +969,19 @@ fn edge_hit_precedes(
     match distance_sq.total_cmp(&best_distance_sq) {
         Ordering::Less => true,
         Ordering::Equal => edge > best_edge,
+        Ordering::Greater => false,
+    }
+}
+
+fn port_hit_precedes(
+    port: PortId,
+    distance_sq: f64,
+    best_port: PortId,
+    best_distance_sq: f64,
+) -> bool {
+    match distance_sq.total_cmp(&best_distance_sq) {
+        Ordering::Less => true,
+        Ordering::Equal => port > best_port,
         Ordering::Greater => false,
     }
 }
@@ -1082,7 +1100,7 @@ mod tests {
     }
 
     #[test]
-    fn targeted_projection_invalidation_recomputes_only_affected_routes() {
+    fn source_revision_changes_force_full_geometry_rebuild() {
         let mut doc = GraphDoc::<(), (), ()>::new();
         let a = doc.add_node(NodeData { meta: () });
         let b = doc.add_node(NodeData { meta: () });
@@ -1139,6 +1157,12 @@ mod tests {
         ));
         assert_eq!(router.calls(), 3, "full rebuild should route all edges");
 
+        let moved_a = {
+            let mut view = projection.node_view(a).cloned().unwrap();
+            view.origin = Point::new(12.0, 18.0);
+            view
+        };
+        projection.set_node_view(a, moved_a);
         let moved = {
             let mut view = projection.node_view(b).cloned().unwrap();
             view.origin = Point::new(160.0, 24.0);
@@ -1160,13 +1184,82 @@ mod tests {
         ));
         assert_eq!(
             router.calls(),
-            5,
-            "targeted node invalidation should reroute only edges touching that node"
+            6,
+            "projection revision changes must rebuild all routes even with a targeted hint"
+        );
+        assert_eq!(
+            computed.node_bounds(a),
+            Some(Rect::from_origin_size((12.0, 18.0), (80.0, 60.0))),
+            "unmarked projection changes must not be hidden by targeted invalidation"
         );
 
         assert!(computed.edge_route(ab).is_some());
         assert!(computed.edge_route(bc).is_some());
         assert!(computed.edge_route(de).is_some());
+    }
+
+    #[test]
+    fn targeted_routing_invalidation_recomputes_only_affected_route() {
+        let mut doc = GraphDoc::<(), (), ()>::new();
+        let a = doc.add_node(NodeData { meta: () });
+        let b = doc.add_node(NodeData { meta: () });
+        let c = doc.add_node(NodeData { meta: () });
+        let d = doc.add_node(NodeData { meta: () });
+
+        let a_out = doc.add_port(a, PortDirection::Output, ()).unwrap();
+        let b_in = doc.add_port(b, PortDirection::Input, ()).unwrap();
+        let c_out = doc.add_port(c, PortDirection::Output, ()).unwrap();
+        let d_in = doc.add_port(d, PortDirection::Input, ()).unwrap();
+
+        let ab = doc.add_edge(a_out, b_in, ()).unwrap();
+        let cd = doc.add_edge(c_out, d_in, ()).unwrap();
+
+        let mut projection = GraphProjection::<(), (), ()>::new();
+        projection.set_node_view(
+            a,
+            NodeView::new(Point::new(0.0, 0.0), Size::new(80.0, 60.0), ()),
+        );
+        projection.set_node_view(
+            b,
+            NodeView::new(Point::new(140.0, 0.0), Size::new(80.0, 60.0), ()),
+        );
+        projection.set_node_view(
+            c,
+            NodeView::new(Point::new(0.0, 120.0), Size::new(80.0, 60.0), ()),
+        );
+        projection.set_node_view(
+            d,
+            NodeView::new(Point::new(140.0, 120.0), Size::new(80.0, 60.0), ()),
+        );
+
+        let session = GraphSession::new(Rect::new(0.0, 0.0, 500.0, 240.0));
+        let mut computed = GraphComputed::new();
+        let mut invalidation = GraphInvalidation::new();
+        let mut observer = NoopGraphDeriveObserver;
+        let router = CountingRouter::new();
+
+        assert!(computed.rebuild(
+            &doc,
+            &projection,
+            &session,
+            &mut invalidation,
+            &router,
+            &mut observer,
+        ));
+        assert_eq!(router.calls(), 2, "full rebuild should route both edges");
+
+        invalidation.mark_routing_edge(ab);
+        assert!(computed.rebuild(
+            &doc,
+            &projection,
+            &session,
+            &mut invalidation,
+            &router,
+            &mut observer,
+        ));
+        assert_eq!(router.calls(), 3, "only the targeted edge should reroute");
+        assert!(computed.edge_route(ab).is_some());
+        assert!(computed.edge_route(cd).is_some());
     }
 
     #[test]
@@ -1360,6 +1453,37 @@ mod tests {
         assert_eq!(
             computed.hit_test_world(&doc, &projection, Point::new(60.0, 110.0)),
             Some(HitTarget::Edge(first_edge))
+        );
+
+        let port_node = doc.add_node(NodeData { meta: () });
+        let older_port = doc.add_port(port_node, PortDirection::Output, ()).unwrap();
+        let newer_port = doc.add_port(port_node, PortDirection::Output, ()).unwrap();
+        projection.set_node_view(
+            port_node,
+            NodeView::new(Point::new(200.0, 100.0), Size::new(40.0, 30.0), ()),
+        );
+        let mut older_port_view = PortView::new(());
+        older_port_view.anchor_offset = Vec2::new(0.0, 5.0);
+        projection.set_port_view(older_port, older_port_view);
+        let mut newer_port_view = PortView::new(());
+        newer_port_view.anchor_offset = Vec2::new(0.0, -5.0);
+        projection.set_port_view(newer_port, newer_port_view);
+        assert!(computed.rebuild(
+            &doc,
+            &projection,
+            &session,
+            &mut invalidation,
+            &StraightEdgeRouter,
+            &mut observer,
+        ));
+        assert_eq!(
+            computed.port_anchor(older_port),
+            computed.port_anchor(newer_port),
+            "test setup should make both port anchors overlap"
+        );
+        assert_eq!(
+            computed.hit_test_world(&doc, &projection, Point::new(240.0, 115.0)),
+            Some(HitTarget::Port(newer_port))
         );
     }
 }

@@ -66,23 +66,24 @@ pub enum InteractionState {
 pub struct GraphSession {
     /// Selection state over graph elements.
     ///
-    /// Mutating this field directly requires calling [`GraphSession::bump_revision`]
-    /// so derived visibility and preview state can observe the change.
-    pub selection: Selection<GraphElementId>,
+    /// Use [`GraphSession::update_selection`] when mutating selection so the
+    /// session revision tracks semantic selection changes.
+    selection: Selection<GraphElementId>,
     /// Hover target, if any.
     ///
     /// Use [`GraphComputed::hit_test_view`](crate::GraphComputed::hit_test_view)
     /// or [`GraphComputed::hit_test_world`](crate::GraphComputed::hit_test_world)
     /// to compute candidates, then store the chosen target here.
-    pub hover: Option<HitTarget>,
+    hover: Option<HitTarget>,
     /// Focused element, if any.
-    pub focus: Option<GraphElementId>,
+    focus: Option<GraphElementId>,
     /// Active gesture state.
-    pub interaction: InteractionState,
+    interaction: InteractionState,
     /// Current 2D viewport.
     ///
-    /// Mutating this field directly requires calling [`GraphSession::bump_revision`].
-    pub viewport: Viewport2D,
+    /// Use [`GraphSession::update_viewport`] when mutating the viewport so the
+    /// session revision tracks visibility and coordinate-space changes.
+    viewport: Viewport2D,
     revision: Revision,
 }
 
@@ -105,12 +106,40 @@ impl GraphSession {
 
     /// Returns the current session revision.
     ///
-    /// The revision changes when setter methods alter hover, focus, or
-    /// interaction state. Call [`GraphSession::bump_revision`] after direct
-    /// mutation of public fields such as `selection` or `viewport`.
+    /// The revision changes when setter or update methods alter session-owned
+    /// state. Call [`GraphSession::bump_revision`] when host state outside this
+    /// type changes how cached graph computations should interpret the session.
     #[must_use]
     pub fn revision(&self) -> Revision {
         self.revision
+    }
+
+    /// Returns the current selection.
+    #[must_use]
+    pub fn selection(&self) -> &Selection<GraphElementId> {
+        &self.selection
+    }
+
+    /// Mutates selection state and bumps the session revision when it changed.
+    ///
+    /// The closure receives the underlying [`Selection`]. If the selection's own
+    /// revision changes, the session revision changes too.
+    pub fn update_selection<R>(
+        &mut self,
+        update: impl FnOnce(&mut Selection<GraphElementId>) -> R,
+    ) -> R {
+        let before = self.selection.revision();
+        let result = update(&mut self.selection);
+        if self.selection.revision() != before {
+            self.revision.bump();
+        }
+        result
+    }
+
+    /// Returns the hover target, if any.
+    #[must_use]
+    pub fn hover(&self) -> Option<HitTarget> {
+        self.hover
     }
 
     /// Sets the hover target and bumps the revision if it changed.
@@ -121,6 +150,12 @@ impl GraphSession {
         }
     }
 
+    /// Returns the focused element, if any.
+    #[must_use]
+    pub fn focus(&self) -> Option<GraphElementId> {
+        self.focus
+    }
+
     /// Sets the focused element and bumps the revision if it changed.
     pub fn set_focus(&mut self, focus: Option<GraphElementId>) {
         if self.focus != focus {
@@ -129,12 +164,34 @@ impl GraphSession {
         }
     }
 
+    /// Returns the active interaction state.
+    #[must_use]
+    pub fn interaction(&self) -> &InteractionState {
+        &self.interaction
+    }
+
     /// Sets the active interaction and bumps the revision if it changed.
     pub fn set_interaction(&mut self, interaction: InteractionState) {
         if self.interaction != interaction {
             self.interaction = interaction;
             self.revision.bump();
         }
+    }
+
+    /// Returns the current viewport.
+    #[must_use]
+    pub fn viewport(&self) -> &Viewport2D {
+        &self.viewport
+    }
+
+    /// Mutates viewport state and bumps the session revision.
+    ///
+    /// [`Viewport2D`] does not expose its own revision counter, so this bumps
+    /// the session revision after every closure call.
+    pub fn update_viewport<R>(&mut self, update: impl FnOnce(&mut Viewport2D) -> R) -> R {
+        let result = update(&mut self.viewport);
+        self.revision.bump();
+        result
     }
 
     /// Returns the current viewport rectangle in world coordinates.
@@ -146,12 +203,44 @@ impl GraphSession {
         self.viewport.visible_world_rect()
     }
 
-    /// Marks the session changed after direct mutation.
+    /// Marks the session changed after external state changes.
     ///
-    /// This is the escape hatch for public fields whose types already have
-    /// their own mutation APIs. Prefer the setter methods when changing hover,
-    /// focus, or interaction state.
+    /// This is the escape hatch for host state that affects interpretation of
+    /// the session but is not stored directly in `GraphSession`. Prefer the
+    /// setter and update methods for state owned by this type.
     pub fn bump_revision(&mut self) {
         self.revision.bump();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kurbo::{Rect, Vec2};
+
+    use super::GraphSession;
+    use crate::ids::{GraphElementId, NodeId};
+
+    #[test]
+    fn selection_update_tracks_session_revision_only_when_selection_changes() {
+        let mut session = GraphSession::new(Rect::new(0.0, 0.0, 100.0, 100.0));
+        let initial = session.revision();
+
+        let node = GraphElementId::Node(NodeId::from_parts(1, 0));
+        assert!(session.update_selection(|selection| selection.select_only(node)));
+        assert!(session.revision() > initial);
+        let after_select = session.revision();
+
+        assert!(!session.update_selection(|selection| selection.select_only(node)));
+        assert_eq!(session.revision(), after_select);
+    }
+
+    #[test]
+    fn viewport_update_tracks_session_revision() {
+        let mut session = GraphSession::new(Rect::new(0.0, 0.0, 100.0, 100.0));
+        let initial = session.revision();
+
+        session.update_viewport(|viewport| viewport.pan_by_view(Vec2::new(10.0, 0.0)));
+
+        assert!(session.revision() > initial);
     }
 }

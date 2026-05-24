@@ -60,7 +60,8 @@ impl GraphInvalidationCause {
 ///
 /// A broad target such as [`InvalidationTarget::Graph`] asks derived caches to
 /// rebuild the relevant phase completely. More specific targets let
-/// [`GraphComputed`](crate::GraphComputed) narrow geometry work when possible.
+/// [`GraphComputed`](crate::GraphComputed) narrow geometry work when source
+/// object revisions have not also changed.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum InvalidationTarget {
     /// Whole graph document.
@@ -81,14 +82,16 @@ pub enum InvalidationTarget {
 
 /// Coarse invalidation state for node-graph derived caches.
 ///
-/// `GraphInvalidation` is the bridge between host mutations and
+/// `GraphInvalidation` is the bridge between host-side invalidation policy and
 /// [`GraphComputed`](crate::GraphComputed). Revisions catch ordinary document,
-/// projection, and session changes; invalidation adds intent: which subsystem
-/// changed, and whether the change can be scoped to a node, port, or edge.
+/// projection, and session mutations; invalidation adds intent for external
+/// state such as routing hints, visibility policy, diagnostics, and any changes
+/// that can be scoped to a node, port, or edge without moving the source
+/// object's revision.
 ///
 /// Hosts can mark broad causes while prototyping and move to targeted helpers
-/// for hot paths later. `GraphComputed` clears the causes it consumes during a
-/// successful rebuild.
+/// for revision-independent hot paths later. `GraphComputed` clears the causes
+/// it consumes during a successful rebuild.
 #[derive(Clone, Debug, Default)]
 pub struct GraphInvalidation {
     set: InvalidationSet<InvalidationTarget>,
@@ -129,8 +132,9 @@ impl GraphInvalidation {
 
     /// Marks one semantic node invalid.
     ///
-    /// Use this when a node metadata edit affects only that node's derived
-    /// geometry and connected edge routes.
+    /// This can narrow work for graph-affecting host state that is keyed by
+    /// node id but does not change the [`GraphDoc`](crate::GraphDoc) revision.
+    /// Ordinary `GraphDoc` mutations force a full geometry rebuild.
     pub fn mark_graph_node(&mut self, node: NodeId) -> bool {
         self.mark(
             GraphInvalidationCause::Graph,
@@ -141,7 +145,8 @@ impl GraphInvalidation {
     /// Marks one semantic port invalid.
     ///
     /// This also lets derived geometry include the owning node and connected
-    /// edges in the targeted rebuild.
+    /// edges in a targeted rebuild when the [`GraphDoc`](crate::GraphDoc)
+    /// revision has not changed.
     pub fn mark_graph_port(&mut self, port: PortId) -> bool {
         self.mark(
             GraphInvalidationCause::Graph,
@@ -170,7 +175,10 @@ impl GraphInvalidation {
 
     /// Marks one projected node invalid.
     ///
-    /// Use this after moving or resizing a node view.
+    /// This can narrow work for projection-affecting host state keyed by node id
+    /// when the [`GraphProjection`](crate::GraphProjection) revision has not
+    /// changed. Ordinary `GraphProjection` mutations force a full geometry
+    /// rebuild.
     pub fn mark_projection_node(&mut self, node: NodeId) -> bool {
         self.mark(
             GraphInvalidationCause::Projection,
@@ -180,7 +188,9 @@ impl GraphInvalidation {
 
     /// Marks one projected port invalid.
     ///
-    /// Use this after changing a port view's anchor offset or hit radius.
+    /// This can narrow work for projection-affecting host state keyed by port id
+    /// when the [`GraphProjection`](crate::GraphProjection) revision has not
+    /// changed.
     pub fn mark_projection_port(&mut self, port: PortId) -> bool {
         self.mark(
             GraphInvalidationCause::Projection,
@@ -190,7 +200,9 @@ impl GraphInvalidation {
 
     /// Marks one projected edge invalid.
     ///
-    /// Use this after changing an edge view's hidden state or ordering metadata.
+    /// This can narrow work for projection-affecting host state keyed by edge id
+    /// when the [`GraphProjection`](crate::GraphProjection) revision has not
+    /// changed.
     pub fn mark_projection_edge(&mut self, edge: EdgeId) -> bool {
         self.mark(
             GraphInvalidationCause::Projection,
@@ -200,8 +212,10 @@ impl GraphInvalidation {
 
     /// Marks the whole session invalid.
     ///
-    /// The session revision usually catches setter-based changes. This helper is
-    /// useful after direct field mutation or external selection updates.
+    /// The session revision usually catches changes made through
+    /// [`GraphSession`](crate::GraphSession) setter and update methods. Use this
+    /// when external host state changes how cached computations should interpret
+    /// the current session without changing the session object itself.
     pub fn mark_session(&mut self) -> bool {
         self.mark(GraphInvalidationCause::Session, InvalidationTarget::Session)
     }
