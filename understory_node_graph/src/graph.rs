@@ -295,6 +295,45 @@ impl<N, P, E> GraphDoc<N, P, E> {
         self.edges.get(edge)
     }
 
+    /// Mutates host-defined node metadata and bumps the document revision.
+    ///
+    /// Returns `None` and leaves the revision unchanged when `node` is not live.
+    pub fn update_node_meta<R, F>(&mut self, node: NodeId, update: F) -> Option<R>
+    where
+        F: FnOnce(&mut N) -> R,
+    {
+        let record = self.nodes.get_mut(node)?;
+        let result = update(&mut record.data.meta);
+        self.revision.bump();
+        Some(result)
+    }
+
+    /// Mutates host-defined port metadata and bumps the document revision.
+    ///
+    /// Returns `None` and leaves the revision unchanged when `port` is not live.
+    pub fn update_port_meta<R, F>(&mut self, port: PortId, update: F) -> Option<R>
+    where
+        F: FnOnce(&mut P) -> R,
+    {
+        let record = self.ports.get_mut(port)?;
+        let result = update(&mut record.data.meta);
+        self.revision.bump();
+        Some(result)
+    }
+
+    /// Mutates host-defined edge metadata and bumps the document revision.
+    ///
+    /// Returns `None` and leaves the revision unchanged when `edge` is not live.
+    pub fn update_edge_meta<R, F>(&mut self, edge: EdgeId, update: F) -> Option<R>
+    where
+        F: FnOnce(&mut E) -> R,
+    {
+        let edge_data = self.edges.get_mut(edge)?;
+        let result = update(&mut edge_data.meta);
+        self.revision.bump();
+        Some(result)
+    }
+
     /// Returns the ports owned by `node`.
     #[must_use]
     pub fn node_ports(&self, node: NodeId) -> Option<&[PortId]> {
@@ -445,5 +484,58 @@ mod tests {
             "occupied input is rejected"
         );
         assert_eq!(doc.port_edges(single_input), Some(&[single_edge][..]));
+    }
+
+    #[test]
+    fn metadata_updates_bump_revision_without_exposing_topology_mutation() {
+        let mut doc = GraphDoc::<&'static str, &'static str, &'static str>::new();
+        let source = doc.add_node(NodeData { meta: "source" });
+        let sink = doc.add_node(NodeData { meta: "sink" });
+        let output = doc.add_port(source, PortDirection::Output, "out").unwrap();
+        let input = doc.add_port(sink, PortDirection::Input, "in").unwrap();
+        let edge = doc.add_edge(output, input, "edge").unwrap();
+
+        let before = doc.revision();
+        let old_node = doc
+            .update_node_meta(source, |meta| {
+                let old = *meta;
+                *meta = "renamed source";
+                old
+            })
+            .expect("node exists");
+        assert_eq!(old_node, "source");
+        assert!(doc.revision() > before);
+        assert_eq!(doc.node(source).unwrap().meta, "renamed source");
+
+        let old_port = doc
+            .update_port_meta(output, |meta| {
+                let old = *meta;
+                *meta = "renamed out";
+                old
+            })
+            .expect("port exists");
+        assert_eq!(old_port, "out");
+        let output_data = doc.port(output).unwrap();
+        assert_eq!(output_data.owner, source);
+        assert_eq!(output_data.direction, PortDirection::Output);
+        assert_eq!(output_data.meta, "renamed out");
+
+        let old_edge = doc
+            .update_edge_meta(edge, |meta| {
+                let old = *meta;
+                *meta = "renamed edge";
+                old
+            })
+            .expect("edge exists");
+        assert_eq!(old_edge, "edge");
+        let edge_data = doc.edge(edge).unwrap();
+        assert_eq!(edge_data.output, output);
+        assert_eq!(edge_data.input, input);
+        assert_eq!(edge_data.meta, "renamed edge");
+
+        let _ = doc.remove_edge(edge);
+        let after_remove = doc.revision();
+        assert_eq!(doc.update_edge_meta(edge, |_| ()), None);
+        assert_eq!(doc.revision(), after_remove);
     }
 }
