@@ -4,6 +4,7 @@
 //! Derived graph-view geometry, visibility, and hit-testing state.
 
 use alloc::vec::Vec;
+use core::cmp::Ordering;
 
 use hashbrown::{HashMap, HashSet};
 use kurbo::{Point, Rect, Vec2};
@@ -389,8 +390,8 @@ impl GraphComputed {
     ///
     /// Hit precedence is:
     /// - ports,
-    /// - nodes,
-    /// - edges.
+    /// - nodes, ordered by highest `z_index` then highest stable id,
+    /// - edges, ordered by highest `z_index`, nearest route, then highest stable id.
     #[must_use]
     pub fn hit_test_world<N, P, E, NV, PV, EV>(
         &self,
@@ -753,7 +754,7 @@ impl GraphComputed {
             }
             let z_index = projection.node_view(*node).map_or(0, |view| view.z_index);
             match best {
-                Some((_, best_z)) if z_index <= best_z => {}
+                Some((best_node, best_z)) if (z_index, *node) <= (best_z, best_node) => {}
                 _ => best = Some((*node, z_index)),
             }
         }
@@ -776,9 +777,15 @@ impl GraphComputed {
 
             let z_index = projection.edge_view(*edge).map_or(0, |view| view.z_index);
             match best {
-                Some((_, best_z, best_distance_sq))
-                    if z_index < best_z
-                        || (z_index == best_z && distance_sq >= best_distance_sq) => {}
+                Some((best_edge, best_z, best_distance_sq))
+                    if !edge_hit_precedes(
+                        *edge,
+                        z_index,
+                        distance_sq,
+                        best_edge,
+                        best_z,
+                        best_distance_sq,
+                    ) => {}
                 _ => best = Some((*edge, z_index, distance_sq)),
             }
         }
@@ -901,6 +908,24 @@ fn segment_distance_sq(point: Point, start: Point, end: Point) -> f64 {
     distance_sq(point, closest)
 }
 
+fn edge_hit_precedes(
+    edge: EdgeId,
+    z_index: i32,
+    distance_sq: f64,
+    best_edge: EdgeId,
+    best_z: i32,
+    best_distance_sq: f64,
+) -> bool {
+    if z_index != best_z {
+        return z_index > best_z;
+    }
+    match distance_sq.total_cmp(&best_distance_sq) {
+        Ordering::Less => true,
+        Ordering::Equal => edge > best_edge,
+        Ordering::Greater => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::vec;
@@ -914,7 +939,7 @@ mod tests {
     use crate::graph::{GraphDoc, NodeData, PortDirection};
     use crate::invalidation::{GraphInvalidation, GraphInvalidationCause, InvalidationTarget};
     use crate::observe::NoopGraphViewObserver;
-    use crate::projection::{GraphProjection, NodeView, PortView};
+    use crate::projection::{EdgeView, GraphProjection, NodeView, PortView};
     use crate::routing::{EdgeRouter, RouteContext, RoutedEdge, StraightEdgeRouter};
     use crate::session::GraphSession;
 
@@ -1201,5 +1226,98 @@ mod tests {
             computed.preview().map(|preview| preview.target),
             Some(EdgePreviewTarget::Pointer(_))
         ));
+    }
+
+    #[test]
+    fn hit_testing_ties_are_deterministic() {
+        let mut doc = GraphDoc::<(), (), ()>::new();
+        let older = doc.add_node(NodeData { meta: () });
+        let newer = doc.add_node(NodeData { meta: () });
+
+        let mut projection = GraphProjection::<(), (), ()>::new();
+        projection.set_node_view(
+            older,
+            NodeView::new(Point::new(20.0, 20.0), Size::new(80.0, 60.0), ()),
+        );
+        projection.set_node_view(
+            newer,
+            NodeView::new(Point::new(20.0, 20.0), Size::new(80.0, 60.0), ()),
+        );
+
+        let session = GraphSession::new(Rect::new(0.0, 0.0, 300.0, 160.0));
+        let mut computed = GraphComputed::new();
+        let mut invalidation = GraphInvalidation::new();
+        let mut observer = NoopGraphViewObserver;
+        assert!(computed.rebuild(
+            &doc,
+            &projection,
+            &session,
+            &mut invalidation,
+            &StraightEdgeRouter,
+            &mut observer,
+        ));
+        assert_eq!(
+            computed.hit_test_world(&doc, &projection, Point::new(40.0, 40.0)),
+            Some(HitTarget::Node(newer))
+        );
+
+        let mut older_view = projection.node_view(older).cloned().unwrap();
+        older_view.z_index = 1;
+        projection.set_node_view(older, older_view);
+        assert!(computed.rebuild(
+            &doc,
+            &projection,
+            &session,
+            &mut invalidation,
+            &StraightEdgeRouter,
+            &mut observer,
+        ));
+        assert_eq!(
+            computed.hit_test_world(&doc, &projection, Point::new(40.0, 40.0)),
+            Some(HitTarget::Node(older))
+        );
+
+        let source = doc.add_node(NodeData { meta: () });
+        let sink = doc.add_node(NodeData { meta: () });
+        let output = doc.add_port(source, PortDirection::Output, ()).unwrap();
+        let input = doc.add_port(sink, PortDirection::Input, ()).unwrap();
+        let first_edge = doc.add_edge(output, input, ()).unwrap();
+        let second_edge = doc.add_edge(output, input, ()).unwrap();
+        projection.set_node_view(
+            source,
+            NodeView::new(Point::new(0.0, 100.0), Size::new(20.0, 20.0), ()),
+        );
+        projection.set_node_view(
+            sink,
+            NodeView::new(Point::new(100.0, 100.0), Size::new(20.0, 20.0), ()),
+        );
+        assert!(computed.rebuild(
+            &doc,
+            &projection,
+            &session,
+            &mut invalidation,
+            &StraightEdgeRouter,
+            &mut observer,
+        ));
+        assert_eq!(
+            computed.hit_test_world(&doc, &projection, Point::new(60.0, 110.0)),
+            Some(HitTarget::Edge(second_edge))
+        );
+
+        let mut first_edge_view = EdgeView::new(());
+        first_edge_view.z_index = 1;
+        projection.set_edge_view(first_edge, first_edge_view);
+        assert!(computed.rebuild(
+            &doc,
+            &projection,
+            &session,
+            &mut invalidation,
+            &StraightEdgeRouter,
+            &mut observer,
+        ));
+        assert_eq!(
+            computed.hit_test_world(&doc, &projection, Point::new(60.0, 110.0)),
+            Some(HitTarget::Edge(first_edge))
+        );
     }
 }
