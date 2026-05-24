@@ -3,7 +3,7 @@
 
 //! Revision counter utilities.
 
-/// Monotonic revision counter used by graph-view state objects.
+/// Monotonic revision counter used by node-graph state objects.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Revision(u64);
 

@@ -1,7 +1,7 @@
 // Copyright 2026 the Understory Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! Derived graph-view geometry, visibility, and hit-testing state.
+//! Derived node-graph geometry, visibility, and preview state.
 
 use alloc::vec::Vec;
 use core::cmp::Ordering;
@@ -14,7 +14,7 @@ use crate::element::HitTarget;
 use crate::graph::{GraphDoc, PortDirection};
 use crate::ids::{EdgeId, NodeId, PortId};
 use crate::invalidation::{GraphInvalidation, GraphInvalidationCause};
-use crate::observe::{DeriveMetrics, DerivePhase, GraphViewObserver};
+use crate::observe::{DeriveMetrics, DerivePhase, GraphDeriveObserver};
 use crate::projection::GraphProjection;
 use crate::revision::Revision;
 use crate::routing::{EdgeRouter, RouteContext, RoutedEdge};
@@ -23,7 +23,7 @@ use crate::session::GraphSession;
 const DEFAULT_PORT_HIT_RADIUS: f64 = 8.0;
 const DEFAULT_EDGE_HIT_TOLERANCE: f64 = 6.0;
 
-/// Derived geometry and visibility for one `(document, projection, session)` tuple.
+/// Derived geometry, visibility, and preview state for one `(document, projection, session)` tuple.
 ///
 /// `GraphComputed` is intentionally explicit. Hosts call [`GraphComputed::rebuild`]
 /// after mutating the graph document, projection, session, or routing policy.
@@ -31,8 +31,7 @@ const DEFAULT_EDGE_HIT_TOLERANCE: f64 = 6.0;
 /// source revisions or invalidation channels change:
 /// - node bounds + port anchors,
 /// - edge routes,
-/// - visible node/edge sets,
-/// - hit-test surfaces.
+/// - visible node/edge sets.
 ///
 /// This keeps the public API calm while leaving room for finer-grained
 /// invalidation later.
@@ -197,7 +196,7 @@ impl GraphComputed {
     ) -> bool
     where
         R: EdgeRouter,
-        O: GraphViewObserver,
+        O: GraphDeriveObserver,
     {
         self.rebuild_with_compatibility(
             doc,
@@ -224,7 +223,7 @@ impl GraphComputed {
     where
         R: EdgeRouter,
         C: PortCompatibility<N, P, E>,
-        O: GraphViewObserver,
+        O: GraphDeriveObserver,
     {
         let metrics = DeriveMetrics {
             nodes: doc.node_count(),
@@ -239,7 +238,6 @@ impl GraphComputed {
             GraphInvalidationCause::Viewport,
             GraphInvalidationCause::Routing,
             GraphInvalidationCause::Visibility,
-            GraphInvalidationCause::HitTest,
         ] {
             for target in invalidation.iter(cause) {
                 observer.invalidated(cause, target);
@@ -254,10 +252,7 @@ impl GraphComputed {
             || invalidation.has_cause(GraphInvalidationCause::Session)
             || invalidation.has_cause(GraphInvalidationCause::Viewport)
             || invalidation.has_cause(GraphInvalidationCause::Visibility);
-        let hit_test_dirty = geometry_dirty
-            || visibility_dirty
-            || invalidation.has_cause(GraphInvalidationCause::HitTest);
-        let preview_dirty = geometry_dirty || hit_test_dirty;
+        let preview_dirty = geometry_dirty || visibility_dirty;
 
         if let Some(geometry_plan) = geometry_plan {
             observer.derive_begin(DerivePhase::NodeBounds);
@@ -294,16 +289,11 @@ impl GraphComputed {
             observer.derive_end(DerivePhase::Visibility, metrics);
         }
 
-        if hit_test_dirty {
-            observer.derive_begin(DerivePhase::HitTesting);
-            observer.derive_end(DerivePhase::HitTesting, metrics);
-        }
-
         if preview_dirty {
             self.rebuild_preview(doc, session, router, compatibility);
         }
 
-        let rebuilt = geometry_dirty || visibility_dirty || hit_test_dirty || preview_dirty;
+        let rebuilt = geometry_dirty || visibility_dirty || preview_dirty;
         if rebuilt {
             self.initialized = true;
             self.doc_revision = doc.revision();
@@ -322,10 +312,6 @@ impl GraphComputed {
             invalidation.clear(GraphInvalidationCause::Viewport);
             invalidation.clear(GraphInvalidationCause::Visibility);
         }
-        if hit_test_dirty {
-            invalidation.clear(GraphInvalidationCause::HitTest);
-        }
-
         rebuilt
     }
 
@@ -370,7 +356,8 @@ impl GraphComputed {
                 match target {
                     crate::invalidation::InvalidationTarget::Graph
                     | crate::invalidation::InvalidationTarget::Projection
-                    | crate::invalidation::InvalidationTarget::Session => return None,
+                    | crate::invalidation::InvalidationTarget::Session
+                    | crate::invalidation::InvalidationTarget::Viewport => return None,
                     crate::invalidation::InvalidationTarget::Node(node) => {
                         targets.include_node(doc, node);
                     }
@@ -938,7 +925,7 @@ mod tests {
     use crate::element::HitTarget;
     use crate::graph::{GraphDoc, NodeData, PortDirection};
     use crate::invalidation::{GraphInvalidation, GraphInvalidationCause, InvalidationTarget};
-    use crate::observe::NoopGraphViewObserver;
+    use crate::observe::NoopGraphDeriveObserver;
     use crate::projection::{EdgeView, GraphProjection, NodeView, PortView};
     use crate::routing::{EdgeRouter, RouteContext, RoutedEdge, StraightEdgeRouter};
     use crate::session::GraphSession;
@@ -998,7 +985,7 @@ mod tests {
         let session = GraphSession::new(Rect::new(0.0, 0.0, 180.0, 120.0));
         let mut computed = GraphComputed::new();
         let mut invalidation = GraphInvalidation::new();
-        let mut observer = NoopGraphViewObserver;
+        let mut observer = NoopGraphDeriveObserver;
 
         assert!(computed.rebuild(
             &doc,
@@ -1084,7 +1071,7 @@ mod tests {
         let session = GraphSession::new(Rect::new(0.0, 0.0, 500.0, 240.0));
         let mut computed = GraphComputed::new();
         let mut invalidation = GraphInvalidation::new();
-        let mut observer = NoopGraphViewObserver;
+        let mut observer = NoopGraphDeriveObserver;
         let router = CountingRouter::new();
 
         assert!(computed.rebuild(
@@ -1175,7 +1162,7 @@ mod tests {
 
         let mut computed = GraphComputed::new();
         let mut invalidation = GraphInvalidation::new();
-        let mut observer = NoopGraphViewObserver;
+        let mut observer = NoopGraphDeriveObserver;
 
         assert!(computed.rebuild_with_compatibility(
             &doc,
@@ -1247,7 +1234,7 @@ mod tests {
         let session = GraphSession::new(Rect::new(0.0, 0.0, 300.0, 160.0));
         let mut computed = GraphComputed::new();
         let mut invalidation = GraphInvalidation::new();
-        let mut observer = NoopGraphViewObserver;
+        let mut observer = NoopGraphDeriveObserver;
         assert!(computed.rebuild(
             &doc,
             &projection,

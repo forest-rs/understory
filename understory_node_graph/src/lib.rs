@@ -13,7 +13,7 @@
 //! - [`GraphDoc`]: durable semantic graph content.
 //! - [`GraphProjection`]: one 2D presentation of that graph.
 //! - [`GraphSession`]: ephemeral interaction state for one projection user.
-//! - [`GraphComputed`]: derived geometry, visibility, and hit-testing caches.
+//! - [`GraphComputed`]: derived geometry, visibility, and edge-preview state.
 //!
 //! [`GraphInvalidation`] provides explicit coarse invalidation channels for the
 //! derived phases. The current v0 implementation still recomputes whole phases,
@@ -52,7 +52,7 @@
 //! use kurbo::{Point, Rect, Size};
 //! use understory_node_graph::{
 //!     GraphComputed, GraphDoc, GraphInvalidation, GraphProjection, GraphSession, NodeData,
-//!     NodeView, NoopGraphViewObserver, PortDirection, StraightEdgeRouter,
+//!     NodeView, NoopGraphDeriveObserver, PortDirection, StraightEdgeRouter,
 //! };
 //!
 //! let mut doc = GraphDoc::<&'static str, &'static str, ()>::new();
@@ -71,7 +71,7 @@
 //!
 //! let mut computed = GraphComputed::new();
 //! let mut invalidation = GraphInvalidation::new();
-//! let mut observer = NoopGraphViewObserver;
+//! let mut observer = NoopGraphDeriveObserver;
 //!
 //! assert!(computed.rebuild(
 //!     &doc,
@@ -124,10 +124,10 @@ pub use element::HitTarget;
 pub use graph::{ConnectError, EdgeData, GraphDoc, NodeData, PortData, PortDirection};
 pub use ids::{EdgeId, GraphElementId, NodeId, PortId};
 pub use invalidation::{
-    GRAPH, GraphInvalidation, GraphInvalidationCause, HIT_TEST, InvalidationTarget, PROJECTION,
-    ROUTING, SESSION, VIEWPORT, VISIBILITY,
+    GRAPH, GraphInvalidation, GraphInvalidationCause, InvalidationTarget, PROJECTION, ROUTING,
+    SESSION, VIEWPORT, VISIBILITY,
 };
-pub use observe::{DeriveMetrics, DerivePhase, GraphViewObserver, NoopGraphViewObserver};
+pub use observe::{DeriveMetrics, DerivePhase, GraphDeriveObserver, NoopGraphDeriveObserver};
 pub use projection::{EdgeView, GraphProjection, NodeView, PortView};
 pub use revision::Revision;
 pub use routing::{EdgeRouter, OrthogonalEdgeRouter, RouteContext, RoutedEdge, StraightEdgeRouter};

@@ -30,7 +30,7 @@ The current v0 shape is built around four explicit layers:
 - [`GraphDoc`]: durable semantic graph content.
 - [`GraphProjection`]: one 2D presentation of that graph.
 - [`GraphSession`]: ephemeral interaction state for one projection user.
-- [`GraphComputed`]: derived geometry, visibility, and hit-testing caches.
+- [`GraphComputed`]: derived geometry, visibility, and edge-preview state.
 
 [`GraphInvalidation`] provides explicit coarse invalidation channels for the
 derived phases. The current v0 implementation still recomputes whole phases,
@@ -69,7 +69,7 @@ graph document can support:
 use kurbo::{Point, Rect, Size};
 use understory_node_graph::{
     GraphComputed, GraphDoc, GraphInvalidation, GraphProjection, GraphSession, NodeData,
-    NodeView, NoopGraphViewObserver, PortDirection, StraightEdgeRouter,
+    NodeView, NoopGraphDeriveObserver, PortDirection, StraightEdgeRouter,
 };
 
 let mut doc = GraphDoc::<&'static str, &'static str, ()>::new();
@@ -88,7 +88,7 @@ let session = GraphSession::new(Rect::new(0.0, 0.0, 800.0, 600.0));
 
 let mut computed = GraphComputed::new();
 let mut invalidation = GraphInvalidation::new();
-let mut observer = NoopGraphViewObserver;
+let mut observer = NoopGraphDeriveObserver;
 
 assert!(computed.rebuild(
     &doc,

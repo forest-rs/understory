@@ -1,7 +1,7 @@
 // Copyright 2026 the Understory Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! Observer hooks for graph-view derivation.
+//! Observer hooks for node-graph derived-state rebuilds.
 
 use crate::invalidation::{GraphInvalidationCause, InvalidationTarget};
 
@@ -16,8 +16,6 @@ pub enum DerivePhase {
     EdgeRouting,
     /// Recompute visibility sets.
     Visibility,
-    /// Recompute hit-test surfaces.
-    HitTesting,
 }
 
 /// Lightweight derive metrics.
@@ -31,8 +29,8 @@ pub struct DeriveMetrics {
     pub edges: usize,
 }
 
-/// Observer for invalidation and derivation activity.
-pub trait GraphViewObserver {
+/// Observer for invalidation and derived-state rebuild activity.
+pub trait GraphDeriveObserver {
     /// Called when a target is invalidated.
     fn invalidated(&mut self, _cause: GraphInvalidationCause, _target: InvalidationTarget) {}
 
@@ -45,6 +43,6 @@ pub trait GraphViewObserver {
 
 /// No-op observer.
 #[derive(Copy, Clone, Debug, Default)]
-pub struct NoopGraphViewObserver;
+pub struct NoopGraphDeriveObserver;
 
-impl GraphViewObserver for NoopGraphViewObserver {}
+impl GraphDeriveObserver for NoopGraphDeriveObserver {}
