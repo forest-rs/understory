@@ -6,6 +6,10 @@
 use crate::{EdgeId, GraphElementId, NodeId, PortId};
 
 /// Concrete hit target in a graph view.
+///
+/// Hit targets come from computed geometry, not directly from the semantic
+/// document. They are the right shape for pointer handling because every target
+/// can be converted into a durable [`GraphElementId`] for selection or focus.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum HitTarget {
     /// A node body.
@@ -18,6 +22,9 @@ pub enum HitTarget {
 
 impl HitTarget {
     /// Returns the corresponding graph element identity.
+    ///
+    /// Use this when a hit-test result should become selection or focus state in
+    /// [`GraphSession`](crate::GraphSession).
     #[must_use]
     pub fn element_id(self) -> GraphElementId {
         match self {

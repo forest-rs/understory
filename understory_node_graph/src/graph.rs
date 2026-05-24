@@ -10,14 +10,28 @@ use crate::compatibility::{ConnectionContext, PortCompatibility};
 use crate::ids::{EdgeId, NodeId, PortId};
 use crate::revision::Revision;
 
-/// Semantic node record.
+/// Semantic payload for one durable node.
+///
+/// A `NodeData` value lives in [`GraphDoc`] and represents application meaning:
+/// a shader operation, behavior-tree task, audio unit, or other domain node.
+/// The node's position, collapsed state, and draw metadata live in
+/// [`GraphProjection`](crate::GraphProjection) instead, so one document can be
+/// shown by multiple views.
 #[derive(Clone, Debug, Default)]
 pub struct NodeData<M = ()> {
-    /// Host-defined semantic metadata.
+    /// Host-defined semantic metadata for this node.
+    ///
+    /// The crate never interprets this value. Use it for stable domain data
+    /// such as node kind, labels, type information, or ids into a larger model.
     pub meta: M,
 }
 
 /// Port direction within the semantic graph.
+///
+/// Directions are the only built-in connection rule: edges are always inserted
+/// from an [`Output`](Self::Output) port to an [`Input`](Self::Input) port.
+/// Domain-specific compatibility, such as value types or "only one edge per
+/// input", belongs in a [`PortCompatibility`](crate::PortCompatibility) policy.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum PortDirection {
     /// Input/consumer side.
@@ -26,25 +40,35 @@ pub enum PortDirection {
     Output,
 }
 
-/// Semantic port record.
+/// Semantic payload for one durable port.
+///
+/// Ports belong to nodes and are the only valid edge endpoints. Hosts typically
+/// use port metadata to describe socket names, value types, or whether the port
+/// is optional. Visual placement is derived from the owning node's
+/// [`NodeView`](crate::NodeView) plus optional [`PortView`](crate::PortView)
+/// offsets.
 #[derive(Clone, Debug)]
 pub struct PortData<M = ()> {
     /// Owning node.
     pub owner: NodeId,
     /// Port direction.
     pub direction: PortDirection,
-    /// Host-defined semantic metadata.
+    /// Host-defined semantic metadata for this port.
     pub meta: M,
 }
 
-/// Semantic edge record.
+/// Semantic payload for one durable edge.
+///
+/// An edge records a connection from an output port to an input port. Routing,
+/// visibility, hit testing, and drawing order are projection/computed concerns;
+/// this type only stores the semantic connection and host metadata.
 #[derive(Clone, Debug)]
 pub struct EdgeData<M = ()> {
     /// Source/output port.
     pub output: PortId,
     /// Destination/input port.
     pub input: PortId,
-    /// Host-defined semantic metadata.
+    /// Host-defined semantic metadata for this edge.
     pub meta: M,
 }
 
@@ -60,7 +84,11 @@ struct PortRecord<M> {
     edges: Vec<EdgeId>,
 }
 
-/// Error returned when connecting an edge.
+/// Error returned when the semantic endpoint checks for a connection fail.
+///
+/// These errors are about graph validity, not host policy. If the endpoints
+/// exist and have the right directions, a [`PortCompatibility`](crate::PortCompatibility)
+/// policy can still reject the connection without producing a `ConnectError`.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ConnectError {
     /// A requested port does not exist.
@@ -73,6 +101,15 @@ pub enum ConnectError {
 ///
 /// `GraphDoc` owns node/port/edge topology and lightweight host metadata. It
 /// intentionally knows nothing about positions, bounds, or interaction state.
+///
+/// Use this as the long-lived model that can be saved, diffed, tested, and
+/// shared between views. Pair it with one or more
+/// [`GraphProjection`](crate::GraphProjection) values for layout/presentation,
+/// [`GraphSession`](crate::GraphSession) values for active interaction state,
+/// and [`GraphComputed`](crate::GraphComputed) values for derived geometry.
+///
+/// The generic parameters are host metadata types for nodes, ports, and edges.
+/// Use `()` when the graph only needs topology.
 #[derive(Clone, Debug)]
 pub struct GraphDoc<N = (), P = (), E = ()> {
     nodes: Arena<NodeId, NodeRecord<N>>,
@@ -94,12 +131,20 @@ impl<N, P, E> Default for GraphDoc<N, P, E> {
 
 impl<N, P, E> GraphDoc<N, P, E> {
     /// Creates an empty graph document.
+    ///
+    /// A fresh document has no projection data. After inserting nodes or ports,
+    /// add matching views to a [`GraphProjection`](crate::GraphProjection)
+    /// before expecting them to appear in computed geometry or hit tests.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Returns the current revision.
+    /// Returns the current document revision.
+    ///
+    /// The revision changes after every successful topology or metadata
+    /// mutation. [`GraphComputed`](crate::GraphComputed) uses it to decide
+    /// whether semantic geometry may need to be rebuilt.
     #[must_use]
     pub fn revision(&self) -> Revision {
         self.revision
@@ -141,7 +186,11 @@ impl<N, P, E> GraphDoc<N, P, E> {
         self.edges.contains(edge)
     }
 
-    /// Inserts a new node.
+    /// Inserts a new node and returns its stable document id.
+    ///
+    /// The returned [`NodeId`] is valid until that node is removed. If a slot is
+    /// later reused, the generation changes so stale ids do not refer to the new
+    /// node.
     pub fn add_node(&mut self, data: NodeData<N>) -> NodeId {
         self.revision.bump();
         self.nodes.insert(NodeRecord {
@@ -150,7 +199,12 @@ impl<N, P, E> GraphDoc<N, P, E> {
         })
     }
 
-    /// Removes a node and all of its ports and connected edges.
+    /// Removes a node and cascades through its ports and connected edges.
+    ///
+    /// This keeps the semantic graph internally consistent: no live port or
+    /// edge will keep pointing at the removed node. Projection entries are not
+    /// removed automatically, so hosts should also clear related
+    /// [`GraphProjection`](crate::GraphProjection) views or mark them stale.
     pub fn remove_node(&mut self, node: NodeId) -> Option<NodeData<N>> {
         let ports = self.node_ports(node)?.to_vec();
         for port in ports {
@@ -162,6 +216,10 @@ impl<N, P, E> GraphDoc<N, P, E> {
     }
 
     /// Inserts a new port under `owner`.
+    ///
+    /// Returns `None` when `owner` is not a live node. The port is appended to
+    /// the owner's port list; anchor placement later uses that list order to
+    /// distribute input and output ports along the node edge.
     pub fn add_port(&mut self, owner: NodeId, direction: PortDirection, meta: P) -> Option<PortId> {
         let node = self.nodes.get_mut(owner)?;
         let port = self.ports.insert(PortRecord {
@@ -178,6 +236,10 @@ impl<N, P, E> GraphDoc<N, P, E> {
     }
 
     /// Removes a port and all connected edges.
+    ///
+    /// The port is also removed from its owning node's port list. Projection
+    /// data is left alone so hosts can decide whether to reuse, animate out, or
+    /// discard view state.
     pub fn remove_port(&mut self, port: PortId) -> Option<PortData<P>> {
         let edge_ids = self.port_edges(port)?.to_vec();
         for edge in edge_ids {
@@ -192,6 +254,11 @@ impl<N, P, E> GraphDoc<N, P, E> {
     }
 
     /// Inserts an edge from `output` to `input`.
+    ///
+    /// This enforces only the built-in semantic rule that `output` is an output
+    /// port and `input` is an input port. Use [`GraphDoc::add_edge_with`] when a
+    /// host policy should reject duplicate, incompatible, or otherwise invalid
+    /// domain connections.
     pub fn add_edge(
         &mut self,
         output: PortId,
@@ -264,7 +331,7 @@ impl<N, P, E> GraphDoc<N, P, E> {
         self.add_edge(output, input, meta).map(Some)
     }
 
-    /// Removes an edge.
+    /// Removes an edge and detaches it from both endpoint port edge lists.
     pub fn remove_edge(&mut self, edge: EdgeId) -> Option<EdgeData<E>> {
         let removed = self.edges.remove(edge)?;
         if let Some(output) = self.ports.get_mut(removed.output) {
@@ -277,19 +344,19 @@ impl<N, P, E> GraphDoc<N, P, E> {
         Some(removed)
     }
 
-    /// Returns node data.
+    /// Returns immutable semantic data for `node`.
     #[must_use]
     pub fn node(&self, node: NodeId) -> Option<&NodeData<N>> {
         self.nodes.get(node).map(|record| &record.data)
     }
 
-    /// Returns port data.
+    /// Returns immutable semantic data for `port`.
     #[must_use]
     pub fn port(&self, port: PortId) -> Option<&PortData<P>> {
         self.ports.get(port).map(|record| &record.data)
     }
 
-    /// Returns edge data.
+    /// Returns immutable semantic data for `edge`.
     #[must_use]
     pub fn edge(&self, edge: EdgeId) -> Option<&EdgeData<E>> {
         self.edges.get(edge)
@@ -297,7 +364,9 @@ impl<N, P, E> GraphDoc<N, P, E> {
 
     /// Mutates host-defined node metadata and bumps the document revision.
     ///
-    /// Returns `None` and leaves the revision unchanged when `node` is not live.
+    /// This is the intended way to edit node metadata in place without exposing
+    /// topology internals. Returns `None` and leaves the revision unchanged when
+    /// `node` is not live.
     pub fn update_node_meta<R, F>(&mut self, node: NodeId, update: F) -> Option<R>
     where
         F: FnOnce(&mut N) -> R,
@@ -310,7 +379,9 @@ impl<N, P, E> GraphDoc<N, P, E> {
 
     /// Mutates host-defined port metadata and bumps the document revision.
     ///
-    /// Returns `None` and leaves the revision unchanged when `port` is not live.
+    /// This preserves the port owner, direction, and edge list while letting the
+    /// host update its own semantic payload. Returns `None` and leaves the
+    /// revision unchanged when `port` is not live.
     pub fn update_port_meta<R, F>(&mut self, port: PortId, update: F) -> Option<R>
     where
         F: FnOnce(&mut P) -> R,
@@ -323,7 +394,9 @@ impl<N, P, E> GraphDoc<N, P, E> {
 
     /// Mutates host-defined edge metadata and bumps the document revision.
     ///
-    /// Returns `None` and leaves the revision unchanged when `edge` is not live.
+    /// This preserves the edge endpoints while letting the host update its own
+    /// semantic payload. Returns `None` and leaves the revision unchanged when
+    /// `edge` is not live.
     pub fn update_edge_meta<R, F>(&mut self, edge: EdgeId, update: F) -> Option<R>
     where
         F: FnOnce(&mut E) -> R,
@@ -334,29 +407,35 @@ impl<N, P, E> GraphDoc<N, P, E> {
         Some(result)
     }
 
-    /// Returns the ports owned by `node`.
+    /// Returns the ports owned by `node` in insertion order.
+    ///
+    /// Port anchor derivation uses this order separately for input and output
+    /// ports, so changing insertion order changes default visual placement.
     #[must_use]
     pub fn node_ports(&self, node: NodeId) -> Option<&[PortId]> {
         self.nodes.get(node).map(|record| record.ports.as_slice())
     }
 
-    /// Returns the edges touching `port`.
+    /// Returns the edges touching `port` in insertion order.
     #[must_use]
     pub fn port_edges(&self, port: PortId) -> Option<&[EdgeId]> {
         self.ports.get(port).map(|record| record.edges.as_slice())
     }
 
-    /// Iterates over live nodes.
+    /// Iterates over live nodes in arena slot order.
+    ///
+    /// The order is stable while the same ids remain live, but it is a storage
+    /// order rather than an application sort order.
     pub fn iter_nodes(&self) -> impl Iterator<Item = (NodeId, &NodeData<N>)> {
         self.nodes.iter().map(|(id, record)| (id, &record.data))
     }
 
-    /// Iterates over live ports.
+    /// Iterates over live ports in arena slot order.
     pub fn iter_ports(&self) -> impl Iterator<Item = (PortId, &PortData<P>)> {
         self.ports.iter().map(|(id, record)| (id, &record.data))
     }
 
-    /// Iterates over live edges.
+    /// Iterates over live edges in arena slot order.
     pub fn iter_edges(&self) -> impl Iterator<Item = (EdgeId, &EdgeData<E>)> {
         self.edges.iter()
     }

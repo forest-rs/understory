@@ -15,6 +15,10 @@ use crate::ids::{EdgeId, PortId};
 /// endpoint metadata and existing topology to apply domain rules such as type
 /// compatibility, single-input ports, duplicate-edge rejection, or cycle
 /// prevention.
+///
+/// This context is read-only by design. A policy answers "may this connection
+/// exist?" while [`GraphDoc::add_edge_with`](crate::GraphDoc::add_edge_with)
+/// remains responsible for actually mutating the graph.
 pub struct ConnectionContext<'a, N, P, E> {
     doc: &'a GraphDoc<N, P, E>,
     output: PortId,
@@ -50,6 +54,9 @@ impl<'a, N, P, E> ConnectionContext<'a, N, P, E> {
     }
 
     /// Returns the graph document being checked.
+    ///
+    /// Use this when policy decisions need broader topology or metadata than
+    /// the two endpoint ports.
     #[must_use]
     pub fn doc(&self) -> &'a GraphDoc<N, P, E> {
         self.doc
@@ -80,18 +87,27 @@ impl<'a, N, P, E> ConnectionContext<'a, N, P, E> {
     }
 
     /// Returns edges touching the output/source port.
+    ///
+    /// This is a convenience for policies that limit fan-out or reject exact
+    /// duplicates.
     #[must_use]
     pub fn output_edges(&self) -> &'a [EdgeId] {
         self.doc.port_edges(self.output).unwrap_or(&[])
     }
 
     /// Returns edges touching the input/destination port.
+    ///
+    /// This is a convenience for policies such as "an input accepts only one
+    /// connection".
     #[must_use]
     pub fn input_edges(&self) -> &'a [EdgeId] {
         self.doc.port_edges(self.input).unwrap_or(&[])
     }
 
     /// Returns the existing edge between these exact endpoints, if present.
+    ///
+    /// Use this to prevent duplicate parallel edges while still allowing a port
+    /// to participate in other connections.
     #[must_use]
     pub fn duplicate_edge(&self) -> Option<(EdgeId, &'a EdgeData<E>)> {
         self.output_edges().iter().copied().find_map(|edge| {
@@ -110,10 +126,16 @@ impl<'a, N, P, E> ConnectionContext<'a, N, P, E> {
 /// without forcing a particular type system into the crate.
 pub trait PortCompatibility<N, P, E> {
     /// Returns `true` if the requested connection is allowed.
+    ///
+    /// This method is called only after the graph has confirmed that both ports
+    /// exist and have output-to-input directions.
     fn can_connect(&self, cx: ConnectionContext<'_, N, P, E>) -> bool;
 }
 
 /// Compatibility policy that accepts any directionally valid connection.
+///
+/// Use this for viewers, prototypes, or graph domains where all output-to-input
+/// connections are meaningful.
 #[derive(Copy, Clone, Debug, Default)]
 pub struct AllowAllPortConnections;
 

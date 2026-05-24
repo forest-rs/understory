@@ -13,7 +13,7 @@ use crate::compatibility::{AllowAllPortConnections, PortCompatibility};
 use crate::element::HitTarget;
 use crate::graph::{GraphDoc, PortDirection};
 use crate::ids::{EdgeId, NodeId, PortId};
-use crate::invalidation::{GraphInvalidation, GraphInvalidationCause};
+use crate::invalidation::{GraphInvalidation, GraphInvalidationCause, InvalidationTarget};
 use crate::observe::{DeriveMetrics, DerivePhase, GraphDeriveObserver};
 use crate::projection::GraphProjection;
 use crate::revision::Revision;
@@ -23,22 +23,26 @@ use crate::session::GraphSession;
 const DEFAULT_PORT_HIT_RADIUS: f64 = 8.0;
 const DEFAULT_EDGE_HIT_TOLERANCE: f64 = 6.0;
 
-/// Derived geometry, visibility, and preview state for one `(document, projection, session)` tuple.
+/// Derived geometry, visibility, and preview state for one graph view.
 ///
 /// `GraphComputed` is intentionally explicit. Hosts call [`GraphComputed::rebuild`]
 /// after mutating the graph document, projection, session, or routing policy.
-/// The current v0 implementation recomputes whole phases when the corresponding
-/// source revisions or invalidation channels change:
+/// It reads the durable [`GraphDoc`], the current [`GraphProjection`], and the
+/// active [`GraphSession`], then caches the data a renderer or interaction layer
+/// usually wants immediately:
 /// - node bounds + port anchors,
 /// - edge routes,
-/// - visible node/edge sets.
+/// - visible node/edge sets,
+/// - edge-creation preview routes,
+/// - and hit-test surfaces.
 ///
-/// This keeps the public API calm while leaving room for finer-grained
-/// invalidation later.
+/// The current v0 implementation recomputes whole phases when broad source
+/// revisions change. When hosts provide targeted invalidation, it can narrow
+/// anchor and route recomputation to the affected neighborhood. This keeps the
+/// public API calm while leaving room for finer-grained backends later.
 ///
-/// When hosts mark specific [`crate::invalidation::InvalidationTarget`] values
-/// in the graph/projection/routing channels, `GraphComputed` will currently
-/// narrow anchor and route recomputation to the affected nodes and edges.
+/// `GraphComputed` is a cache, not an owner. If the document, projection, or
+/// session changes, call `rebuild` before using query or hit-test results.
 #[derive(Clone, Debug)]
 pub struct GraphComputed {
     node_bounds: HashMap<NodeId, Rect>,
@@ -55,6 +59,10 @@ pub struct GraphComputed {
 }
 
 /// Derived edge-creation preview geometry.
+///
+/// This appears while [`InteractionState::CreateEdge`](crate::InteractionState::CreateEdge)
+/// is active. A renderer can draw the route exactly like a normal edge while
+/// styling the target according to whether a hovered port is compatible.
 #[derive(Clone, Debug)]
 pub struct EdgePreview {
     /// Source/output port that started the gesture.
@@ -66,6 +74,10 @@ pub struct EdgePreview {
 }
 
 /// Target endpoint for an edge-creation preview.
+///
+/// The preview either follows the pointer directly or snaps to a hovered input
+/// port. Snapped previews carry compatibility so the UI can show allowed and
+/// rejected targets without committing an edge.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum EdgePreviewTarget {
     /// Preview extends toward the current pointer in world space.
@@ -135,56 +147,85 @@ impl Default for GraphComputed {
 
 impl GraphComputed {
     /// Creates an empty computed-state cache.
+    ///
+    /// The first [`GraphComputed::rebuild`] performs a full derivation even when
+    /// no explicit invalidation has been marked.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Returns the current computed-state revision.
+    ///
+    /// The revision changes only when a rebuild actually runs at least one
+    /// derived phase.
     #[must_use]
     pub fn revision(&self) -> Revision {
         self.revision
     }
 
-    /// Returns the realized node bounds for `node`.
+    /// Returns the realized world-space bounds for `node`.
+    ///
+    /// Bounds exist only for live document nodes that also have a node view in
+    /// the projection used for the most recent rebuild.
     #[must_use]
     pub fn node_bounds(&self, node: NodeId) -> Option<Rect> {
         self.node_bounds.get(&node).copied()
     }
 
-    /// Returns the realized anchor position for `port`.
+    /// Returns the realized world-space anchor position for `port`.
+    ///
+    /// Anchors are derived from the owning node's rectangle, the port direction,
+    /// sibling port order, and optional [`PortView`](crate::PortView) offset.
     #[must_use]
     pub fn port_anchor(&self, port: PortId) -> Option<Point> {
         self.port_anchors.get(&port).copied()
     }
 
     /// Returns the realized route geometry for `edge`.
+    ///
+    /// Hidden edges and edges with missing endpoint anchors do not have routes.
     #[must_use]
     pub fn edge_route(&self, edge: EdgeId) -> Option<&RoutedEdge> {
         self.edge_routes.get(&edge)
     }
 
     /// Returns the currently visible nodes in document order.
+    ///
+    /// Visibility is derived from intersection with the session viewport. It is
+    /// meant as a rendering/materialization aid, not as a selection model.
     #[must_use]
     pub fn visible_nodes(&self) -> &[NodeId] {
         &self.visible_nodes
     }
 
     /// Returns the currently visible edges in document order.
+    ///
+    /// Edges are visible when their routed bounds intersect the session viewport.
     #[must_use]
     pub fn visible_edges(&self) -> &[EdgeId] {
         &self.visible_edges
     }
 
     /// Returns the current edge-creation preview, if any.
+    ///
+    /// The preview is rebuilt from session interaction and hover state. It is
+    /// `None` outside an edge-creation gesture or when the source port no longer
+    /// has a computed anchor.
     #[must_use]
     pub fn preview(&self) -> Option<&EdgePreview> {
         self.preview.as_ref()
     }
 
-    /// Rebuilds derived state when source revisions or invalidation channels changed.
+    /// Rebuilds derived state when source revisions or invalidation changed.
     ///
-    /// Returns `true` when any derived phase ran.
+    /// This uses [`AllowAllPortConnections`] for edge-preview compatibility. It
+    /// is appropriate for viewers or editors that validate connections later.
+    /// Editors that need live type/socket feedback should use
+    /// [`GraphComputed::rebuild_with_compatibility`].
+    ///
+    /// Returns `true` when any derived phase ran. When work runs, the relevant
+    /// invalidation causes are cleared from `invalidation`.
     pub fn rebuild<N, P, E, NV, PV, EV, R, O>(
         &mut self,
         doc: &GraphDoc<N, P, E>,
@@ -210,6 +251,14 @@ impl GraphComputed {
     }
 
     /// Rebuilds derived state using a host-defined connection compatibility policy.
+    ///
+    /// The compatibility policy is used only for edge-preview snapping. Semantic
+    /// edge insertion remains explicit through [`GraphDoc::add_edge_with`].
+    /// This split lets a host show rejected targets during a drag without
+    /// mutating the document.
+    ///
+    /// The observer receives invalidation notifications before any derive phase
+    /// runs, then phase begin/end callbacks for phases that actually rebuild.
     pub fn rebuild_with_compatibility<N, P, E, NV, PV, EV, R, C, O>(
         &mut self,
         doc: &GraphDoc<N, P, E>,
@@ -354,17 +403,17 @@ impl GraphComputed {
         ] {
             for target in invalidation.iter(cause) {
                 match target {
-                    crate::invalidation::InvalidationTarget::Graph
-                    | crate::invalidation::InvalidationTarget::Projection
-                    | crate::invalidation::InvalidationTarget::Session
-                    | crate::invalidation::InvalidationTarget::Viewport => return None,
-                    crate::invalidation::InvalidationTarget::Node(node) => {
+                    InvalidationTarget::Graph
+                    | InvalidationTarget::Projection
+                    | InvalidationTarget::Session
+                    | InvalidationTarget::Viewport => return None,
+                    InvalidationTarget::Node(node) => {
                         targets.include_node(doc, node);
                     }
-                    crate::invalidation::InvalidationTarget::Port(port) => {
+                    InvalidationTarget::Port(port) => {
                         targets.include_port(doc, port);
                     }
-                    crate::invalidation::InvalidationTarget::Edge(edge) => {
+                    InvalidationTarget::Edge(edge) => {
                         targets.edges.insert(edge);
                     }
                 }
@@ -374,6 +423,9 @@ impl GraphComputed {
     }
 
     /// Returns the topmost hit target at `world_point`, if any.
+    ///
+    /// Use this when pointer coordinates have already been converted into graph
+    /// world space, or when testing generated geometry without a viewport.
     ///
     /// Hit precedence is:
     /// - ports,
@@ -392,6 +444,9 @@ impl GraphComputed {
     }
 
     /// Returns the topmost hit target at `view_point`, if any.
+    ///
+    /// This converts `view_point` through [`GraphSession::viewport`] and then
+    /// delegates to [`GraphComputed::hit_test_world`].
     #[must_use]
     pub fn hit_test_view<N, P, E, NV, PV, EV>(
         &self,

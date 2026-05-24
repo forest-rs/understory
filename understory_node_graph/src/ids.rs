@@ -39,18 +39,31 @@ macro_rules! define_id {
 
 define_id!(
     /// Stable identity for a node in a graph document.
+    ///
+    /// Node ids are generational handles: removing a node invalidates its id,
+    /// and a later node that reuses the same storage slot receives a different
+    /// generation.
     NodeId
 );
 define_id!(
     /// Stable identity for a port in a graph document.
+    ///
+    /// Port ids are used across document, projection, session, routing, and hit
+    /// testing state. Treat them as opaque handles.
     PortId
 );
 define_id!(
     /// Stable identity for an edge in a graph document.
+    ///
+    /// Edge ids are stable while the edge is live and are safe to use as keys
+    /// into host-side route hints or drawing metadata.
     EdgeId
 );
 
 /// Stable identity for graph entities.
+///
+/// `GraphElementId` is the common id type for features that operate on any
+/// graph element, such as selection, focus, or inspector panels.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum GraphElementId {
     /// A node.
