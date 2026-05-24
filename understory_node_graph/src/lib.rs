@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 // After you edit the crate's doc comment, run this command, then check README.md for any missing links
-// cargo rdme --workspace-project=understory_graph_view --heading-base-level=0
+// cargo rdme --workspace-project=understory_node_graph --heading-base-level=0
 
-//! Understory Graph View: headless node-graph document and view primitives.
+//! Understory Node Graph: headless node-graph document and projection primitives.
 //!
 //! This crate provides the model behind a node graph editor/viewer without
 //! collapsing everything into one monolithic editor instance.
@@ -12,7 +12,7 @@
 //! The current v0 shape is built around four explicit layers:
 //! - [`GraphDoc`]: durable semantic graph content.
 //! - [`GraphProjection`]: one 2D presentation of that graph.
-//! - [`GraphSession`]: ephemeral interaction state for one view.
+//! - [`GraphSession`]: ephemeral interaction state for one projection user.
 //! - [`GraphComputed`]: derived geometry, visibility, and hit-testing caches.
 //!
 //! [`GraphInvalidation`] provides explicit coarse invalidation channels for the
@@ -37,7 +37,7 @@
 //! - rendering structures,
 //! - and runtime/execution concerns.
 //!
-//! `understory_graph_view` instead keeps those concerns separate so the same
+//! `understory_node_graph` instead keeps those concerns separate so the same
 //! graph document can support:
 //! - a full editor,
 //! - a read-only viewer,
@@ -49,7 +49,7 @@
 //!
 //! ```rust
 //! use kurbo::{Point, Rect, Size};
-//! use understory_graph_view::{
+//! use understory_node_graph::{
 //!     GraphComputed, GraphDoc, GraphInvalidation, GraphProjection, GraphSession, NodeData,
 //!     NodeView, NoopGraphViewObserver, PortDirection, StraightEdgeRouter,
 //! };

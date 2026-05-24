@@ -1,27 +1,27 @@
 <div align="center">
 
-# Understory Graph View
+# Understory Node Graph
 
-**Headless graph document, projection, session, and derived-state primitives**
+**Headless node-graph document, projection, session, and derived-state primitives**
 
-[![Latest published version.](https://img.shields.io/crates/v/understory_graph_view.svg)](https://crates.io/crates/understory_graph_view)
-[![Documentation build status.](https://img.shields.io/docsrs/understory_graph_view.svg)](https://docs.rs/understory_graph_view)
+[![Latest published version.](https://img.shields.io/crates/v/understory_node_graph.svg)](https://crates.io/crates/understory_node_graph)
+[![Documentation build status.](https://img.shields.io/docsrs/understory_node_graph.svg)](https://docs.rs/understory_node_graph)
 [![Apache 2.0 license.](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](#license)
 \
-[![GitHub Actions CI status.](https://img.shields.io/github/actions/workflow/status/endoli/understory/ci.yml?logo=github&label=CI)](https://github.com/endoli/understory/actions)
+[![GitHub Actions CI status.](https://img.shields.io/github/actions/workflow/status/forest-rs/understory/ci.yml?logo=github&label=CI)](https://github.com/forest-rs/understory/actions)
 
 </div>
 
 <!-- We use cargo-rdme to update the README with the contents of lib.rs.
 To edit the following section, update it in lib.rs, then run:
-cargo rdme --workspace-project=understory_graph_view
+cargo rdme --workspace-project=understory_node_graph
 Full documentation at https://github.com/orium/cargo-rdme -->
 
 <!-- Intra-doc links used in lib.rs may be evaluated here. -->
 
 <!-- cargo-rdme start -->
 
-Understory Graph View: headless node-graph document and view primitives.
+Understory Node Graph: headless node-graph document and projection primitives.
 
 This crate provides the model behind a node graph editor/viewer without
 collapsing everything into one monolithic editor instance.
@@ -29,7 +29,7 @@ collapsing everything into one monolithic editor instance.
 The current v0 shape is built around four explicit layers:
 - [`GraphDoc`]: durable semantic graph content.
 - [`GraphProjection`]: one 2D presentation of that graph.
-- [`GraphSession`]: ephemeral interaction state for one view.
+- [`GraphSession`]: ephemeral interaction state for one projection user.
 - [`GraphComputed`]: derived geometry, visibility, and hit-testing caches.
 
 [`GraphInvalidation`] provides explicit coarse invalidation channels for the
@@ -54,7 +54,7 @@ Existing node-graph systems often tangle together:
 - rendering structures,
 - and runtime/execution concerns.
 
-`understory_graph_view` instead keeps those concerns separate so the same
+`understory_node_graph` instead keeps those concerns separate so the same
 graph document can support:
 - a full editor,
 - a read-only viewer,
@@ -66,7 +66,7 @@ graph document can support:
 
 ```rust
 use kurbo::{Point, Rect, Size};
-use understory_graph_view::{
+use understory_node_graph::{
     GraphComputed, GraphDoc, GraphInvalidation, GraphProjection, GraphSession, NodeData,
     NodeView, NoopGraphViewObserver, PortDirection, StraightEdgeRouter,
 };

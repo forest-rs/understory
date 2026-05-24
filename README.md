@@ -40,9 +40,9 @@ The focus is on clean separation of concerns, pluggable performance trade‑offs
   - Provides pluggable policies for directional and ordered navigation, and an optional adapter for integrating with `understory_box_tree`.
   - Designed to be independent of any particular widget toolkit or event system.
 
-- `understory_graph_view`
+- `understory_node_graph`
   - Headless graph document, projection, session, and computed-state primitives for node-graph editors and viewers.
-  - Separates durable graph topology from per-view layout/projection, ephemeral interaction state, and derived geometry/visibility caches.
+  - Separates durable node-graph topology from per-projection layout, ephemeral interaction state, and derived geometry/visibility caches.
   - Includes explicit invalidation channels, replaceable edge routing, and hit testing over realized node bounds, port anchors, and edge routes.
 
 - `understory_inspector`
@@ -139,7 +139,7 @@ For example, a canvas or DWG or DXF viewer can reuse the box and index layers wi
   - `understory_box_tree/README.md` has usage, hit‑testing, and visible‑set examples.
   - `understory_responder/README.md` explains routing, capture, and how to integrate with a picker.
   - `understory_focus/README.md` covers focus navigation policies and adapters.
-  - `understory_graph_view/README.md` documents graph documents, projections, sessions, computed geometry, routing, and invalidation.
+  - `understory_node_graph/README.md` documents graph documents, projections, sessions, computed geometry, routing, and invalidation.
   - `understory_inspector/README.md` documents the host-side controller for outline-backed inspection UIs.
   - `understory_outline/README.md` documents hierarchical visible-row projection, expansion state, and grouped/tree-style usage.
   - `understory_selection/README.md` documents the selection container, anchor/revision semantics, and click helpers.

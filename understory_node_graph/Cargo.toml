@@ -1,26 +1,28 @@
 [package]
-name = "understory_graph_view"
+name = "understory_node_graph"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Headless graph document, projection, session, and derived-state primitives"
+description = "Headless node-graph document, projection, session, and derived-state primitives"
 readme = "README.md"
-keywords = ["graph", "node-editor", "ui", "no_std"]
+keywords = ["graph", "node-graph", "ui", "no_std"]
 categories = ["data-structures", "no-std"]
 
 [dependencies]
 hashbrown.workspace = true
 invalidation.workspace = true
 kurbo.workspace = true
-understory_selection = { path = "../understory_selection" }
-understory_view2d = { path = "../understory_view2d" }
+understory_selection.workspace = true
+understory_view2d.workspace = true
 
 [lints]
 workspace = true
 
 [features]
-default = []
+default = ["std"]
+std = ["kurbo/std", "understory_view2d/std"]
+libm = ["kurbo/libm", "understory_view2d/libm"]
 
 [package.metadata.docs.rs]
 all-features = true

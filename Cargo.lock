@@ -626,17 +626,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "understory_graph_view"
-version = "0.1.0"
-dependencies = [
- "hashbrown",
- "invalidation",
- "kurbo",
- "understory_selection",
- "understory_view2d",
-]
-
-[[package]]
 name = "understory_guide"
 version = "0.1.0"
 dependencies = [
@@ -659,6 +648,17 @@ dependencies = [
  "understory_outline",
  "understory_selection",
  "understory_virtual_list",
+]
+
+[[package]]
+name = "understory_node_graph"
+version = "0.1.0"
+dependencies = [
+ "hashbrown",
+ "invalidation",
+ "kurbo",
+ "understory_selection",
+ "understory_view2d",
 ]
 
 [[package]]
