@@ -6,7 +6,7 @@
 use alloc::vec::Vec;
 
 use crate::arena::Arena;
-use crate::compatibility::PortCompatibility;
+use crate::compatibility::{ConnectionContext, PortCompatibility};
 use crate::ids::{EdgeId, NodeId, PortId};
 use crate::revision::Revision;
 
@@ -230,10 +230,16 @@ impl<N, P, E> GraphDoc<N, P, E> {
         policy: &C,
     ) -> Result<bool, ConnectError>
     where
-        C: PortCompatibility<P>,
+        C: PortCompatibility<N, P, E>,
     {
         let (output_port, input_port) = self.connect_endpoints(output, input)?;
-        Ok(policy.can_connect(output_port, input_port))
+        Ok(policy.can_connect(ConnectionContext::new(
+            self,
+            output,
+            input,
+            output_port,
+            input_port,
+        )))
     }
 
     /// Inserts an edge only when `policy` allows the connection.
@@ -250,7 +256,7 @@ impl<N, P, E> GraphDoc<N, P, E> {
         policy: &C,
     ) -> Result<Option<EdgeId>, ConnectError>
     where
-        C: PortCompatibility<P>,
+        C: PortCompatibility<N, P, E>,
     {
         if !self.can_connect_with(output, input, policy)? {
             return Ok(None);
@@ -367,8 +373,8 @@ mod tests {
     fn compatibility_policy_can_reject_connections() {
         struct RejectAll;
 
-        impl PortCompatibility<()> for RejectAll {
-            fn can_connect(&self, _output: &PortData<()>, _input: &PortData<()>) -> bool {
+        impl<N, P, E> PortCompatibility<N, P, E> for RejectAll {
+            fn can_connect(&self, _cx: ConnectionContext<'_, N, P, E>) -> bool {
                 false
             }
         }
@@ -382,5 +388,62 @@ mod tests {
         assert_eq!(doc.can_connect_with(out, input, &RejectAll), Ok(false));
         assert_eq!(doc.add_edge_with(out, input, (), &RejectAll), Ok(None));
         assert_eq!(doc.edge_count(), 0);
+    }
+
+    #[test]
+    fn compatibility_policy_can_inspect_existing_topology() {
+        struct NoDuplicateEdges;
+        struct SingleInputNoDuplicate;
+
+        impl<N, P, E> PortCompatibility<N, P, E> for NoDuplicateEdges {
+            fn can_connect(&self, cx: ConnectionContext<'_, N, P, E>) -> bool {
+                cx.duplicate_edge().is_none()
+            }
+        }
+
+        impl<N, P, E> PortCompatibility<N, P, E> for SingleInputNoDuplicate {
+            fn can_connect(&self, cx: ConnectionContext<'_, N, P, E>) -> bool {
+                cx.input_edges().is_empty() && cx.duplicate_edge().is_none()
+            }
+        }
+
+        let mut doc = GraphDoc::<(), (), ()>::new();
+        let first_source = doc.add_node(NodeData { meta: () });
+        let second_source = doc.add_node(NodeData { meta: () });
+        let sink = doc.add_node(NodeData { meta: () });
+        let first_out = doc
+            .add_port(first_source, PortDirection::Output, ())
+            .unwrap();
+        let second_out = doc
+            .add_port(second_source, PortDirection::Output, ())
+            .unwrap();
+        let input = doc.add_port(sink, PortDirection::Input, ()).unwrap();
+
+        let edge = doc
+            .add_edge_with(first_out, input, (), &NoDuplicateEdges)
+            .unwrap()
+            .expect("first edge is not a duplicate");
+        assert_eq!(
+            doc.add_edge_with(first_out, input, (), &NoDuplicateEdges),
+            Ok(None),
+            "exact duplicate is rejected"
+        );
+        let second_edge = doc
+            .add_edge_with(second_out, input, (), &NoDuplicateEdges)
+            .unwrap()
+            .expect("same input can still accept a distinct edge under this policy");
+        assert_eq!(doc.port_edges(input), Some(&[edge, second_edge][..]));
+
+        let single_input = doc.add_port(sink, PortDirection::Input, ()).unwrap();
+        let single_edge = doc
+            .add_edge_with(first_out, single_input, (), &SingleInputNoDuplicate)
+            .unwrap()
+            .expect("empty input accepts first edge");
+        assert_eq!(
+            doc.add_edge_with(second_out, single_input, (), &SingleInputNoDuplicate),
+            Ok(None),
+            "occupied input is rejected"
+        );
+        assert_eq!(doc.port_edges(single_input), Some(&[single_edge][..]));
     }
 }

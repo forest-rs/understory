@@ -40,7 +40,8 @@ When callers provide targeted invalidation such as
 layer narrows anchor and route recomputation to the affected neighborhood.
 Hosts can also provide a [`PortCompatibility`] policy to drive edge-creation
 previews and optional connection validation without pushing a type system
-into the crate itself.
+into the crate itself. Policies receive a [`ConnectionContext`] so they can
+inspect endpoint metadata and existing topology.
 
 The crate intentionally does **not** own rendering, widget policy, graph
 execution, or application-specific node semantics.

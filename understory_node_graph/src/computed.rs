@@ -222,7 +222,7 @@ impl GraphComputed {
     ) -> bool
     where
         R: EdgeRouter,
-        C: PortCompatibility<P>,
+        C: PortCompatibility<N, P, E>,
         O: GraphViewObserver,
     {
         let metrics = DeriveMetrics {
@@ -794,7 +794,7 @@ impl GraphComputed {
         compatibility: &C,
     ) where
         R: EdgeRouter,
-        C: PortCompatibility<P>,
+        C: PortCompatibility<N, P, E>,
     {
         let crate::session::InteractionState::CreateEdge { from, pointer } = session.interaction
         else {
@@ -849,7 +849,7 @@ impl GraphComputed {
         compatibility: &C,
     ) -> Option<(PortId, bool)>
     where
-        C: PortCompatibility<P>,
+        C: PortCompatibility<N, P, E>,
     {
         let candidate = doc.port(port)?;
         let compatible = match candidate.direction {
@@ -909,7 +909,7 @@ mod tests {
     use kurbo::{Point, Rect, Size, Vec2};
 
     use super::{EdgePreviewTarget, GraphComputed};
-    use crate::compatibility::PortCompatibility;
+    use crate::compatibility::{ConnectionContext, PortCompatibility};
     use crate::element::HitTarget;
     use crate::graph::{GraphDoc, NodeData, PortDirection};
     use crate::invalidation::{GraphInvalidation, GraphInvalidationCause, InvalidationTarget};
@@ -1106,13 +1106,9 @@ mod tests {
     fn create_edge_preview_snaps_and_reports_compatibility() {
         struct NamesMustMatch;
 
-        impl PortCompatibility<&'static str> for NamesMustMatch {
-            fn can_connect(
-                &self,
-                output: &crate::graph::PortData<&'static str>,
-                input: &crate::graph::PortData<&'static str>,
-            ) -> bool {
-                output.meta == input.meta
+        impl<N, E> PortCompatibility<N, &'static str, E> for NamesMustMatch {
+            fn can_connect(&self, cx: ConnectionContext<'_, N, &'static str, E>) -> bool {
+                cx.output_port().meta == cx.input_port().meta
             }
         }
 
