@@ -7,6 +7,7 @@ members = [
   "understory_index",
   "understory_box_tree",
   "understory_focus",
+  "understory_node_graph",
   "understory_inspector",
   "understory_outline",
   "understory_presentation",
@@ -56,6 +57,7 @@ understory_focus = { version = "0.1.0", path = "understory_focus", default-featu
 understory_guide = { version = "0.1.0", path = "understory_guide", default-features = false }
 understory_index = { version = "0.0.1", path = "understory_index", default-features = false }
 understory_inspector = { version = "0.1.0", path = "understory_inspector", default-features = false }
+understory_node_graph = { version = "0.1.0", path = "understory_node_graph", default-features = false }
 understory_outline = { version = "0.1.0", path = "understory_outline", default-features = false }
 understory_presentation = { version = "0.1.0", path = "understory_presentation", default-features = false }
 understory_precise_hit = { version = "0.1.0", path = "understory_precise_hit", default-features = false }

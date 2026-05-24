@@ -651,6 +651,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "understory_node_graph"
+version = "0.1.0"
+dependencies = [
+ "hashbrown",
+ "invalidation",
+ "kurbo",
+ "understory_selection",
+ "understory_view2d",
+]
+
+[[package]]
 name = "understory_outline"
 version = "0.1.0"
 dependencies = [
