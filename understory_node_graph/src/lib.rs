@@ -126,7 +126,10 @@ mod revision;
 mod routing;
 mod session;
 
-pub use compatibility::{AllowAllPortConnections, ConnectionContext, PortCompatibility};
+pub use compatibility::{
+    AllowAllPortConnections, ConnectionContext, PortCompatibility, RejectDuplicateConnections,
+    SingleInputConnections,
+};
 pub use computed::{EdgePreview, EdgePreviewTarget, GraphComputed};
 pub use element::HitTarget;
 pub use graph::{ConnectError, EdgeData, GraphDoc, NodeData, PortData, PortDirection};
