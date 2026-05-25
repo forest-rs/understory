@@ -110,11 +110,7 @@ impl<'a, N, P, E> ConnectionContext<'a, N, P, E> {
     /// to participate in other connections.
     #[must_use]
     pub fn duplicate_edge(&self) -> Option<(EdgeId, &'a EdgeData<E>)> {
-        self.output_edges().iter().copied().find_map(|edge| {
-            let edge_data = self.doc.edge(edge)?;
-            (edge_data.output == self.output && edge_data.input == self.input)
-                .then_some((edge, edge_data))
-        })
+        self.doc.edge_between(self.output, self.input)
     }
 }
 
@@ -142,5 +138,31 @@ pub struct AllowAllPortConnections;
 impl<N, P, E> PortCompatibility<N, P, E> for AllowAllPortConnections {
     fn can_connect(&self, _cx: ConnectionContext<'_, N, P, E>) -> bool {
         true
+    }
+}
+
+/// Compatibility policy that rejects exact duplicate connections.
+///
+/// This still allows multiple distinct outputs to connect to the same input and
+/// one output to connect to multiple distinct inputs.
+#[derive(Copy, Clone, Debug, Default)]
+pub struct RejectDuplicateConnections;
+
+impl<N, P, E> PortCompatibility<N, P, E> for RejectDuplicateConnections {
+    fn can_connect(&self, cx: ConnectionContext<'_, N, P, E>) -> bool {
+        cx.duplicate_edge().is_none()
+    }
+}
+
+/// Compatibility policy for single-input graphs without duplicate edges.
+///
+/// This accepts a connection only when the input port has no existing edges and
+/// the exact output-to-input edge is not already present.
+#[derive(Copy, Clone, Debug, Default)]
+pub struct SingleInputConnections;
+
+impl<N, P, E> PortCompatibility<N, P, E> for SingleInputConnections {
+    fn can_connect(&self, cx: ConnectionContext<'_, N, P, E>) -> bool {
+        cx.input_edges().is_empty() && cx.duplicate_edge().is_none()
     }
 }

@@ -180,6 +180,42 @@ impl<NV, PV, EV> GraphProjection<NV, PV, EV> {
         self.node_views.insert(node, view)
     }
 
+    /// Mutates the view state for `node` in place.
+    ///
+    /// Returns `None` and leaves the projection revision unchanged when `node`
+    /// does not have a stored view.
+    pub fn update_node_view<R>(
+        &mut self,
+        node: NodeId,
+        update: impl FnOnce(&mut NodeView<NV>) -> R,
+    ) -> Option<R> {
+        let view = self.node_views.get_mut(&node)?;
+        let result = update(view);
+        self.revision.bump();
+        Some(result)
+    }
+
+    /// Moves the projected node by `delta` in world coordinates.
+    ///
+    /// Returns `true` when the node view existed and was moved.
+    pub fn translate_node(&mut self, node: NodeId, delta: Vec2) -> bool {
+        self.update_node_view(node, |view| {
+            view.origin += delta;
+        })
+        .is_some()
+    }
+
+    /// Sets the projected node origin in world coordinates.
+    ///
+    /// Returns the previous origin when the node view exists.
+    pub fn set_node_origin(&mut self, node: NodeId, origin: Point) -> Option<Point> {
+        self.update_node_view(node, |view| {
+            let previous = view.origin;
+            view.origin = origin;
+            previous
+        })
+    }
+
     /// Sets the view state for a port and returns the previous view, if any.
     ///
     /// Port views are optional. Without one, computed anchors still exist when
@@ -271,5 +307,49 @@ impl<NV, PV, EV> GraphProjection<NV, PV, EV> {
     /// The iterator includes any stale entries still present in the projection.
     pub fn iter_edge_views(&self) -> impl Iterator<Item = (EdgeId, &EdgeView<EV>)> {
         self.edge_views.iter().map(|(id, view)| (*id, view))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kurbo::{Point, Size, Vec2};
+
+    use super::{GraphProjection, NodeView};
+    use crate::ids::NodeId;
+
+    #[test]
+    fn node_view_mutation_helpers_update_origin_and_revision() {
+        let node = NodeId::from_parts(3, 0);
+        let mut projection = GraphProjection::<(), (), ()>::new();
+        projection.set_node_view(
+            node,
+            NodeView::new(Point::new(10.0, 20.0), Size::new(100.0, 40.0), ()),
+        );
+        let after_insert = projection.revision();
+
+        assert!(projection.translate_node(node, Vec2::new(5.0, -2.0)));
+        assert_eq!(
+            projection.node_view(node).unwrap().origin,
+            Point::new(15.0, 18.0)
+        );
+        assert!(projection.revision() > after_insert);
+
+        let previous = projection.set_node_origin(node, Point::new(40.0, 50.0));
+        assert_eq!(previous, Some(Point::new(15.0, 18.0)));
+        assert_eq!(
+            projection.node_view(node).unwrap().origin,
+            Point::new(40.0, 50.0)
+        );
+    }
+
+    #[test]
+    fn missing_node_view_mutation_helpers_do_not_bump_revision() {
+        let node = NodeId::from_parts(3, 0);
+        let mut projection = GraphProjection::<(), (), ()>::new();
+        let initial = projection.revision();
+
+        assert!(!projection.translate_node(node, Vec2::new(1.0, 0.0)));
+        assert_eq!(projection.set_node_origin(node, Point::new(1.0, 2.0)), None);
+        assert_eq!(projection.revision(), initial);
     }
 }

@@ -60,6 +60,13 @@ impl RoutedEdge {
         };
         Self { points, bounds }
     }
+
+    /// Iterates the route as adjacent line segments.
+    ///
+    /// Empty routes and single-point routes yield no segments.
+    pub fn segments(&self) -> impl Iterator<Item = (Point, Point)> + '_ {
+        self.points.windows(2).map(|points| (points[0], points[1]))
+    }
 }
 
 /// Replaceable edge routing policy.
@@ -152,6 +159,10 @@ mod tests {
             },
         );
         assert_eq!(route.points.len(), 2);
+        assert_eq!(
+            route.segments().collect::<alloc::vec::Vec<_>>(),
+            alloc::vec![(Point::new(10.0, 20.0), Point::new(80.0, 48.0))]
+        );
     }
 
     #[test]

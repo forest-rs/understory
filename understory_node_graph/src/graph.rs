@@ -309,6 +309,18 @@ impl<N, P, E> GraphDoc<N, P, E> {
         )))
     }
 
+    /// Returns the existing edge from `output` to `input`, if present.
+    ///
+    /// This does not validate endpoint directions. It is a topology lookup for
+    /// hosts and compatibility policies that need to detect exact duplicates.
+    #[must_use]
+    pub fn edge_between(&self, output: PortId, input: PortId) -> Option<(EdgeId, &EdgeData<E>)> {
+        self.port_edges(output)?.iter().copied().find_map(|edge| {
+            let edge_data = self.edge(edge)?;
+            (edge_data.output == output && edge_data.input == input).then_some((edge, edge_data))
+        })
+    }
+
     /// Inserts an edge only when `policy` allows the connection.
     ///
     /// Returns:
@@ -510,20 +522,7 @@ mod tests {
 
     #[test]
     fn compatibility_policy_can_inspect_existing_topology() {
-        struct NoDuplicateEdges;
-        struct SingleInputNoDuplicate;
-
-        impl<N, P, E> PortCompatibility<N, P, E> for NoDuplicateEdges {
-            fn can_connect(&self, cx: ConnectionContext<'_, N, P, E>) -> bool {
-                cx.duplicate_edge().is_none()
-            }
-        }
-
-        impl<N, P, E> PortCompatibility<N, P, E> for SingleInputNoDuplicate {
-            fn can_connect(&self, cx: ConnectionContext<'_, N, P, E>) -> bool {
-                cx.input_edges().is_empty() && cx.duplicate_edge().is_none()
-            }
-        }
+        use crate::{RejectDuplicateConnections, SingleInputConnections};
 
         let mut doc = GraphDoc::<(), (), ()>::new();
         let first_source = doc.add_node(NodeData { meta: () });
@@ -538,27 +537,31 @@ mod tests {
         let input = doc.add_port(sink, PortDirection::Input, ()).unwrap();
 
         let edge = doc
-            .add_edge_with(first_out, input, (), &NoDuplicateEdges)
+            .add_edge_with(first_out, input, (), &RejectDuplicateConnections)
             .unwrap()
             .expect("first edge is not a duplicate");
         assert_eq!(
-            doc.add_edge_with(first_out, input, (), &NoDuplicateEdges),
+            doc.edge_between(first_out, input).map(|(edge, _)| edge),
+            Some(edge)
+        );
+        assert_eq!(
+            doc.add_edge_with(first_out, input, (), &RejectDuplicateConnections),
             Ok(None),
             "exact duplicate is rejected"
         );
         let second_edge = doc
-            .add_edge_with(second_out, input, (), &NoDuplicateEdges)
+            .add_edge_with(second_out, input, (), &RejectDuplicateConnections)
             .unwrap()
             .expect("same input can still accept a distinct edge under this policy");
         assert_eq!(doc.port_edges(input), Some(&[edge, second_edge][..]));
 
         let single_input = doc.add_port(sink, PortDirection::Input, ()).unwrap();
         let single_edge = doc
-            .add_edge_with(first_out, single_input, (), &SingleInputNoDuplicate)
+            .add_edge_with(first_out, single_input, (), &SingleInputConnections)
             .unwrap()
             .expect("empty input accepts first edge");
         assert_eq!(
-            doc.add_edge_with(second_out, single_input, (), &SingleInputNoDuplicate),
+            doc.add_edge_with(second_out, single_input, (), &SingleInputConnections),
             Ok(None),
             "occupied input is rejected"
         );
