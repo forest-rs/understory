@@ -387,6 +387,7 @@ extern crate alloc;
 mod matcher;
 mod resolve;
 mod selector;
+pub mod selectors;
 mod style;
 mod stylesheet;
 mod theme;
