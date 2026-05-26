@@ -12,8 +12,8 @@ use understory_property::{
     PropertyStore,
 };
 use understory_style::{
-    ResolveCx, ResourceKey, SelectorInputs, StyleBuilder, StyleCascadeBuilder, StyleOrigin,
-    ThemeBuilder,
+    NoResolveParentLookup, PropertyParentLookup, ResolveCx, ResourceKey, StyleBuilder,
+    StyleCascadeBuilder, StyleOrigin, ThemeBuilder,
 };
 
 #[derive(Clone)]
@@ -78,8 +78,6 @@ fn bench_property(c: &mut Criterion) {
         .build();
     const WIDTH_RESOURCE: ResourceKey = ResourceKey::new(0);
     let theme = ThemeBuilder::new().set(WIDTH_RESOURCE, 75.0_f64).build();
-    let inputs = SelectorInputs::EMPTY;
-
     // A small inheritance chain: 0 <- 1 <- ... <- N-1
     let chain_len: u32 = 16;
     let mut nodes: Vec<Elem> = (0..chain_len)
@@ -93,52 +91,54 @@ fn bench_property(c: &mut Criterion) {
     group.bench_function("local", |b| {
         let mut element = Elem::new(1, None);
         element.store.set_local(width, 100.0);
-        let cx = ResolveCx::new(&registry, &theme, |_: u32| None);
-        b.iter(|| black_box(cx.get_value(&element, &inputs, width, None)))
+        let cx = ResolveCx::new(&registry, &theme, NoResolveParentLookup);
+        b.iter(|| black_box(cx.get_value(&element, width, None)))
     });
 
     group.bench_function("local_ref", |b| {
         let mut element = Elem::new(1, None);
         element.store.set_local(width, 100.0);
-        let cx = ResolveCx::new(&registry, &theme, |_: u32| None);
-        b.iter(|| black_box(*cx.get_value_ref(&element, &inputs, width, None)))
+        let cx = ResolveCx::new(&registry, &theme, NoResolveParentLookup);
+        b.iter(|| black_box(*cx.get_value_ref(&element, width, None)))
     });
 
     group.bench_function("animation", |b| {
         let mut element = Elem::new(1, None);
         element.store.set_local(width, 100.0);
         element.store.set_animation(width, 200.0);
-        let cx = ResolveCx::new(&registry, &theme, |_: u32| None);
-        b.iter(|| black_box(cx.get_value(&element, &inputs, width, None)))
+        let cx = ResolveCx::new(&registry, &theme, NoResolveParentLookup);
+        b.iter(|| black_box(cx.get_value(&element, width, None)))
     });
 
     group.bench_function("style", |b| {
         let element = Elem::new(1, None);
-        let cx = ResolveCx::new(&registry, &theme, |_: u32| None);
-        b.iter(|| black_box(cx.get_value(&element, &inputs, width, Some(&style))))
+        let cx = ResolveCx::new(&registry, &theme, NoResolveParentLookup);
+        b.iter(|| black_box(cx.get_value(&element, width, Some((&style, style.root_state())))))
     });
 
     group.bench_function("default", |b| {
         let element = Elem::new(1, None);
-        let cx = ResolveCx::new(&registry, &theme, |_: u32| None);
-        b.iter(|| black_box(cx.get_value(&element, &inputs, width, None)))
+        let cx = ResolveCx::new(&registry, &theme, NoResolveParentLookup);
+        b.iter(|| black_box(cx.get_value(&element, width, None)))
     });
 
     group.bench_function(BenchmarkId::new("inherited", chain_len), |b| {
-        let cx = ResolveCx::new(&registry, &theme, |key: u32| {
-            nodes
-                .get(key as usize)
-                .map(|e| (e.property_store(), e.parent_key()))
-        });
-        b.iter(|| black_box(cx.get_value(leaf, &inputs, font_size, None)))
+        let cx = ResolveCx::new(
+            &registry,
+            &theme,
+            PropertyParentLookup::new(|key: u32| {
+                nodes
+                    .get(key as usize)
+                    .map(|e| (e.property_store(), e.parent_key()))
+            }),
+        );
+        b.iter(|| black_box(cx.get_value(leaf, font_size, None)))
     });
 
     group.bench_function("theme_resource", |b| {
         let element = Elem::new(1, None);
-        let cx = ResolveCx::new(&registry, &theme, |_: u32| None);
-        b.iter(|| {
-            black_box(cx.get_value_with_theme(&element, &inputs, width, None, Some(WIDTH_RESOURCE)))
-        })
+        let cx = ResolveCx::new(&registry, &theme, NoResolveParentLookup);
+        b.iter(|| black_box(cx.get_value_with_theme(&element, width, None, Some(WIDTH_RESOURCE))))
     });
 
     group.finish();
@@ -155,8 +155,8 @@ fn bench_property(c: &mut Criterion) {
         element
             .store
             .set_local(text, "hello world hello world hello world".to_string());
-        let cx = ResolveCx::new(&registry_string, &theme_string, |_: u32| None);
-        b.iter(|| black_box(cx.get_value(&element, &inputs, text, None)))
+        let cx = ResolveCx::new(&registry_string, &theme_string, NoResolveParentLookup);
+        b.iter(|| black_box(cx.get_value(&element, text, None)))
     });
 
     group.bench_function("local_ref", |b| {
@@ -164,8 +164,8 @@ fn bench_property(c: &mut Criterion) {
         element
             .store
             .set_local(text, "hello world hello world hello world".to_string());
-        let cx = ResolveCx::new(&registry_string, &theme_string, |_: u32| None);
-        b.iter(|| black_box(cx.get_value_ref(&element, &inputs, text, None).len()))
+        let cx = ResolveCx::new(&registry_string, &theme_string, NoResolveParentLookup);
+        b.iter(|| black_box(cx.get_value_ref(&element, text, None).len()))
     });
 
     group.finish();

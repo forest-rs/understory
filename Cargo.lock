@@ -611,6 +611,7 @@ dependencies = [
  "understory_property",
  "understory_property_binding",
  "understory_responder",
+ "understory_style",
  "understory_timing",
  "understory_transcript",
  "understory_virtual_list",
@@ -720,6 +721,7 @@ version = "0.1.0"
 name = "understory_style"
 version = "0.1.0"
 dependencies = [
+ "invalidation",
  "understory_property",
 ]
 

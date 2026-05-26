@@ -6,11 +6,6 @@ publish = false
 
 [dependencies]
 invalidation.workspace = true
-understory_responder = { workspace = true, features = [
-  "box_tree_adapter",
-  "hit2d_adapter",
-  "std",
-] }
 kurbo = { workspace = true, default-features = true }
 understory_box_tree = { workspace = true, features = ["std"] }
 understory_event_state = { workspace = true, features = [
@@ -26,6 +21,12 @@ understory_presentation = { workspace = true, features = ["std"] }
 understory_precise_hit = { workspace = true, features = ["std"] }
 understory_property.workspace = true
 understory_property_binding.workspace = true
+understory_responder = { workspace = true, features = [
+  "box_tree_adapter",
+  "hit2d_adapter",
+  "std",
+] }
+understory_style.workspace = true
 understory_timing.workspace = true
 understory_transcript = { workspace = true, features = ["std"] }
 understory_virtual_list = { workspace = true, features = ["std"] }
