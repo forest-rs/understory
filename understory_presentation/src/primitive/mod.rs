@@ -12,8 +12,8 @@ mod text;
 pub use image::{ImageFit, ImagePrimitive, ImageSlice, NineSlice, SliceMode};
 pub use surface::{BackgroundLayer, Border, BorderSide, Shadow, SurfacePrimitive};
 pub use text::{
-    PlainTextPrimitive, TextAlign, TextContent, TextLayout, TextLineHeight, TextOverflow,
-    TextPrimitive, TextStyle,
+    PlainTextPrimitive, TextAlign, TextContent, TextDecoration, TextDecorations, TextLayout,
+    TextLineHeight, TextOverflow, TextPrimitive, TextStyle,
 };
 
 /// Resolved drawing primitive stored on a presentation node.

@@ -1,12 +1,13 @@
 // Copyright 2026 the Understory Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+use alloc::boxed::Box;
 use alloc::string::{String, ToString};
 use core::hash::{Hash, Hasher};
 
 use parlance::{
-    BaseDirection, FontFamily, FontFamilyName, FontStyle, FontWeight, FontWidth, GenericFamily,
-    Language, OverflowWrap, TextWrapMode, WordBreak,
+    BaseDirection, FontFamily, FontFamilyName, FontFeature, FontStyle, FontVariation, FontWeight,
+    FontWidth, GenericFamily, Language, OverflowWrap, TextWrapMode, WordBreak,
 };
 
 use crate::Brush;
@@ -68,6 +69,9 @@ pub struct PlainTextPrimitive {
 
     /// Resolved single-run font and typographic inputs.
     pub style: TextStyle,
+
+    /// Resolved text decorations.
+    pub decorations: TextDecorations,
 
     /// Resolved layout hints for shaping and painting within the node bounds.
     pub layout: TextLayout,
@@ -148,6 +152,17 @@ pub struct TextStyle {
     /// Font style.
     pub font_style: FontStyle,
 
+    /// Additional OpenType font variation settings.
+    ///
+    /// High-level fields such as [`TextStyle::font_weight`],
+    /// [`TextStyle::font_width`], and [`TextStyle::font_style`] remain the
+    /// preferred representation for common axes. This list carries explicit
+    /// lowerer-facing axes that do not have dedicated fields.
+    pub font_variations: Box<[FontVariation]>,
+
+    /// OpenType font feature settings.
+    pub font_features: Box<[FontFeature]>,
+
     /// Optional content language.
     pub language: Option<Language>,
 
@@ -177,6 +192,8 @@ impl PartialEq for TextStyle {
             && scalar_eq(self.font_width.ratio(), other.font_width.ratio())
             && scalar_eq(self.font_weight.value(), other.font_weight.value())
             && font_style_eq(self.font_style, other.font_style)
+            && font_variations_eq(&self.font_variations, &other.font_variations)
+            && self.font_features == other.font_features
             && self.language == other.language
             && self.line_height == other.line_height
             && scalar_eq(self.letter_spacing, other.letter_spacing)
@@ -196,6 +213,8 @@ impl Hash for TextStyle {
         ScalarKey::new(self.font_width.ratio()).hash(state);
         ScalarKey::new(self.font_weight.value()).hash(state);
         hash_font_style(self.font_style, state);
+        hash_font_variations(&self.font_variations, state);
+        hash_font_features(&self.font_features, state);
         self.language.hash(state);
         self.line_height.hash(state);
         ScalarKey::new(self.letter_spacing).hash(state);
@@ -214,6 +233,8 @@ impl Default for TextStyle {
             font_width: FontWidth::NORMAL,
             font_weight: FontWeight::NORMAL,
             font_style: FontStyle::Normal,
+            font_variations: Box::default(),
+            font_features: Box::default(),
             language: None,
             line_height: TextLineHeight::default(),
             letter_spacing: 0.0,
@@ -281,6 +302,36 @@ impl Default for TextLineHeight {
     fn default() -> Self {
         Self::MetricsRelative(1.0)
     }
+}
+
+/// Resolved text decoration paint and metrics.
+///
+/// This represents the decoration properties from Parley's style surface. The
+/// brush is kept with the presentation primitive rather than in [`TextStyle`]
+/// because it is paint intent, not a font/shaping cache key.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TextDecoration {
+    /// Whether the decoration should be drawn.
+    pub enabled: bool,
+
+    /// Optional offset from the lowerer's default decoration position.
+    pub offset: Option<f32>,
+
+    /// Optional stroke size for the decoration.
+    pub size: Option<f32>,
+
+    /// Optional decoration brush override.
+    pub brush: Option<Brush>,
+}
+
+/// Resolved underline and strikethrough decoration state.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TextDecorations {
+    /// Underline decoration state.
+    pub underline: TextDecoration,
+
+    /// Strikethrough decoration state.
+    pub strikethrough: TextDecoration,
 }
 
 /// Resolved text layout hints.
@@ -364,6 +415,13 @@ fn font_style_eq(a: FontStyle, b: FontStyle) -> bool {
     }
 }
 
+fn font_variations_eq(a: &[FontVariation], b: &[FontVariation]) -> bool {
+    a.len() == b.len()
+        && a.iter()
+            .zip(b.iter())
+            .all(|(a, b)| a.tag == b.tag && scalar_eq(a.value, b.value))
+}
+
 fn hash_font_family<H: Hasher>(font_family: &FontFamily<'static>, state: &mut H) {
     match font_family {
         FontFamily::Source(source) => {
@@ -408,6 +466,22 @@ fn hash_font_style<H: Hasher>(style: FontStyle, state: &mut H) {
     }
 }
 
+fn hash_font_features<H: Hasher>(features: &[FontFeature], state: &mut H) {
+    features.len().hash(state);
+    for feature in features {
+        feature.tag.hash(state);
+        feature.value.hash(state);
+    }
+}
+
+fn hash_font_variations<H: Hasher>(variations: &[FontVariation], state: &mut H) {
+    variations.len().hash(state);
+    for variation in variations {
+        variation.tag.hash(state);
+        ScalarKey::new(variation.value).hash(state);
+    }
+}
+
 fn hash_word_break<H: Hasher>(word_break: WordBreak, state: &mut H) {
     match word_break {
         WordBreak::Normal => 0_u8.hash(state),
@@ -435,6 +509,7 @@ fn hash_text_wrap_mode<H: Hasher>(text_wrap_mode: TextWrapMode, state: &mut H) {
 mod tests {
     use super::*;
     use core::hash::{Hash, Hasher};
+    use parlance::Tag;
 
     fn hash_value(value: impl Hash) -> u64 {
         let mut hasher = TestHasher::default();
@@ -479,7 +554,11 @@ mod tests {
         );
         assert_eq!(text.style.font_width, FontWidth::NORMAL);
         assert_eq!(text.style.font_weight, FontWeight::NORMAL);
+        assert!(text.style.font_features.is_empty());
+        assert!(text.style.font_variations.is_empty());
         assert_eq!(text.style.text_wrap_mode, TextWrapMode::NoWrap);
+        assert!(!text.decorations.underline.enabled);
+        assert!(!text.decorations.strikethrough.enabled);
         assert_eq!(text.layout.align, TextAlign::Start);
         assert_eq!(text.layout.base_direction, BaseDirection::Auto);
     }
@@ -498,6 +577,8 @@ mod tests {
         let mut left = TextStyle {
             font_size: 0.0,
             font_style: FontStyle::Oblique(Some(-0.0)),
+            font_variations: Box::from([FontVariation::new(Tag::new(b"opsz"), -0.0)]),
+            font_features: Box::from([FontFeature::new(Tag::new(b"kern"), 1)]),
             line_height: TextLineHeight::Absolute(-0.0),
             letter_spacing: -0.0,
             word_spacing: 0.0,
@@ -506,6 +587,8 @@ mod tests {
         let right = TextStyle {
             font_size: -0.0,
             font_style: FontStyle::Oblique(Some(0.0)),
+            font_variations: Box::from([FontVariation::new(Tag::new(b"opsz"), 0.0)]),
+            font_features: Box::from([FontFeature::new(Tag::new(b"kern"), 1)]),
             line_height: TextLineHeight::Absolute(0.0),
             letter_spacing: 0.0,
             word_spacing: -0.0,
@@ -517,5 +600,52 @@ mod tests {
 
         left.font_weight = FontWeight::BOLD;
         assert_ne!(left, right);
+    }
+
+    #[test]
+    fn text_style_nan_bits_are_stable() {
+        let nan = f32::from_bits(0x7fc0_0001);
+        let other_nan = f32::from_bits(0x7fc0_0002);
+
+        let left = TextStyle {
+            font_size: nan,
+            font_variations: Box::from([FontVariation::new(Tag::new(b"GRAD"), nan)]),
+            ..TextStyle::default()
+        };
+        let same = TextStyle {
+            font_size: nan,
+            font_variations: Box::from([FontVariation::new(Tag::new(b"GRAD"), nan)]),
+            ..TextStyle::default()
+        };
+        let different = TextStyle {
+            font_size: other_nan,
+            font_variations: Box::from([FontVariation::new(Tag::new(b"GRAD"), other_nan)]),
+            ..TextStyle::default()
+        };
+
+        assert_eq!(left, same);
+        assert_eq!(hash_value(&left), hash_value(&same));
+        assert_ne!(left, different);
+    }
+
+    #[test]
+    fn text_decoration_carries_paint_and_metrics() {
+        let decoration = TextDecoration {
+            enabled: true,
+            offset: Some(1.0),
+            size: Some(2.0),
+            brush: Some(Brush::from(crate::Color::WHITE)),
+        };
+
+        let text = PlainTextPrimitive {
+            decorations: TextDecorations {
+                underline: decoration.clone(),
+                strikethrough: TextDecoration::default(),
+            },
+            ..PlainTextPrimitive::default()
+        };
+
+        assert_eq!(text.decorations.underline, decoration);
+        assert!(!text.decorations.strikethrough.enabled);
     }
 }

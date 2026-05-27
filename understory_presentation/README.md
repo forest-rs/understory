@@ -48,8 +48,8 @@ property/style resolution, behavior, or paint command emission.
 - [`Primitive`]: resolved drawing primitive stored on a presentation node.
 - [`SurfacePrimitive`]: resolved surface fill/border intent.
 - [`TextPrimitive`]: umbrella for resolved text drawing intent.
-- [`PlainTextPrimitive`]: resolved plain-text content, foreground brush, and
-  `parlance`-based single-run style.
+- [`PlainTextPrimitive`]: resolved plain-text content, foreground brush,
+  decorations, and `parlance`-based single-run style.
 - [`ImagePrimitive`]: resolved image resource, sampling, fitting, and
   optional nine-slice intent.
 
