@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use alloc::string::{String, ToString};
+use core::hash::{Hash, Hasher};
 
 use parlance::{
-    BaseDirection, FontFamily, FontStyle, FontWeight, FontWidth, GenericFamily, Language,
-    OverflowWrap, TextWrapMode, WordBreak,
+    BaseDirection, FontFamily, FontFamilyName, FontStyle, FontWeight, FontWidth, GenericFamily,
+    Language, OverflowWrap, TextWrapMode, WordBreak,
 };
 
 use crate::Brush;
@@ -125,7 +126,12 @@ impl From<String> for TextContent {
 ///
 /// This uses `parlance` for font and CSS text leaf types so presentation does
 /// not define a parallel text vocabulary.
-#[derive(Clone, Debug, PartialEq)]
+///
+/// Equality and hashing use the same float key policy as the presentation
+/// cache: `-0.0` and `0.0` compare equal, while other `f32` values compare by
+/// their bit pattern. NaN payloads are therefore stable and self-equal only
+/// when their bit pattern matches.
+#[derive(Clone, Debug)]
 pub struct TextStyle {
     /// Preferred font family list.
     pub font_family: FontFamily<'static>,
@@ -164,6 +170,42 @@ pub struct TextStyle {
     pub text_wrap_mode: TextWrapMode,
 }
 
+impl PartialEq for TextStyle {
+    fn eq(&self, other: &Self) -> bool {
+        self.font_family == other.font_family
+            && scalar_eq(self.font_size, other.font_size)
+            && scalar_eq(self.font_width.ratio(), other.font_width.ratio())
+            && scalar_eq(self.font_weight.value(), other.font_weight.value())
+            && font_style_eq(self.font_style, other.font_style)
+            && self.language == other.language
+            && self.line_height == other.line_height
+            && scalar_eq(self.letter_spacing, other.letter_spacing)
+            && scalar_eq(self.word_spacing, other.word_spacing)
+            && self.word_break == other.word_break
+            && self.overflow_wrap == other.overflow_wrap
+            && self.text_wrap_mode == other.text_wrap_mode
+    }
+}
+
+impl Eq for TextStyle {}
+
+impl Hash for TextStyle {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        hash_font_family(&self.font_family, state);
+        ScalarKey::new(self.font_size).hash(state);
+        ScalarKey::new(self.font_width.ratio()).hash(state);
+        ScalarKey::new(self.font_weight.value()).hash(state);
+        hash_font_style(self.font_style, state);
+        self.language.hash(state);
+        self.line_height.hash(state);
+        ScalarKey::new(self.letter_spacing).hash(state);
+        ScalarKey::new(self.word_spacing).hash(state);
+        hash_word_break(self.word_break, state);
+        hash_overflow_wrap(self.overflow_wrap, state);
+        hash_text_wrap_mode(self.text_wrap_mode, state);
+    }
+}
+
 impl Default for TextStyle {
     fn default() -> Self {
         Self {
@@ -188,7 +230,10 @@ impl Default for TextStyle {
 /// `parlance` does not currently define a line-height type, so presentation
 /// keeps this local and intentionally mirrors the variants a Parley lowerer can
 /// map directly.
-#[derive(Clone, Copy, Debug, PartialEq)]
+///
+/// Equality and hashing normalize `-0.0` to `0.0`; other `f32` values compare
+/// and hash by bit pattern.
+#[derive(Clone, Copy, Debug)]
 pub enum TextLineHeight {
     /// Scale the font's preferred metrics line height.
     MetricsRelative(f32),
@@ -198,6 +243,38 @@ pub enum TextLineHeight {
 
     /// Absolute line height in logical pixels.
     Absolute(f32),
+}
+
+impl PartialEq for TextLineHeight {
+    fn eq(&self, other: &Self) -> bool {
+        match (*self, *other) {
+            (Self::MetricsRelative(a), Self::MetricsRelative(b))
+            | (Self::FontSizeRelative(a), Self::FontSizeRelative(b))
+            | (Self::Absolute(a), Self::Absolute(b)) => scalar_eq(a, b),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for TextLineHeight {}
+
+impl Hash for TextLineHeight {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match *self {
+            Self::MetricsRelative(value) => {
+                0_u8.hash(state);
+                ScalarKey::new(value).hash(state);
+            }
+            Self::FontSizeRelative(value) => {
+                1_u8.hash(state);
+                ScalarKey::new(value).hash(state);
+            }
+            Self::Absolute(value) => {
+                2_u8.hash(state);
+                ScalarKey::new(value).hash(state);
+            }
+        }
+    }
 }
 
 impl Default for TextLineHeight {
@@ -258,9 +335,129 @@ pub enum TextOverflow {
     Ellipsis,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct ScalarKey(u32);
+
+impl ScalarKey {
+    fn new(value: f32) -> Self {
+        if value == 0.0 {
+            Self(0)
+        } else {
+            Self(value.to_bits())
+        }
+    }
+}
+
+fn scalar_eq(a: f32, b: f32) -> bool {
+    ScalarKey::new(a) == ScalarKey::new(b)
+}
+
+fn font_style_eq(a: FontStyle, b: FontStyle) -> bool {
+    match (a, b) {
+        (FontStyle::Normal, FontStyle::Normal) | (FontStyle::Italic, FontStyle::Italic) => true,
+        (FontStyle::Oblique(a), FontStyle::Oblique(b)) => match (a, b) {
+            (Some(a), Some(b)) => scalar_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+fn hash_font_family<H: Hasher>(font_family: &FontFamily<'static>, state: &mut H) {
+    match font_family {
+        FontFamily::Source(source) => {
+            0_u8.hash(state);
+            source.as_ref().hash(state);
+        }
+        FontFamily::Single(name) => {
+            1_u8.hash(state);
+            hash_font_family_name(name, state);
+        }
+        FontFamily::List(list) => {
+            2_u8.hash(state);
+            list.len().hash(state);
+            for name in list.iter() {
+                hash_font_family_name(name, state);
+            }
+        }
+    }
+}
+
+fn hash_font_family_name<H: Hasher>(name: &FontFamilyName<'static>, state: &mut H) {
+    match name {
+        FontFamilyName::Named(name) => {
+            0_u8.hash(state);
+            name.as_ref().hash(state);
+        }
+        FontFamilyName::Generic(generic) => {
+            1_u8.hash(state);
+            generic.hash(state);
+        }
+    }
+}
+
+fn hash_font_style<H: Hasher>(style: FontStyle, state: &mut H) {
+    match style {
+        FontStyle::Normal => 0_u8.hash(state),
+        FontStyle::Italic => 1_u8.hash(state),
+        FontStyle::Oblique(angle) => {
+            2_u8.hash(state);
+            angle.map(ScalarKey::new).hash(state);
+        }
+    }
+}
+
+fn hash_word_break<H: Hasher>(word_break: WordBreak, state: &mut H) {
+    match word_break {
+        WordBreak::Normal => 0_u8.hash(state),
+        WordBreak::BreakAll => 1_u8.hash(state),
+        WordBreak::KeepAll => 2_u8.hash(state),
+    }
+}
+
+fn hash_overflow_wrap<H: Hasher>(overflow_wrap: OverflowWrap, state: &mut H) {
+    match overflow_wrap {
+        OverflowWrap::Normal => 0_u8.hash(state),
+        OverflowWrap::Anywhere => 1_u8.hash(state),
+        OverflowWrap::BreakWord => 2_u8.hash(state),
+    }
+}
+
+fn hash_text_wrap_mode<H: Hasher>(text_wrap_mode: TextWrapMode, state: &mut H) {
+    match text_wrap_mode {
+        TextWrapMode::Wrap => 0_u8.hash(state),
+        TextWrapMode::NoWrap => 1_u8.hash(state),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::hash::{Hash, Hasher};
+
+    fn hash_value(value: impl Hash) -> u64 {
+        let mut hasher = TestHasher::default();
+        value.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    #[derive(Default)]
+    struct TestHasher {
+        hash: u64,
+    }
+
+    impl Hasher for TestHasher {
+        fn finish(&self) -> u64 {
+            self.hash
+        }
+
+        fn write(&mut self, bytes: &[u8]) {
+            for byte in bytes {
+                self.hash = self.hash.wrapping_mul(16_777_619) ^ u64::from(*byte);
+            }
+        }
+    }
 
     #[test]
     fn plain_text_content_exposes_str() {
@@ -285,5 +482,40 @@ mod tests {
         assert_eq!(text.style.text_wrap_mode, TextWrapMode::NoWrap);
         assert_eq!(text.layout.align, TextAlign::Start);
         assert_eq!(text.layout.base_direction, BaseDirection::Auto);
+    }
+
+    #[test]
+    fn text_line_height_hash_matches_equality() {
+        let positive_zero = TextLineHeight::FontSizeRelative(0.0);
+        let negative_zero = TextLineHeight::FontSizeRelative(-0.0);
+
+        assert_eq!(positive_zero, negative_zero);
+        assert_eq!(hash_value(positive_zero), hash_value(negative_zero));
+    }
+
+    #[test]
+    fn text_style_hash_matches_equality() {
+        let mut left = TextStyle {
+            font_size: 0.0,
+            font_style: FontStyle::Oblique(Some(-0.0)),
+            line_height: TextLineHeight::Absolute(-0.0),
+            letter_spacing: -0.0,
+            word_spacing: 0.0,
+            ..TextStyle::default()
+        };
+        let right = TextStyle {
+            font_size: -0.0,
+            font_style: FontStyle::Oblique(Some(0.0)),
+            line_height: TextLineHeight::Absolute(0.0),
+            letter_spacing: 0.0,
+            word_spacing: -0.0,
+            ..TextStyle::default()
+        };
+
+        assert_eq!(left, right);
+        assert_eq!(hash_value(&left), hash_value(&right));
+
+        left.font_weight = FontWeight::BOLD;
+        assert_ne!(left, right);
     }
 }
