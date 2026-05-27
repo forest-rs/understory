@@ -31,8 +31,8 @@
 //! - [`Primitive`]: resolved drawing primitive stored on a presentation node.
 //! - [`SurfacePrimitive`]: resolved surface fill/border intent.
 //! - [`TextPrimitive`]: umbrella for resolved text drawing intent.
-//! - [`PlainTextPrimitive`]: resolved plain-text content, foreground brush, and
-//!   `parlance`-based single-run style.
+//! - [`PlainTextPrimitive`]: resolved plain-text content, foreground brush,
+//!   decorations, and `parlance`-based single-run style.
 //! - [`ImagePrimitive`]: resolved image resource, sampling, fitting, and
 //!   optional nine-slice intent.
 //!
@@ -128,6 +128,7 @@ pub use peniko::{Brush, Color, ImageBrush, ImageQuality, ImageSampler};
 pub use primitive::{
     BackgroundLayer, Border, BorderSide, ImageFit, ImagePrimitive, ImageSlice, NineSlice,
     PlainTextPrimitive, Primitive, Shadow, SliceMode, SurfacePrimitive, TextAlign, TextContent,
-    TextLayout, TextLineHeight, TextOverflow, TextPrimitive, TextStyle,
+    TextDecoration, TextDecorations, TextLayout, TextLineHeight, TextOverflow, TextPrimitive,
+    TextStyle,
 };
 pub use store::{PresentationNode, PresentationStore};
