@@ -7,7 +7,9 @@ use core::hash::Hash;
 use hashbrown::{HashMap, HashSet};
 use smallvec::SmallVec;
 
-use crate::{ImagePrimitive, PlainTextPrimitive, Primitive, SurfacePrimitive, TextPrimitive};
+use crate::{
+    ImagePrimitive, PathPrimitive, PlainTextPrimitive, Primitive, SurfacePrimitive, TextPrimitive,
+};
 
 /// Retained presentation data for one geometry node.
 ///
@@ -129,7 +131,7 @@ impl<SourceKey, ImageKey> PresentationNode<SourceKey, ImageKey> {
             .iter()
             .position(|primitive| match primitive {
                 Primitive::Text(text) => text.as_plain().is_some(),
-                Primitive::Surface(_) | Primitive::Image(_) => false,
+                Primitive::Surface(_) | Primitive::Image(_) | Primitive::Path(_) => false,
             })
             .unwrap_or_else(|| {
                 self.primitives
@@ -172,6 +174,39 @@ impl<SourceKey, ImageKey> PresentationNode<SourceKey, ImageKey> {
             self.primitives.push(Primitive::image(image));
             let Some(Primitive::Image(inserted)) = self.primitives.last_mut() else {
                 unreachable!("last inserted primitive is an image");
+            };
+            inserted.as_mut()
+        }
+    }
+
+    /// Returns the first path primitive, if present.
+    #[must_use]
+    pub fn path(&self) -> Option<&PathPrimitive> {
+        self.primitives.iter().find_map(Primitive::as_path)
+    }
+
+    /// Returns mutable access to the first path primitive, if present.
+    #[must_use]
+    pub fn path_mut(&mut self) -> Option<&mut PathPrimitive> {
+        self.primitives.iter_mut().find_map(Primitive::as_path_mut)
+    }
+
+    /// Replaces the first path primitive or appends one when none exists.
+    pub fn set_path(&mut self, path: PathPrimitive) -> &mut PathPrimitive {
+        if let Some(index) = self
+            .primitives
+            .iter()
+            .position(|primitive| matches!(primitive, Primitive::Path(_)))
+        {
+            let Primitive::Path(existing) = &mut self.primitives[index] else {
+                unreachable!("path index points at a path primitive");
+            };
+            **existing = path;
+            existing.as_mut()
+        } else {
+            self.primitives.push(Primitive::path(path));
+            let Some(Primitive::Path(inserted)) = self.primitives.last_mut() else {
+                unreachable!("last inserted primitive is a path");
             };
             inserted.as_mut()
         }
@@ -335,6 +370,31 @@ where
         self.node_mut(key).map(|node| node.set_image(image))
     }
 
+    /// Returns the first path primitive on a node.
+    ///
+    /// Returns `None` when `key` does not identify a live presentation node or
+    /// when the node has no path primitive.
+    pub fn path_mut(&mut self, key: NodeKey) -> Option<&mut PathPrimitive> {
+        if self
+            .nodes
+            .get(&key)
+            .and_then(PresentationNode::path)
+            .is_some()
+        {
+            self.mark_dirty(key);
+        }
+        self.nodes
+            .get_mut(&key)
+            .and_then(PresentationNode::path_mut)
+    }
+
+    /// Replaces or appends the first path primitive on a node.
+    ///
+    /// Returns `None` when `key` does not identify a live presentation node.
+    pub fn set_path(&mut self, key: NodeKey, path: PathPrimitive) -> Option<&mut PathPrimitive> {
+        self.node_mut(key).map(|node| node.set_path(path))
+    }
+
     /// Returns live keys in insertion order.
     ///
     /// This order is useful for diagnostics and listing. It is not paint order:
@@ -407,7 +467,8 @@ mod tests {
     use alloc::vec;
 
     use super::*;
-    use crate::{Color, RoundedRectRadii, TextContent};
+    use crate::{Color, PathPrimitive, RoundedRectRadii, TextContent};
+    use peniko::kurbo::BezPath;
 
     #[derive(Clone, Debug, Eq, PartialEq)]
     struct Asset(&'static str);
@@ -509,6 +570,24 @@ mod tests {
     }
 
     #[test]
+    fn set_path_replaces_existing_path() {
+        let mut store: PresentationStore<i32, i32> = PresentationStore::new();
+        store.insert(1, 10);
+        store.clear_dirty();
+
+        store.set_path(1, PathPrimitive::new(BezPath::new()));
+        let mut path = BezPath::new();
+        path.move_to((1.0, 2.0));
+        path.line_to((3.0, 4.0));
+        store.set_path(1, PathPrimitive::new(path.clone()));
+
+        let node = store.node(1).unwrap();
+        assert_eq!(node.primitives().len(), 1);
+        assert_eq!(node.path().unwrap().path, path);
+        assert_eq!(store.take_dirty().collect::<Vec<_>>(), vec![1]);
+    }
+
+    #[test]
     fn image_mut_does_not_create_default_image() {
         let mut store: PresentationStore<i32, i32> = PresentationStore::new();
         store.insert(1, 10);
@@ -526,6 +605,7 @@ mod tests {
         assert!(store.text_mut(99).is_none());
         assert!(store.plain_text_mut(99).is_none());
         assert!(store.image_mut(99).is_none());
+        assert!(store.path_mut(99).is_none());
         assert!(store.dirty_is_empty());
     }
 

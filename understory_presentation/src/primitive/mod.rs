@@ -6,10 +6,12 @@
 use alloc::boxed::Box;
 
 mod image;
+mod path;
 mod surface;
 mod text;
 
 pub use image::{ImageFit, ImagePrimitive, ImageSlice, NineSlice, SliceMode};
+pub use path::{PathFill, PathPaintOrder, PathPrimitive, PathStroke};
 pub use surface::{BackgroundLayer, Border, BorderSide, Shadow, SurfacePrimitive};
 pub use text::{
     PlainTextPrimitive, TextAlign, TextContent, TextDecoration, TextDecorations, TextLayout,
@@ -38,6 +40,9 @@ pub enum Primitive<ImageKey = u64> {
 
     /// Resolved image intent.
     Image(Box<ImagePrimitive<ImageKey>>),
+
+    /// Resolved path drawing intent.
+    Path(Box<PathPrimitive>),
 }
 
 impl<ImageKey> Primitive<ImageKey> {
@@ -65,12 +70,18 @@ impl<ImageKey> Primitive<ImageKey> {
         Self::Image(Box::new(image))
     }
 
+    /// Creates a path primitive.
+    #[must_use]
+    pub fn path(path: PathPrimitive) -> Self {
+        Self::Path(Box::new(path))
+    }
+
     /// Returns this primitive as a surface primitive, if it is one.
     #[must_use]
     pub fn as_surface(&self) -> Option<&SurfacePrimitive> {
         match self {
             Self::Surface(surface) => Some(surface.as_ref()),
-            Self::Text(_) | Self::Image(_) => None,
+            Self::Text(_) | Self::Image(_) | Self::Path(_) => None,
         }
     }
 
@@ -79,7 +90,7 @@ impl<ImageKey> Primitive<ImageKey> {
     pub fn as_surface_mut(&mut self) -> Option<&mut SurfacePrimitive> {
         match self {
             Self::Surface(surface) => Some(surface.as_mut()),
-            Self::Text(_) | Self::Image(_) => None,
+            Self::Text(_) | Self::Image(_) | Self::Path(_) => None,
         }
     }
 
@@ -87,7 +98,7 @@ impl<ImageKey> Primitive<ImageKey> {
     #[must_use]
     pub fn as_text(&self) -> Option<&TextPrimitive> {
         match self {
-            Self::Surface(_) | Self::Image(_) => None,
+            Self::Surface(_) | Self::Image(_) | Self::Path(_) => None,
             Self::Text(text) => Some(text.as_ref()),
         }
     }
@@ -96,7 +107,7 @@ impl<ImageKey> Primitive<ImageKey> {
     #[must_use]
     pub fn as_text_mut(&mut self) -> Option<&mut TextPrimitive> {
         match self {
-            Self::Surface(_) | Self::Image(_) => None,
+            Self::Surface(_) | Self::Image(_) | Self::Path(_) => None,
             Self::Text(text) => Some(text.as_mut()),
         }
     }
@@ -105,7 +116,7 @@ impl<ImageKey> Primitive<ImageKey> {
     #[must_use]
     pub fn as_image(&self) -> Option<&ImagePrimitive<ImageKey>> {
         match self {
-            Self::Surface(_) | Self::Text(_) => None,
+            Self::Surface(_) | Self::Text(_) | Self::Path(_) => None,
             Self::Image(image) => Some(image.as_ref()),
         }
     }
@@ -114,8 +125,26 @@ impl<ImageKey> Primitive<ImageKey> {
     #[must_use]
     pub fn as_image_mut(&mut self) -> Option<&mut ImagePrimitive<ImageKey>> {
         match self {
-            Self::Surface(_) | Self::Text(_) => None,
+            Self::Surface(_) | Self::Text(_) | Self::Path(_) => None,
             Self::Image(image) => Some(image.as_mut()),
+        }
+    }
+
+    /// Returns this primitive as a path primitive, if it is one.
+    #[must_use]
+    pub fn as_path(&self) -> Option<&PathPrimitive> {
+        match self {
+            Self::Surface(_) | Self::Text(_) | Self::Image(_) => None,
+            Self::Path(path) => Some(path.as_ref()),
+        }
+    }
+
+    /// Returns this primitive as a mutable path primitive, if it is one.
+    #[must_use]
+    pub fn as_path_mut(&mut self) -> Option<&mut PathPrimitive> {
+        match self {
+            Self::Surface(_) | Self::Text(_) | Self::Image(_) => None,
+            Self::Path(path) => Some(path.as_mut()),
         }
     }
 }

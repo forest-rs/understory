@@ -35,6 +35,7 @@
 //!   decorations, and `parlance`-based single-run style.
 //! - [`ImagePrimitive`]: resolved image resource, sampling, fitting, and
 //!   optional nine-slice intent.
+//! - [`PathPrimitive`]: resolved vector path geometry plus fill/stroke intent.
 //!
 //! ## Model
 //!
@@ -126,9 +127,9 @@ pub use parlance::{
 pub use peniko::kurbo::{Insets, RoundedRectRadii};
 pub use peniko::{Brush, Color, ImageBrush, ImageQuality, ImageSampler};
 pub use primitive::{
-    BackgroundLayer, Border, BorderSide, ImageFit, ImagePrimitive, ImageSlice, NineSlice,
-    PlainTextPrimitive, Primitive, Shadow, SliceMode, SurfacePrimitive, TextAlign, TextContent,
-    TextDecoration, TextDecorations, TextLayout, TextLineHeight, TextOverflow, TextPrimitive,
-    TextStyle,
+    BackgroundLayer, Border, BorderSide, ImageFit, ImagePrimitive, ImageSlice, NineSlice, PathFill,
+    PathPaintOrder, PathPrimitive, PathStroke, PlainTextPrimitive, Primitive, Shadow, SliceMode,
+    SurfacePrimitive, TextAlign, TextContent, TextDecoration, TextDecorations, TextLayout,
+    TextLineHeight, TextOverflow, TextPrimitive, TextStyle,
 };
 pub use store::{PresentationNode, PresentationStore};
