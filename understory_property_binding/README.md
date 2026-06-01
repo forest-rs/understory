@@ -54,6 +54,10 @@ application-level invalidation coordinator.
 - [`BindingHost`]: host adapter that reads and writes erased endpoint values.
 - [`BindingSet`]: registered bindings plus their dirty state and dependency
   graph.
+- [`ValueSource`]: typed handle for a single stored value that can feed a
+  binding endpoint.
+- [`ExternalSource`]: typed handle for a pull-based value source that can
+  feed a binding endpoint.
 - [`BindingWrite`]: host-reported result of writing a target endpoint.
 - [`BindingReport`]: summary returned after dirty bindings are drained.
 - [`BindingDrainError`]: drain error plus the partial report for writes that
@@ -191,8 +195,10 @@ assert_eq!(
 [`BindingStats`]: https://docs.rs/understory_property_binding/latest/understory_property_binding/struct.BindingStats.html
 [`BindingWrite`]: https://docs.rs/understory_property_binding/latest/understory_property_binding/struct.BindingWrite.html
 [`EndpointKey`]: https://docs.rs/understory_property_binding/latest/understory_property_binding/struct.EndpointKey.html
+[`ExternalSource`]: https://docs.rs/understory_property_binding/latest/understory_property_binding/struct.ExternalSource.html
 [`invalidation::InvalidationTracker`]: https://docs.rs/invalidation/latest/invalidation/struct.InvalidationTracker.html
 [`PropertyEndpoint`]: https://docs.rs/understory_property_binding/latest/understory_property_binding/struct.PropertyEndpoint.html
+[`ValueSource`]: https://docs.rs/understory_property_binding/latest/understory_property_binding/struct.ValueSource.html
 
 ## Minimum supported Rust Version (MSRV)
 
