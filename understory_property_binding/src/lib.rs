@@ -37,6 +37,10 @@
 //! - [`BindingHost`]: host adapter that reads and writes erased endpoint values.
 //! - [`BindingSet`]: registered bindings plus their dirty state and dependency
 //!   graph.
+//! - [`ValueSource`]: typed handle for a single stored value that can feed a
+//!   binding endpoint.
+//! - [`ExternalSource`]: typed handle for a pull-based value source that can
+//!   feed a binding endpoint.
 //! - [`BindingWrite`]: host-reported result of writing a target endpoint.
 //! - [`BindingReport`]: summary returned after dirty bindings are drained.
 //! - [`BindingDrainError`]: drain error plus the partial report for writes that
@@ -163,9 +167,14 @@ mod error;
 mod host;
 mod report;
 mod set;
+mod value_source;
 
 pub use endpoint::{BindingId, EndpointKey, PropertyEndpoint};
 pub use error::{BindingDrainError, BindingError};
 pub use host::{BindingHost, BindingHostExt};
 pub use report::{BindingReport, BindingStats, BindingWrite};
 pub use set::BindingSet;
+pub use value_source::{
+    ExternalSource, ExternalSourceId, VALUE_SOURCE_PROPERTY_ID, ValueSource, ValueSourceId,
+    ValueSourceStore, value_source_property,
+};
