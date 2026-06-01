@@ -52,6 +52,7 @@ property/style resolution, behavior, or paint command emission.
   decorations, and `parlance`-based single-run style.
 - [`ImagePrimitive`]: resolved image resource, sampling, fitting, and
   optional nine-slice intent.
+- [`PathPrimitive`]: resolved vector path geometry plus fill/stroke intent.
 
 ## Model
 
