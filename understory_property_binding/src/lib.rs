@@ -42,6 +42,8 @@
 //! - [`ExternalSource`]: typed handle for a pull-based value source that can
 //!   feed a binding endpoint.
 //! - [`BindingWrite`]: host-reported result of writing a target endpoint.
+//! - write context: per-binding metadata returned to the host when a binding
+//!   writes its target.
 //! - [`BindingReport`]: summary returned after dirty bindings are drained.
 //! - [`BindingDrainError`]: drain error plus the partial report for writes that
 //!   completed before the error.
@@ -78,6 +80,37 @@
 //! [`BindingSet::drain`] returns the application channels reported by target
 //! writes. The host remains responsible for marking its own
 //! application-level invalidation tracker with those returned channels.
+//!
+//! ## Write context
+//!
+//! Every binding stores one write context value and passes it to
+//! [`BindingHost::set_erased`] when the binding writes its target. Plain hosts
+//! use the default `()` context.
+//!
+//! Hosts with layered property stores can use a real context enum to avoid a
+//! separate side table. For example, Overstory needs app-authored bindings to
+//! write into the normal local-value layer, while control-template bindings
+//! write into a lower-priority template-binding layer. That shape looks like:
+//!
+//! ```rust,ignore
+//! let mut bindings = BindingSet::<BindingOwner, LocalValueSource>::new(BINDING);
+//! bindings.bind(app_model, button_text, LocalValueSource::Local)?;
+//! bindings.bind(template_owner, template_part, LocalValueSource::TemplateBinding)?;
+//!
+//! impl BindingHost<BindingOwner, LocalValueSource> for Ui {
+//!     fn set_erased(
+//!         &mut self,
+//!         endpoint: EndpointKey<BindingOwner>,
+//!         value: ErasedValue,
+//!         source: LocalValueSource,
+//!     ) -> BindingWrite {
+//!         self.set_local_erased_with_source(endpoint, value, source)
+//!     }
+//! }
+//! ```
+//!
+//! The binding set does not know what `LocalValueSource` means. It only keeps
+//! the context attached to the binding and hands it back to the host on writes.
 //!
 //! ## Gotchas and risks
 //!
@@ -121,7 +154,12 @@
 //!         }
 //!     }
 //!
-//!     fn set_erased(&mut self, endpoint: EndpointKey<u32>, value: ErasedValue) -> BindingWrite {
+//!     fn set_erased(
+//!         &mut self,
+//!         endpoint: EndpointKey<u32>,
+//!         value: ErasedValue,
+//!         (): (),
+//!     ) -> BindingWrite {
 //!         if endpoint.owner() == 2 {
 //!             self.target = Some(value);
 //!             BindingWrite::new(true, LAYOUT.into_set())
@@ -139,6 +177,7 @@
 //!     .bind(
 //!         PropertyEndpoint::new(1, width),
 //!         PropertyEndpoint::new(2, width),
+//!         (),
 //!     )
 //!     .unwrap();
 //!
