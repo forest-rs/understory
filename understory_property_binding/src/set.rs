@@ -16,25 +16,27 @@ use crate::error::{BindingDrainError, BindingError};
 use crate::host::BindingHost;
 use crate::report::{BindingReport, BindingStats, BindingWrite};
 
-trait ErasedBinding<K: Copy> {
+trait ErasedBinding<K: Copy, C: Copy> {
     fn source(&self) -> EndpointKey<K>;
     fn target(&self) -> EndpointKey<K>;
     fn evaluate(
         &self,
         binding: BindingId,
-        host: &mut dyn BindingHost<K>,
+        host: &mut dyn BindingHost<K, C>,
     ) -> Result<BindingWrite, BindingError<K>>;
 }
 
-struct TypedBinding<K, S, T> {
+struct TypedBinding<K, C, S, T> {
     source: PropertyEndpoint<K, S>,
     target: PropertyEndpoint<K, T>,
+    write_context: C,
     map: Box<dyn Fn(&S) -> T>,
 }
 
-impl<K, S, T> ErasedBinding<K> for TypedBinding<K, S, T>
+impl<K, C, S, T> ErasedBinding<K, C> for TypedBinding<K, C, S, T>
 where
     K: Copy,
+    C: Copy,
     S: Clone + 'static,
     T: Clone + 'static,
 {
@@ -49,7 +51,7 @@ where
     fn evaluate(
         &self,
         binding: BindingId,
-        host: &mut dyn BindingHost<K>,
+        host: &mut dyn BindingHost<K, C>,
     ) -> Result<BindingWrite, BindingError<K>> {
         let source = self.source();
         let erased = host.get_erased(source).ok_or(BindingError::MissingSource {
@@ -66,30 +68,49 @@ where
                     actual: erased.type_id(),
                 })?;
         let target_value = (self.map)(source_value);
-        Ok(host.set_erased(self.target(), ErasedValue::new(target_value)))
+        Ok(host.set_erased(
+            self.target(),
+            ErasedValue::new(target_value),
+            self.write_context,
+        ))
     }
 }
 
-/// Registered one-way bindings and their dirty state.
+/// Registered one-way bindings, write contexts, and dirty state.
 ///
 /// The set stores bindings, endpoint indexes, and a binding-local invalidation
 /// graph. It does not store property values; values are read from and written to
 /// a host passed to [`Self::drain`].
-pub struct BindingSet<K>
+///
+/// `C` is binding-owned write context. Each binding stores one `C` and passes it
+/// to [`BindingHost::set_erased`] whenever the binding writes its target. The
+/// binding set orders and transports the context but does not interpret it.
+/// Hosts that do not need write metadata use the default `()` context.
+///
+/// For example, Overstory can use
+/// `BindingSet<BindingOwner, LocalValueSource>`. App-authored bindings register
+/// with `LocalValueSource::Local`, while template-owner-to-part bindings
+/// register with `LocalValueSource::TemplateBinding`. During drain, the UI host
+/// receives that context and writes the target property into the correct local
+/// value layer. Plain hosts use `BindingSet<Owner>` and pass `()` when
+/// registering bindings.
+pub struct BindingSet<K, C = ()>
 where
     K: Copy + Eq + Hash + 'static,
+    C: Copy + 'static,
 {
     binding_channel: Channel,
-    bindings: Vec<Option<Box<dyn ErasedBinding<K>>>>,
+    bindings: Vec<Option<Box<dyn ErasedBinding<K, C>>>>,
     active_bindings: usize,
     source_index: HashMap<EndpointKey<K>, Vec<BindingId>>,
     target_index: HashMap<EndpointKey<K>, Vec<BindingId>>,
     tracker: InvalidationTracker<u32>,
 }
 
-impl<K> BindingSet<K>
+impl<K, C> BindingSet<K, C>
 where
     K: Copy + Eq + Hash + 'static,
+    C: Copy + 'static,
 {
     /// Creates an empty binding set.
     ///
@@ -148,24 +169,29 @@ where
     /// Registers a one-way identity binding.
     ///
     /// The source and target endpoint value types must match. Use
-    /// [`Self::bind_map`] when the target type differs or a conversion is needed.
+    /// [`Self::bind_map`] when the target type differs or a conversion is
+    /// needed. `write_context` is stored with this binding and passed to
+    /// [`BindingHost::set_erased`] whenever this binding writes its target.
     pub fn bind<T>(
         &mut self,
         source: PropertyEndpoint<K, T>,
         target: PropertyEndpoint<K, T>,
+        write_context: C,
     ) -> Result<BindingId, BindingError<K>>
     where
         T: Clone + 'static,
     {
-        self.bind_map(source, target, T::clone)
+        self.bind_map(source, target, write_context, T::clone)
     }
 
     /// Registers a one-way mapped binding.
     ///
     /// `map` runs when the source endpoint is dirty and produces the value to
-    /// write to the target endpoint. Only one active binding may write a target
-    /// endpoint; use [`Self::unbind`] or [`Self::clear_endpoint`] before
-    /// replacing an existing writer.
+    /// write to the target endpoint. `write_context` is stored with this
+    /// binding and passed to [`BindingHost::set_erased`] whenever this binding
+    /// writes its target. Only one active binding may write a target endpoint;
+    /// use [`Self::unbind`] or [`Self::clear_endpoint`] before replacing an
+    /// existing writer.
     ///
     /// Registration clones the internal binding-local invalidation tracker before
     /// adding dependency edges so cycle errors leave the existing set unchanged.
@@ -175,6 +201,7 @@ where
         &mut self,
         source: PropertyEndpoint<K, S>,
         target: PropertyEndpoint<K, T>,
+        write_context: C,
         map: F,
     ) -> Result<BindingId, BindingError<K>>
     where
@@ -214,6 +241,7 @@ where
         self.bindings.push(Some(Box::new(TypedBinding {
             source,
             target,
+            write_context,
             map: Box::new(map),
         })));
         self.active_bindings += 1;
@@ -314,7 +342,7 @@ where
     /// can repair the host state and retry.
     pub fn drain(
         &mut self,
-        host: &mut dyn BindingHost<K>,
+        host: &mut dyn BindingHost<K, C>,
     ) -> Result<BindingReport, BindingDrainError<K>> {
         let mut report = BindingReport::default();
 
@@ -405,7 +433,7 @@ where
     fn evaluate_raw(
         &self,
         raw: u32,
-        host: &mut dyn BindingHost<K>,
+        host: &mut dyn BindingHost<K, C>,
     ) -> Result<Option<(EndpointKey<K>, BindingWrite)>, BindingError<K>> {
         let Some(index) = usize::try_from(raw).ok() else {
             return Ok(None);
@@ -478,7 +506,7 @@ where
 
     fn collect_active_bindings<F>(&self, mut predicate: F) -> Vec<BindingId>
     where
-        F: FnMut(&dyn ErasedBinding<K>) -> bool,
+        F: FnMut(&dyn ErasedBinding<K, C>) -> bool,
     {
         self.bindings
             .iter()
@@ -516,9 +544,10 @@ where
     }
 }
 
-impl<K> fmt::Debug for BindingSet<K>
+impl<K, C> fmt::Debug for BindingSet<K, C>
 where
     K: Copy + Eq + Hash + 'static,
+    C: Copy + 'static,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("BindingSet")
@@ -599,7 +628,12 @@ mod tests {
             self.values.get(&endpoint).cloned()
         }
 
-        fn set_erased(&mut self, endpoint: EndpointKey<u32>, value: ErasedValue) -> BindingWrite {
+        fn set_erased(
+            &mut self,
+            endpoint: EndpointKey<u32>,
+            value: ErasedValue,
+            (): (),
+        ) -> BindingWrite {
             let changed = self
                 .values
                 .get(&endpoint)
@@ -633,7 +667,7 @@ mod tests {
         let target = PropertyEndpoint::new(2, width);
 
         let mut bindings = BindingSet::new(BINDING);
-        bindings.bind(source, target).unwrap();
+        bindings.bind(source, target, ()).unwrap();
 
         let mut host = TestHost::default();
         host.set_initial(source, 42_u32);
@@ -657,7 +691,7 @@ mod tests {
         let target = PropertyEndpoint::new(2, width);
 
         let mut bindings = BindingSet::new(BINDING);
-        bindings.bind(source, target).unwrap();
+        bindings.bind(source, target, ()).unwrap();
 
         let mut host = TestHost::default();
         host.set_initial(source, 12_u32);
@@ -676,7 +710,7 @@ mod tests {
         let target = PropertyEndpoint::new(2, width);
 
         let mut bindings = BindingSet::new(BINDING);
-        bindings.bind(source, target).unwrap();
+        bindings.bind(source, target, ()).unwrap();
 
         let mut host = TestHost::default();
         host.set_initial(source, 42_u32);
@@ -697,7 +731,7 @@ mod tests {
 
         let mut bindings = BindingSet::new(BINDING);
         bindings
-            .bind_map(source, target, |value| format!("count: {value}"))
+            .bind_map(source, target, (), |value| format!("count: {value}"))
             .unwrap();
 
         let mut host = TestHost::default();
@@ -713,6 +747,73 @@ mod tests {
     }
 
     #[test]
+    fn binding_write_context_is_passed_to_host() {
+        #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+        enum WriteLayer {
+            Local,
+            TemplateBinding,
+        }
+
+        #[derive(Default)]
+        struct LayerHost {
+            values: BTreeMap<EndpointKey<u32>, ErasedValue>,
+            writes: Vec<(EndpointKey<u32>, WriteLayer)>,
+        }
+
+        impl LayerHost {
+            fn set_initial<T: Clone + 'static>(
+                &mut self,
+                endpoint: PropertyEndpoint<u32, T>,
+                value: T,
+            ) {
+                self.values.insert(endpoint.key(), ErasedValue::new(value));
+            }
+        }
+
+        impl BindingHost<u32, WriteLayer> for LayerHost {
+            fn get_erased(&self, endpoint: EndpointKey<u32>) -> Option<ErasedValue> {
+                self.values.get(&endpoint).cloned()
+            }
+
+            fn set_erased(
+                &mut self,
+                endpoint: EndpointKey<u32>,
+                value: ErasedValue,
+                context: WriteLayer,
+            ) -> BindingWrite {
+                self.values.insert(endpoint, value);
+                self.writes.push((endpoint, context));
+                BindingWrite::changed(ChannelSet::empty())
+            }
+        }
+
+        let (_registry, width) = registry();
+        let first = PropertyEndpoint::new(1, width);
+        let second = PropertyEndpoint::new(2, width);
+        let third = PropertyEndpoint::new(3, width);
+
+        let mut bindings = BindingSet::<u32, WriteLayer>::new(BINDING);
+        bindings.bind(first, second, WriteLayer::Local).unwrap();
+        bindings
+            .bind(second, third, WriteLayer::TemplateBinding)
+            .unwrap();
+
+        let mut host = LayerHost::default();
+        host.set_initial(first, 42_u32);
+        bindings.mark_source_changed(first);
+        let report = bindings.drain(&mut host).unwrap();
+
+        assert_eq!(report.evaluated_bindings(), 2);
+        assert_eq!(
+            host.writes,
+            alloc::vec![
+                (second.key(), WriteLayer::Local),
+                (third.key(), WriteLayer::TemplateBinding),
+            ]
+        );
+    }
+
+    #[test]
     fn chained_bindings_propagate_after_target_change() {
         let (_registry, width) = registry();
         let first = PropertyEndpoint::new(1, width);
@@ -720,8 +821,8 @@ mod tests {
         let third = PropertyEndpoint::new(3, width);
 
         let mut bindings = BindingSet::new(BINDING);
-        let first_to_second = bindings.bind(first, second).unwrap();
-        let second_to_third = bindings.bind(second, third).unwrap();
+        let first_to_second = bindings.bind(first, second, ()).unwrap();
+        let second_to_third = bindings.bind(second, third, ()).unwrap();
 
         let mut host = TestHost::default();
         host.set_initial(first, 10_u32);
@@ -749,8 +850,8 @@ mod tests {
         let third = PropertyEndpoint::new(3, width);
 
         let mut bindings = BindingSet::new(BINDING);
-        bindings.bind(first, second).unwrap();
-        bindings.bind(second, third).unwrap();
+        bindings.bind(first, second, ()).unwrap();
+        bindings.bind(second, third, ()).unwrap();
 
         let mut host = TestHost::default();
         host.set_initial(first, 10_u32);
@@ -774,8 +875,8 @@ mod tests {
         let second_target = PropertyEndpoint::new(4, width);
 
         let mut bindings = BindingSet::new(BINDING);
-        bindings.bind(first_source, first_target).unwrap();
-        bindings.bind(second_source, second_target).unwrap();
+        bindings.bind(first_source, first_target, ()).unwrap();
+        bindings.bind(second_source, second_target, ()).unwrap();
 
         let mut host = TestHost::default();
         host.set_initial(first_source, 10_u32);
@@ -799,8 +900,8 @@ mod tests {
         let second = PropertyEndpoint::new(2, width);
 
         let mut bindings = BindingSet::new(BINDING);
-        let first_id = bindings.bind(first, second).unwrap();
-        let error = bindings.bind(second, first).unwrap_err();
+        let first_id = bindings.bind(first, second, ()).unwrap();
+        let error = bindings.bind(second, first, ()).unwrap_err();
 
         assert!(matches!(
             error,
@@ -820,8 +921,8 @@ mod tests {
         let target = PropertyEndpoint::new(3, width);
 
         let mut bindings = BindingSet::new(BINDING);
-        let first_id = bindings.bind(first, target).unwrap();
-        let error = bindings.bind(second, target).unwrap_err();
+        let first_id = bindings.bind(first, target, ()).unwrap();
+        let error = bindings.bind(second, target, ()).unwrap_err();
 
         assert!(matches!(
             error,
@@ -833,7 +934,7 @@ mod tests {
 
         assert!(bindings.unbind(first_id));
         assert!(!bindings.unbind(first_id));
-        assert!(bindings.bind(second, target).is_ok());
+        assert!(bindings.bind(second, target, ()).is_ok());
         assert_eq!(bindings.len(), 1);
         assert_eq!(bindings.stats().binding_slots(), 2);
     }
@@ -846,8 +947,8 @@ mod tests {
         let third = PropertyEndpoint::new(3, width);
 
         let mut bindings = BindingSet::new(BINDING);
-        let first_to_second = bindings.bind(first, second).unwrap();
-        bindings.bind(second, third).unwrap();
+        let first_to_second = bindings.bind(first, second, ()).unwrap();
+        bindings.bind(second, third, ()).unwrap();
 
         assert_eq!(bindings.stats().dependency_edges(), 1);
         assert!(bindings.unbind(first_to_second));
@@ -872,8 +973,8 @@ mod tests {
         let third = PropertyEndpoint::new(3, width);
 
         let mut bindings = BindingSet::new(BINDING);
-        bindings.bind(first, second).unwrap();
-        bindings.bind(second, third).unwrap();
+        bindings.bind(first, second, ()).unwrap();
+        bindings.bind(second, third, ()).unwrap();
 
         assert_eq!(bindings.clear_owner(2), 2);
         assert!(bindings.is_empty());
@@ -889,8 +990,8 @@ mod tests {
         let third = PropertyEndpoint::new(3, width);
 
         let mut bindings = BindingSet::new(BINDING);
-        bindings.bind(first, second).unwrap();
-        bindings.bind(second, third).unwrap();
+        bindings.bind(first, second, ()).unwrap();
+        bindings.bind(second, third, ()).unwrap();
 
         assert_eq!(bindings.clear_endpoint(second.key()), 2);
         assert!(bindings.is_empty());
@@ -902,7 +1003,7 @@ mod tests {
         let endpoint = PropertyEndpoint::new(1, width);
 
         let mut bindings = BindingSet::new(BINDING);
-        let error = bindings.bind(endpoint, endpoint).unwrap_err();
+        let error = bindings.bind(endpoint, endpoint, ()).unwrap_err();
 
         assert!(matches!(error, BindingError::SelfBinding { .. }));
         assert!(bindings.is_empty());
@@ -915,7 +1016,7 @@ mod tests {
         let target = PropertyEndpoint::new(2, width);
 
         let mut bindings = BindingSet::new(BINDING);
-        bindings.bind(source, target).unwrap();
+        bindings.bind(source, target, ()).unwrap();
 
         let mut host = TestHost::default();
         host.values
@@ -947,8 +1048,8 @@ mod tests {
         let third = PropertyEndpoint::new(3, width);
 
         let mut bindings = BindingSet::new(BINDING);
-        bindings.bind(first, second).unwrap();
-        bindings.bind(second, third).unwrap();
+        bindings.bind(first, second, ()).unwrap();
+        bindings.bind(second, third, ()).unwrap();
 
         let mut host = TestHost::default();
         host.set_initial(second, 10_u32);
@@ -985,8 +1086,8 @@ mod tests {
         let missing_target = PropertyEndpoint::new(4, width);
 
         let mut bindings = BindingSet::new(BINDING);
-        bindings.bind(first_source, first_target).unwrap();
-        bindings.bind(missing_source, missing_target).unwrap();
+        bindings.bind(first_source, first_target, ()).unwrap();
+        bindings.bind(missing_source, missing_target, ()).unwrap();
 
         let mut host = TestHost::default();
         host.set_initial(first_source, 10_u32);

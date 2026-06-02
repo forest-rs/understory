@@ -396,6 +396,7 @@ mod tests {
                 &mut self,
                 endpoint: EndpointKey<Owner>,
                 value: ErasedValue,
+                (): (),
             ) -> BindingWrite {
                 match endpoint.owner() {
                     Owner::Target => {
@@ -418,7 +419,7 @@ mod tests {
 
         let mut bindings = BindingSet::new(BINDING);
         bindings
-            .bind_map(source_endpoint, target_endpoint, |value| {
+            .bind_map(source_endpoint, target_endpoint, (), |value| {
                 format_value(*value)
             })
             .unwrap();

@@ -172,7 +172,7 @@ impl Host {
     }
 }
 
-impl BindingHost<ElementId> for Host {
+impl BindingHost<ElementId, LocalValueSource> for Host {
     fn get_erased(&self, endpoint: EndpointKey<ElementId>) -> Option<ErasedValue> {
         if endpoint.property() != self.width.id() {
             return None;
@@ -183,7 +183,12 @@ impl BindingHost<ElementId> for Host {
         })
     }
 
-    fn set_erased(&mut self, endpoint: EndpointKey<ElementId>, value: ErasedValue) -> BindingWrite {
+    fn set_erased(
+        &mut self,
+        endpoint: EndpointKey<ElementId>,
+        value: ErasedValue,
+        source: LocalValueSource,
+    ) -> BindingWrite {
         if endpoint.property() != self.width.id() {
             return BindingWrite::unchanged();
         }
@@ -199,12 +204,7 @@ impl BindingHost<ElementId> for Host {
         };
 
         let old_effective = element.get_effective_local(width, registry);
-        let channels = element.set_local_with_source_notifying(
-            width,
-            value,
-            LocalValueSource::TemplateBinding,
-            registry,
-        );
+        let channels = element.set_local_with_source_notifying(width, value, source, registry);
         let new_effective = element.get_effective_local(width, registry);
 
         BindingWrite::new(old_effective != new_effective, channels)
@@ -212,7 +212,7 @@ impl BindingHost<ElementId> for Host {
 }
 
 fn drain_frame(
-    bindings: &mut BindingSet<ElementId>,
+    bindings: &mut BindingSet<ElementId, LocalValueSource>,
     host: &mut Host,
     invalidation: &mut AppInvalidation,
 ) -> bool {
@@ -274,8 +274,16 @@ fn main() {
 
     let mut invalidation = AppInvalidation::default();
     let mut bindings = BindingSet::new(BINDING);
-    bindings.bind(model_width, button_width).unwrap();
-    bindings.bind(delayed_width, panel_width).unwrap();
+    bindings
+        .bind(model_width, button_width, LocalValueSource::TemplateBinding)
+        .unwrap();
+    bindings
+        .bind(
+            delayed_width,
+            panel_width,
+            LocalValueSource::TemplateBinding,
+        )
+        .unwrap();
 
     println!("== first frame ==");
     println!("external changes: model width and missing delayed model width");
