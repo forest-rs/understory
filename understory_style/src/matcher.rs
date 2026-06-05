@@ -978,6 +978,109 @@ impl StyleCascadeBuilder {
         self
     }
 
+    /// Appends the sources from an already-built [`StyleCascade`].
+    ///
+    /// Use this when separate parts of an application build reusable cascade
+    /// fragments, such as toolkit defaults, theme styles, and application
+    /// overrides, but the final widget tree should be matched against one
+    /// [`StyleCascade`]. A [`MatchState`] is scoped to the cascade that produced
+    /// it, so composing the fragments before matching keeps embedders from
+    /// walking the same subject path through several cascades and merging the
+    /// answers themselves.
+    ///
+    /// The appended cascade keeps the relative source ordering it had
+    /// originally. As a group, it is ordered after sources already present in
+    /// this builder and before sources pushed later.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use understory_property::{PropertyMetadataBuilder, PropertyRegistry};
+    /// use understory_style::{
+    ///     SelectorInputs, SelectorStep, StyleBuilder, StyleCascadeBuilder, StyleOrigin, TypeTag,
+    /// };
+    ///
+    /// const BUTTON: TypeTag = TypeTag(1);
+    ///
+    /// let mut registry = PropertyRegistry::new();
+    /// let color = registry.register("Color", PropertyMetadataBuilder::new(0_u32).build());
+    ///
+    /// let toolkit_defaults = StyleCascadeBuilder::new()
+    ///     .push_rule(
+    ///         StyleOrigin::Sheet,
+    ///         SelectorStep::type_tag(BUTTON),
+    ///         StyleBuilder::new().set(color, 0x333333_u32).build(),
+    ///     )
+    ///     .build();
+    /// let app_overrides = StyleCascadeBuilder::new()
+    ///     .push_rule(
+    ///         StyleOrigin::Sheet,
+    ///         SelectorStep::type_tag(BUTTON),
+    ///         StyleBuilder::new().set(color, 0x0088ff_u32).build(),
+    ///     )
+    ///     .build();
+    ///
+    /// let cascade = StyleCascadeBuilder::new()
+    ///     .push_cascade(&toolkit_defaults)
+    ///     .push_cascade(&app_overrides)
+    ///     .build();
+    ///
+    /// let button = cascade.enter_subject(cascade.root_state(), &SelectorInputs::typed(BUTTON));
+    /// assert_eq!(cascade.get_value_ref(button, color), Some(&0x0088ff));
+    /// ```
+    #[must_use]
+    pub fn push_cascade(mut self, cascade: &StyleCascade) -> Self {
+        let source_offset = self.next_source_index;
+        let max_source_index = cascade
+            .inner
+            .direct_styles
+            .iter()
+            .map(|source| source.source_index)
+            .chain(
+                cascade
+                    .inner
+                    .matcher
+                    .inner
+                    .rules
+                    .iter()
+                    .map(|rule| rule.source_index),
+            )
+            .max();
+
+        self.direct_styles
+            .extend(
+                cascade
+                    .inner
+                    .direct_styles
+                    .iter()
+                    .map(|source| DirectStyleSource {
+                        origin: source.origin,
+                        style: source.style.clone(),
+                        source_index: offset_source_index(source_offset, source.source_index),
+                    }),
+            );
+        self.rules.extend(
+            cascade
+                .inner
+                .matcher
+                .inner
+                .rules
+                .iter()
+                .map(|rule| MatchRule {
+                    selector: rule.selector.clone(),
+                    style: rule.style.clone(),
+                    origin: rule.origin,
+                    source_index: offset_source_index(source_offset, rule.source_index),
+                    order: rule.order,
+                }),
+        );
+
+        if let Some(max_source_index) = max_source_index {
+            self.next_source_index = next_source_index_after(source_offset, max_source_index);
+        }
+        self
+    }
+
     /// Builds the style cascade.
     #[must_use]
     pub fn build(self) -> StyleCascade {
@@ -995,6 +1098,14 @@ impl StyleCascadeBuilder {
         self.next_source_index = self.next_source_index.saturating_add(1);
         source_index
     }
+}
+
+fn offset_source_index(source_offset: usize, source_index: usize) -> usize {
+    source_offset.saturating_add(source_index)
+}
+
+fn next_source_index_after(source_offset: usize, source_index: usize) -> usize {
+    offset_source_index(source_offset, source_index).saturating_add(1)
 }
 
 /// Iterator over matching rules for a [`MatchState`].
@@ -1600,6 +1711,83 @@ mod tests {
         assert!(background_source.rule().is_none());
         assert_eq!(background_source.origin(), StyleOrigin::Base);
         assert_eq!(background_source.style().get(background), Some(&10));
+    }
+
+    #[test]
+    fn cascade_builder_can_append_existing_cascades_as_layers() {
+        let mut registry = PropertyRegistry::new();
+        let width = registry.register("Width", PropertyMetadataBuilder::new(0_u32).build());
+        let background =
+            registry.register("Background", PropertyMetadataBuilder::new(0_u32).build());
+
+        let base = StyleCascadeBuilder::new()
+            .push_rule(
+                StyleOrigin::Base,
+                SelectorStep::type_tag(TOGGLE),
+                StyleBuilder::new()
+                    .set(width, 10_u32)
+                    .set(background, 30_u32)
+                    .build(),
+            )
+            .build();
+        let app = StyleCascadeBuilder::new()
+            .push_rule(
+                StyleOrigin::Sheet,
+                SelectorStep::type_tag(TOGGLE),
+                StyleBuilder::new().set(width, 20_u32).build(),
+            )
+            .build();
+        let cascade = StyleCascadeBuilder::new()
+            .push_cascade(&base)
+            .push_cascade(&app)
+            .build();
+
+        let root = cascade.enter_subject(cascade.root_state(), &SelectorInputs::typed(TOGGLE));
+
+        assert_eq!(cascade.get_value_ref(root, width), Some(&20));
+        assert_eq!(cascade.get_value_ref(root, background), Some(&30));
+        assert_eq!(cascade.matching_rules(root).count(), 2);
+    }
+
+    #[test]
+    fn appended_cascade_sources_are_ordered_after_existing_sources() {
+        let mut registry = PropertyRegistry::new();
+        let width = registry.register("Width", PropertyMetadataBuilder::new(0_u32).build());
+
+        let layer = StyleCascadeBuilder::new()
+            .push_rule(
+                StyleOrigin::Sheet,
+                SelectorStep::type_tag(TOGGLE),
+                StyleBuilder::new().set(width, 20_u32).build(),
+            )
+            .build();
+        let cascade = StyleCascadeBuilder::new()
+            .push_rule(
+                StyleOrigin::Sheet,
+                SelectorStep::type_tag(TOGGLE),
+                StyleBuilder::new().set(width, 10_u32).build(),
+            )
+            .push_cascade(&layer)
+            .push_rule(
+                StyleOrigin::Sheet,
+                SelectorStep::type_tag(TOGGLE),
+                StyleBuilder::new().set(width, 30_u32).build(),
+            )
+            .build();
+
+        let root = cascade.enter_subject(cascade.root_state(), &SelectorInputs::typed(TOGGLE));
+        let source = cascade.winning_source(root, width).expect("width source");
+
+        assert_eq!(cascade.get_value_ref(root, width), Some(&30));
+        assert_eq!(source.source_index(), 2);
+    }
+
+    #[test]
+    fn source_index_offsets_saturate() {
+        assert_eq!(offset_source_index(1, 2), 3);
+        assert_eq!(offset_source_index(usize::MAX, 1), usize::MAX);
+        assert_eq!(next_source_index_after(usize::MAX - 1, 0), usize::MAX);
+        assert_eq!(next_source_index_after(usize::MAX, 0), usize::MAX);
     }
 
     #[test]
