@@ -65,6 +65,9 @@ rendering, protocol semantics, or text styling.
 - Entries preserve append order even when later statuses or chunks are added.
 - Bodies and statuses may be updated in place through explicit mutation APIs;
   this crate is append-oriented, not a strict append-only event log.
+- The transcript revision advances when append/update APIs actually change
+  stored content. It is a cheap dirty-check token for live hosts, not a
+  durable event stream.
 - Transcript payloads are generic. [`EntryBody`] is the built-in default,
   but hosts may store fragment ids, object handles, or other structured
   payloads instead.
