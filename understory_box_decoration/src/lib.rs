@@ -12,6 +12,11 @@
 //! layout, brushes, images, hit policy, and renderer command emission to
 //! higher-level crates.
 //!
+//! If those values come from dependency properties, use
+//! `understory_presentation_properties` to register canonical surface
+//! properties and resolve them into `understory_presentation` primitives before
+//! asking this crate for final geometry.
+//!
 //! The first implemented contour family covers CSS-style box contours with
 //! elliptical radii and shaped corners. It supports round, square, bevel, and
 //! superellipse-based corner shapes, scales adjacent radii with the CSS

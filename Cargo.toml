@@ -12,6 +12,7 @@ members = [
   "understory_inspector",
   "understory_outline",
   "understory_presentation",
+  "understory_presentation_properties",
   "understory_precise_hit",
   "understory_property",
   "understory_responder",
@@ -62,6 +63,7 @@ understory_inspector = { version = "0.1.0", path = "understory_inspector", defau
 understory_node_graph = { version = "0.1.0", path = "understory_node_graph", default-features = false }
 understory_outline = { version = "0.1.0", path = "understory_outline", default-features = false }
 understory_presentation = { version = "0.1.0", path = "understory_presentation", default-features = false }
+understory_presentation_properties = { version = "0.1.0", path = "understory_presentation_properties", default-features = false }
 understory_precise_hit = { version = "0.1.0", path = "understory_precise_hit", default-features = false }
 understory_property = { version = "0.1.0", path = "understory_property", default-features = false }
 understory_responder = { version = "0.1.0", path = "understory_responder", default-features = false }

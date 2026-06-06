@@ -29,6 +29,12 @@ and paint. A toolkit writes already-resolved drawing primitives into a
 geometry tree, look up presentation entries, and lower primitives without
 reading properties or running style cascade resolution.
 
+When these values originate from dependency properties, use
+`understory_presentation_properties` as the upstream adapter. That crate
+registers canonical surface properties and resolves them into
+[`SurfacePrimitive`] values, while this crate remains a property-blind cache
+of drawing intent.
+
 This crate deliberately does **not** own layout bounds, scene traversal
 order, global transforms/clips, hit testing, style cascade, property
 storage, behavior dispatch, templates, or renderer command emission.

@@ -23,9 +23,14 @@ The focus is on clean separation of concerns, pluggable performance trade‑offs
   - Stores source back-references, template part identities, surface/text primitives, and deduped dirty keys.
   - Does not own layout, bounds, transforms, style/property resolution, behavior, or renderer command emission.
 
+- `understory_presentation_properties`
+  - Canonical dependency-property integration for resolved presentation primitives.
+  - Registers surface background, border brush, border width, padding width, corner radius, and corner shape properties with invalidation metadata.
+  - Resolves property/style/theme values into `understory_presentation::SurfacePrimitive` without owning storage, matching, layout, or rendering.
+
 - `understory_box_decoration`
-  - Renderer-neutral box decoration geometry for border boxes, border widths, and CSS-style rounded corners.
-  - Supports elliptical per-corner radii, CSS smallest-factor radius fitting, derived inner border radii, and Kurbo paths.
+  - Renderer-neutral box decoration geometry for physical edges, box-area contours, and shaped corners.
+  - Supports elliptical per-corner radii, CSS smallest-factor radius fitting, round/square/bevel/superellipse corner shapes, derived border/padding/content contours, central border-side regions, and on-demand Kurbo path writing.
   - Does not own style cascade, CSS parsing, brushes, images, layout, hit policy, or renderer command emission.
 
 - `understory_box_tree`
@@ -141,7 +146,7 @@ For example, a canvas or DWG or DXF viewer can reuse the box and index layers wi
 
 - Read the crate READMEs.
   - `understory_index/README.md` has the API and a “Choosing a backend” guide.
-  - `understory_box_decoration/README.md` documents rounded box decoration geometry, fitted corner radii, and inner border edges.
+  - `understory_box_decoration/README.md` documents box decoration contours, shaped corners, fitted radii, and border/padding/content edge derivation.
   - `understory_box_tree/README.md` has usage, hit‑testing, and visible‑set examples.
   - `understory_responder/README.md` explains routing, capture, and how to integrate with a picker.
   - `understory_focus/README.md` covers focus navigation policies and adapters.
@@ -154,9 +159,11 @@ For example, a canvas or DWG or DXF viewer can reuse the box and index layers wi
   - `understory_view2d/README.md` documents the 2D and 1D viewport types, clamping/fit modes, and examples of using visible regions for culling.
   - `understory_property_binding/README.md` documents one-way property bindings, host endpoint adapters, and binding-local invalidation.
   - `understory_presentation/README.md` documents retained resolved drawing primitives, template part identities, and dirty-key draining.
+  - `understory_presentation_properties/README.md` documents canonical presentation property registration and surface resolution.
 - Run examples.
   - `cargo run -p understory_examples --example index_basics`
   - `cargo run -p understory_examples --example basic_present`
+  - `cargo run -p understory_examples --example presentation_properties`
   - `cargo run -p understory_examples --example box_tree_basics`
   - `cargo run -p understory_examples --example box_tree_visible_list`
   - `cargo run -p understory_examples --example outline_property_grid`
