@@ -467,7 +467,7 @@ mod tests {
     use alloc::vec;
 
     use super::*;
-    use crate::{Color, PathPrimitive, RoundedRectRadii, TextContent};
+    use crate::{Color, CornerRadii, PathPrimitive, TextContent};
     use peniko::kurbo::BezPath;
 
     #[derive(Clone, Debug, Eq, PartialEq)]
@@ -510,7 +510,7 @@ mod tests {
         surface.set_background(Color::from_rgb8(20, 30, 40));
 
         let surface = store.surface_mut(1).unwrap();
-        surface.corner_radii = RoundedRectRadii::from_single_radius(4.0);
+        surface.corner_radii = CornerRadii::uniform(4.0);
 
         assert!(store.node(1).unwrap().surface().is_some());
         assert_eq!(store.take_dirty().collect::<Vec<_>>(), vec![1]);
