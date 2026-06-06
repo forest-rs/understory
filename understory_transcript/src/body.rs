@@ -38,28 +38,30 @@ impl EntryBody {
         }
     }
 
-    pub(crate) fn append(&mut self, chunk: Self) -> Result<(), BodyAppendError> {
+    pub(crate) fn append(&mut self, chunk: Self) -> Result<bool, BodyAppendError> {
         match (self, chunk) {
             (body @ Self::Empty, Self::Text(text)) => {
                 *body = Self::Text(text);
-                Ok(())
+                Ok(true)
             }
             (body @ Self::Empty, Self::Bytes(bytes)) => {
                 *body = Self::Bytes(bytes);
-                Ok(())
+                Ok(true)
             }
             (Self::Text(text), Self::Text(chunk)) => {
+                let changed = !chunk.is_empty();
                 text.push_str(&chunk);
-                Ok(())
+                Ok(changed)
             }
             (Self::Bytes(bytes), Self::Bytes(chunk)) => {
+                let changed = !chunk.is_empty();
                 bytes.extend_from_slice(&chunk);
-                Ok(())
+                Ok(changed)
             }
             (Self::Text(_), Self::Bytes(_)) | (Self::Bytes(_), Self::Text(_)) => {
                 Err(BodyAppendError::KindMismatch)
             }
-            (_, Self::Empty) => Ok(()),
+            (_, Self::Empty) => Ok(false),
         }
     }
 }

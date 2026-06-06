@@ -18,14 +18,16 @@ use crate::status::EntryStatus;
 ///
 /// `Transcript` stores entries in append order and keeps lightweight indices
 /// for id lookup and parent-child traversal. It supports explicit chunk and
-/// status updates for streaming or long-running entries without taking on UI,
-/// persistence, or append-only event-log policy.
+/// status updates for streaming or long-running entries. A monotonic revision
+/// counter lets live hosts cheaply detect append/update changes without taking
+/// on UI, persistence, or append-only event-log policy.
 #[derive(Clone, Debug, Default)]
 pub struct Transcript<P = EntryBody> {
     entries: Vec<TranscriptEntry<P>>,
     indices: HashMap<EntryId, usize>,
     children: HashMap<EntryId, Vec<EntryId>>,
     next_id: u64,
+    revision: u64,
 }
 
 impl<P> Transcript<P> {
@@ -37,6 +39,7 @@ impl<P> Transcript<P> {
             indices: HashMap::new(),
             children: HashMap::new(),
             next_id: 0,
+            revision: 0,
         }
     }
 
@@ -50,6 +53,16 @@ impl<P> Transcript<P> {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// Returns the current content revision.
+    ///
+    /// The revision starts at `0` and advances after successful append
+    /// operations or in-place updates that change entry content. It is
+    /// intentionally a cheap dirty-check token, not a stable event id.
+    #[must_use]
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     /// Appends a new entry and returns its assigned id.
@@ -77,6 +90,7 @@ impl<P> Transcript<P> {
             self.children.entry(parent).or_default().push(id);
         }
 
+        self.advance_revision();
         id
     }
 
@@ -91,6 +105,7 @@ impl<P> Transcript<P> {
             return Ok(false);
         }
         entry.status = status;
+        self.advance_revision();
         Ok(true)
     }
 
@@ -131,24 +146,41 @@ impl<P> Transcript<P> {
         };
         Ok(&mut self.entries[index])
     }
+
+    fn advance_revision(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
+    }
 }
 
 impl Transcript<EntryBody> {
     /// Appends a text or byte chunk to an existing entry body.
+    ///
+    /// Returns `Ok(true)` when the stored body changed and the transcript
+    /// revision advanced. Returns `Ok(false)` when the chunk was empty and made
+    /// no observable change to the body.
+    ///
+    /// Appending a text or byte chunk to an [`EntryBody::Empty`] body establishes
+    /// the corresponding body kind and counts as a change, even when the chunk
+    /// payload is empty.
     pub fn append_chunk(
         &mut self,
         id: EntryId,
         chunk: impl Into<EntryBody>,
-    ) -> Result<(), TranscriptError> {
+    ) -> Result<bool, TranscriptError> {
         let entry = self.entry_mut(id)?;
         let body = entry
             .kind
             .body_mut()
             .ok_or(TranscriptError::BodyKindMismatch { entry: id })?;
-        body.append(chunk.into())
+        let changed = body
+            .append(chunk.into())
             .map_err(
                 |BodyAppendError::KindMismatch| TranscriptError::BodyKindMismatch { entry: id },
-            )
+            )?;
+        if changed {
+            self.advance_revision();
+        }
+        Ok(changed)
     }
 }
 
@@ -230,6 +262,69 @@ mod tests {
             transcript.entry(entry).unwrap().status,
             EntryStatus::Complete
         );
+    }
+
+    #[test]
+    fn revision_tracks_actual_transcript_changes() {
+        let mut transcript = Transcript::<EntryBody>::new();
+        assert_eq!(transcript.revision(), 0);
+
+        let entry = transcript.append(
+            NewEntry::process_output(ProcessStream::Stdout, EntryBody::Empty)
+                .with_status(EntryStatus::InProgress),
+        );
+        assert_eq!(transcript.revision(), 1);
+
+        assert!(transcript.append_chunk(entry, "hello").unwrap());
+        assert_eq!(transcript.revision(), 2);
+
+        assert!(!transcript.append_chunk(entry, EntryBody::Empty).unwrap());
+        assert_eq!(transcript.revision(), 2);
+
+        assert!(transcript.set_status(entry, EntryStatus::Complete).unwrap());
+        assert_eq!(transcript.revision(), 3);
+
+        assert!(!transcript.set_status(entry, EntryStatus::Complete).unwrap());
+        assert_eq!(transcript.revision(), 3);
+    }
+
+    #[test]
+    fn revision_tracks_empty_chunk_body_kind_changes() {
+        let mut transcript = Transcript::<EntryBody>::new();
+        let text = transcript.append(NewEntry::process_output(
+            ProcessStream::Stdout,
+            EntryBody::Empty,
+        ));
+        let bytes = transcript.append(NewEntry::process_output(
+            ProcessStream::Stderr,
+            EntryBody::Empty,
+        ));
+        assert_eq!(transcript.revision(), 2);
+
+        assert!(transcript.append_chunk(text, "").unwrap());
+        assert_eq!(transcript.revision(), 3);
+        assert_eq!(
+            transcript
+                .entry(text)
+                .unwrap()
+                .body()
+                .and_then(EntryBody::as_text),
+            Some("")
+        );
+
+        assert!(transcript.append_chunk(bytes, Vec::new()).unwrap());
+        assert_eq!(transcript.revision(), 4);
+        assert_eq!(
+            transcript
+                .entry(bytes)
+                .unwrap()
+                .body()
+                .and_then(EntryBody::as_bytes),
+            Some([].as_slice())
+        );
+
+        assert!(!transcript.append_chunk(text, "").unwrap());
+        assert_eq!(transcript.revision(), 4);
     }
 
     #[test]
