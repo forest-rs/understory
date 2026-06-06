@@ -1,10 +1,10 @@
 // Copyright 2026 the Understory Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use kurbo::{BezPath, Point, Rect};
+use kurbo::{BezPath, Point, Rect, Size};
 
 use crate::util::{finite_non_negative, normalize_rect};
-use crate::{BoxArea, BoxContour, CornerRadii, CornerShapes, Edges, Side};
+use crate::{BoxArea, BoxContour, CornerRadii, CornerShape, CornerShapes, Edges, Side};
 
 /// Fully resolved geometry for a single box decoration.
 ///
@@ -53,12 +53,10 @@ impl BoxDecorationGeometry {
         let padding_widths = padding_widths.clamped_non_negative();
         let border_radii = requested_radii.scale_to_fit(border_box);
         let padding_box = inset_rect(border_box, border_widths);
-        let padding_radii = border_radii
-            .inset_by_edges(border_widths)
+        let padding_radii = inset_radii_for_shapes(border_radii, border_widths, corner_shapes)
             .scale_to_fit(padding_box);
         let content_box = inset_rect(padding_box, padding_widths);
-        let content_radii = padding_radii
-            .inset_by_edges(padding_widths)
+        let content_radii = inset_radii_for_shapes(padding_radii, padding_widths, corner_shapes)
             .scale_to_fit(content_box);
 
         let border_edge = BoxContour::from_radii(border_box, border_radii, corner_shapes);
@@ -258,9 +256,42 @@ fn bounds_for_points(points: [Point; 4]) -> Rect {
     Rect::new(x0, y0, x1, y1)
 }
 
+fn inset_radii_for_shapes(
+    radii: CornerRadii,
+    edges: Edges<f64>,
+    shapes: CornerShapes,
+) -> CornerRadii {
+    let convex = radii.inset_by_edges(edges);
+    CornerRadii::new(
+        inset_corner_radius(radii.top_left, convex.top_left, shapes.top_left),
+        inset_corner_radius(radii.top_right, convex.top_right, shapes.top_right),
+        inset_corner_radius(radii.bottom_right, convex.bottom_right, shapes.bottom_right),
+        inset_corner_radius(radii.bottom_left, convex.bottom_left, shapes.bottom_left),
+    )
+}
+
+fn inset_corner_radius(original: Size, convex: Size, shape: CornerShape) -> Size {
+    // Convex corners shrink their radii with the inset edge. Concave corners
+    // already carve into the side spans; shrinking both the rect and radius
+    // makes inner and outer scoop contours nearly coincide through the curve.
+    if is_concave_corner(shape) {
+        original
+    } else {
+        convex
+    }
+}
+
+fn is_concave_corner(shape: CornerShape) -> bool {
+    match shape {
+        CornerShape::Superellipse(superellipse) => superellipse.parameter() < 0.0,
+        CornerShape::Round | CornerShape::Square | CornerShape::Bevel => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Superellipse;
     use kurbo::{PathEl, Size};
 
     #[test]
@@ -402,10 +433,10 @@ mod tests {
             Edges::all(4.0),
             CornerRadii::all(Size::new(24.0, 16.0)),
             CornerShapes::new(
-                crate::CornerShape::Square,
-                crate::CornerShape::Bevel,
-                crate::CornerShape::squircle(),
-                crate::CornerShape::scoop(),
+                CornerShape::Square,
+                CornerShape::Bevel,
+                CornerShape::squircle(),
+                CornerShape::scoop(),
             ),
         );
 
@@ -418,11 +449,11 @@ mod tests {
         assert_eq!(close_count, 1);
         assert_eq!(
             geometry.border_edge.corners.top_left.shape,
-            crate::CornerShape::Square
+            CornerShape::Square
         );
         assert_eq!(
             geometry.border_edge.corners.bottom_left.shape,
-            crate::CornerShape::scoop()
+            CornerShape::scoop()
         );
         assert!(path_is_finite(&path));
     }
@@ -434,7 +465,7 @@ mod tests {
             Edges::ZERO,
             Edges::ZERO,
             CornerRadii::uniform(12.0),
-            CornerShapes::all(crate::CornerShape::Superellipse(crate::Superellipse::ROUND)),
+            CornerShapes::all(CornerShape::Superellipse(Superellipse::ROUND)),
         );
 
         let path = geometry.border_edge.to_path();
@@ -463,6 +494,35 @@ mod tests {
         let mut path = BezPath::new();
         top.write_path(&mut path);
         assert!(path_is_finite(&path));
+    }
+
+    #[test]
+    fn concave_corner_insets_move_side_spans_inward() {
+        let geometry = BoxDecorationGeometry::from_border_box(
+            Rect::new(0.0, 0.0, 150.0, 82.0),
+            Edges::all(3.0),
+            Edges::ZERO,
+            CornerRadii::all(Size::new(28.0, 20.0)),
+            CornerShapes::all(CornerShape::scoop()),
+        );
+
+        let outer_top = geometry.border_edge.side_span(Side::Top);
+        let inner_top = geometry.padding_edge.side_span(Side::Top);
+        assert!(
+            inner_top.start.x > outer_top.start.x,
+            "top-left concave padding span should move right instead of sharing the outer endpoint"
+        );
+        assert!(
+            inner_top.end.x < outer_top.end.x,
+            "top-right concave padding span should move left instead of sharing the outer endpoint"
+        );
+
+        let outer_left = geometry.border_edge.side_span(Side::Left);
+        let inner_left = geometry.padding_edge.side_span(Side::Left);
+        assert!(
+            inner_left.end.y > outer_left.end.y,
+            "top-left concave padding span should move down instead of sharing the outer endpoint"
+        );
     }
 
     #[test]
