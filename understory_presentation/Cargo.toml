@@ -14,14 +14,15 @@ hashbrown.workspace = true
 parlance.workspace = true
 peniko.workspace = true
 smallvec.workspace = true
+understory_box_decoration.workspace = true
 
 [lints]
 workspace = true
 
 [features]
 default = ["libm"]
-std = ["parlance/std", "peniko/std"]
-libm = ["peniko/libm"]
+std = ["parlance/std", "peniko/std", "understory_box_decoration/std"]
+libm = ["peniko/libm", "understory_box_decoration/libm"]
 
 [package.metadata.docs.rs]
 all-features = true

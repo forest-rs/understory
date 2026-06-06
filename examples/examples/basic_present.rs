@@ -11,8 +11,9 @@
 //! - `cargo run -p understory_examples --example basic_present`
 
 use understory_presentation::{
-    Border, Brush, Color, FontWeight, ImagePrimitive, ImageQuality, ImageSlice, Insets, NineSlice,
-    PresentationStore, Primitive, RoundedRectRadii, TextAlign, TextContent,
+    Border, Brush, Color, CornerRadii, CornerShape, CornerShapes, FontWeight, ImagePrimitive,
+    ImageQuality, ImageSlice, Insets, NineSlice, PresentationStore, Primitive, TextAlign,
+    TextContent,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -61,7 +62,9 @@ fn main() {
         .expect("background part was inserted");
     surface.set_background(Color::from_rgb8(38, 92, 142));
     surface.border = Border::uniform(Color::from_rgb8(15, 39, 64), 1.0);
-    surface.corner_radii = RoundedRectRadii::from_single_radius(6.0);
+    surface.padding_widths = understory_presentation::Edges::vertical_horizontal(6.0, 10.0);
+    surface.corner_radii = CornerRadii::uniform(6.0);
+    surface.corner_shapes = CornerShapes::all(CornerShape::squircle());
 
     let mut image = ImagePrimitive::new("button-background");
     image.brush.sampler = image.brush.sampler.with_quality(ImageQuality::High);
@@ -123,10 +126,12 @@ fn print_paint_walk(
         for primitive in node.primitives() {
             match primitive {
                 Primitive::Surface(surface) => println!(
-                    "  surface backgrounds={} border_empty={} radii={:?}",
+                    "  surface backgrounds={} border_empty={} padding={:?} radii={:?} shapes={:?}",
                     surface.backgrounds.len(),
                     surface.border.is_empty(),
-                    surface.corner_radii
+                    surface.padding_widths,
+                    surface.corner_radii,
+                    surface.corner_shapes
                 ),
                 Primitive::Text(text) => {
                     let Some(text) = text.as_plain() else {

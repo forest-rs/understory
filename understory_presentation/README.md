@@ -46,7 +46,8 @@ property/style resolution, behavior, or paint command emission.
 - [`PresentationNode`]: source back-reference and primitive list for one
   drawable geometry node.
 - [`Primitive`]: resolved drawing primitive stored on a presentation node.
-- [`SurfacePrimitive`]: resolved surface fill/border intent.
+- [`SurfacePrimitive`]: resolved surface fill, border, padding, corner
+  shape, and shadow intent.
 - [`TextPrimitive`]: umbrella for resolved text drawing intent.
 - [`PlainTextPrimitive`]: resolved plain-text content, foreground brush,
   decorations, and `parlance`-based single-run style.
@@ -81,8 +82,10 @@ deduplicated and drained in first-dirty order with
 ## Feature flags
 
 - `default`: enables `libm` so the crate builds as `no_std` by default.
-- `libm`: forwards `peniko/libm` for `no_std` float math.
-- `std`: forwards `peniko/std` and `parlance/std`.
+- `libm`: forwards `peniko/libm` and `understory_box_decoration/libm`
+  for `no_std` float math.
+- `std`: forwards `peniko/std`, `parlance/std`, and
+  `understory_box_decoration/std`.
 
 If default features are disabled, callers must enable either `libm` or
 `std`.
@@ -96,7 +99,8 @@ cargo check -p understory_presentation --no-default-features --features std
 
 ```rust
 use understory_presentation::{
-    Brush, Color, PresentationStore, Primitive, RoundedRectRadii, TextContent,
+    Brush, Color, CornerRadii, CornerShape, CornerShapes, Edges,
+    PresentationStore, Primitive, TextContent,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -116,7 +120,9 @@ store.insert(label, source_content);
 
 let surface = store.surface_mut(root).unwrap();
 surface.set_background(Color::from_rgb8(38, 92, 142));
-surface.corner_radii = RoundedRectRadii::from_single_radius(6.0);
+surface.padding_widths = Edges::vertical_horizontal(4.0, 8.0);
+surface.corner_radii = CornerRadii::uniform(6.0);
+surface.corner_shapes = CornerShapes::all(CornerShape::squircle());
 
 let text = store.plain_text_mut(label).unwrap();
 text.content = TextContent::plain("Run");

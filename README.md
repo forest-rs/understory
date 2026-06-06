@@ -23,6 +23,11 @@ The focus is on clean separation of concerns, pluggable performance trade‑offs
   - Stores source back-references, template part identities, surface/text primitives, and deduped dirty keys.
   - Does not own layout, bounds, transforms, style/property resolution, behavior, or renderer command emission.
 
+- `understory_box_decoration`
+  - Renderer-neutral box decoration geometry for border boxes, border widths, and CSS-style rounded corners.
+  - Supports elliptical per-corner radii, CSS smallest-factor radius fitting, derived inner border radii, and Kurbo paths.
+  - Does not own style cascade, CSS parsing, brushes, images, layout, hit policy, or renderer command emission.
+
 - `understory_box_tree`
   - A Kurbo‑native, spatially indexed box tree for scene geometry: local bounds, transforms, optional clips, and z‑order.
   - Computes world‑space AABBs and synchronizes them into `understory_index` for fast hit‑testing and visibility.
@@ -136,6 +141,7 @@ For example, a canvas or DWG or DXF viewer can reuse the box and index layers wi
 
 - Read the crate READMEs.
   - `understory_index/README.md` has the API and a “Choosing a backend” guide.
+  - `understory_box_decoration/README.md` documents rounded box decoration geometry, fitted corner radii, and inner border edges.
   - `understory_box_tree/README.md` has usage, hit‑testing, and visible‑set examples.
   - `understory_responder/README.md` explains routing, capture, and how to integrate with a picker.
   - `understory_focus/README.md` covers focus navigation policies and adapters.
