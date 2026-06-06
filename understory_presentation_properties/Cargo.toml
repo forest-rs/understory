@@ -1,0 +1,30 @@
+[package]
+name = "understory_presentation_properties"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Dependency-property integration for resolved presentation primitives"
+readme = "README.md"
+keywords = ["presentation", "property", "style", "ui", "no_std"]
+categories = ["gui", "graphics", "no-std"]
+
+[dependencies]
+invalidation.workspace = true
+kurbo.workspace = true
+understory_presentation.workspace = true
+understory_property.workspace = true
+understory_style.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["libm"]
+std = ["kurbo/std", "understory_presentation/std"]
+libm = ["kurbo/libm", "understory_presentation/libm"]
+
+[package.metadata.docs.rs]
+all-features = true
+default-target = "x86_64-unknown-linux-gnu"
+targets = []

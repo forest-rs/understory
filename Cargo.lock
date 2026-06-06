@@ -615,6 +615,7 @@ dependencies = [
  "understory_outline",
  "understory_precise_hit",
  "understory_presentation",
+ "understory_presentation_properties",
  "understory_property",
  "understory_property_binding",
  "understory_responder",
@@ -692,6 +693,17 @@ dependencies = [
  "peniko",
  "smallvec",
  "understory_box_decoration",
+]
+
+[[package]]
+name = "understory_presentation_properties"
+version = "0.1.0"
+dependencies = [
+ "invalidation",
+ "kurbo",
+ "understory_presentation",
+ "understory_property",
+ "understory_style",
 ]
 
 [[package]]
