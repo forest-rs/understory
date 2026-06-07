@@ -1,17 +1,17 @@
 // Copyright 2026 the Understory Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! Author-facing style vocabulary for selector token ids.
+//! Author-facing style vocabulary for style token ids.
 //!
-//! This module owns the mapping between selector token ids defined by
+//! This module owns the mapping between style token ids defined by
 //! `understory_style` and the names used by authors, parsers, inspectors, logs,
-//! and traces. Selector matching, cascade resolution, hashing, and equality
-//! remain based on the raw ids.
+//! and traces. Selector matching, cascade resolution, theme lookup, hashing,
+//! and equality remain based on the raw ids.
 
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::{ClassId, PartTag, PseudoClassId, TypeTag};
+use crate::{ClassId, PartTag, PseudoClassId, ResourceKey, TypeTag};
 
 /// An author-facing name for one style token id.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -39,13 +39,13 @@ pub struct StylePartName {
     pub name: String,
 }
 
-/// Author-facing names and ids for selector vocabulary used by one embedder.
+/// Author-facing names and ids for style vocabulary used by one embedder.
 ///
 /// Names are the stable authoring surface. Parsers, applications, inspectors,
 /// and tools should call methods such as [`Self::class_id`] with an
-/// author-facing name and treat the returned id as the compiled selector
-/// handle. Ids can still be stored and matched directly, but ordinary callers
-/// should not coordinate raw integer ranges.
+/// author-facing name and treat the returned id as the compiled style handle.
+/// Ids can still be stored and matched directly, but ordinary callers should
+/// not coordinate raw integer ranges.
 ///
 /// Names are exact. The vocabulary does not normalize, add, or strip language
 /// sigils; a CSS-like parser that wants `.primary` and `:hover` in diagnostics
@@ -63,6 +63,7 @@ pub struct StyleVocabulary {
     classes: Vec<StyleTokenName<ClassId>>,
     pseudos: Vec<StyleTokenName<PseudoClassId>>,
     type_tags: Vec<StyleTokenName<TypeTag>>,
+    resources: Vec<StyleTokenName<ResourceKey>>,
     parts: Vec<StylePartName>,
 }
 
@@ -74,6 +75,7 @@ impl StyleVocabulary {
             classes: Vec::new(),
             pseudos: Vec::new(),
             type_tags: Vec::new(),
+            resources: Vec::new(),
             parts: Vec::new(),
         }
     }
@@ -120,6 +122,26 @@ impl StyleVocabulary {
         intern_token_name(&mut self.type_tags, name, TypeTag, TypeTag::raw, "type tag")
     }
 
+    /// Returns the resource key for `name`, registering a fresh key if needed.
+    ///
+    /// This is the parser/app-authoring path for theme resources that are not
+    /// already represented by fixed constants.
+    ///
+    /// `name` is stored exactly as supplied.
+    ///
+    /// # Panics
+    ///
+    /// Panics if all `u16` resource keys are already registered.
+    pub fn resource_key(&mut self, name: impl Into<String>) -> ResourceKey {
+        intern_token_name(
+            &mut self.resources,
+            name,
+            resource_key_from_raw,
+            |key| u32::from(key.index()),
+            "resource",
+        )
+    }
+
     /// Returns the owner-local part tag for `name`, registering a fresh tag if needed.
     ///
     /// Part names are recorded with `owner_type_tag`: the same part name under
@@ -152,9 +174,10 @@ impl StyleVocabulary {
     /// Returns a binding view for externally assigned ids.
     ///
     /// Most callers should use [`Self::class_id`], [`Self::pseudo_class_id`],
-    /// [`Self::type_tag`], and [`Self::part_tag`] so the vocabulary allocates ids
-    /// from names. This view exists for embedders that already expose stable
-    /// built-in ids and need the vocabulary to know their author-facing names.
+    /// [`Self::type_tag`], [`Self::resource_key`], and [`Self::part_tag`] so the
+    /// vocabulary allocates ids from names. This view exists for embedders that
+    /// already expose stable built-in ids and need the vocabulary to know their
+    /// author-facing names.
     pub fn id_bindings(&mut self) -> StyleVocabularyIdBindings<'_> {
         StyleVocabularyIdBindings { vocabulary: self }
     }
@@ -162,8 +185,8 @@ impl StyleVocabulary {
     /// Resolves a reusable set of style tokens against this vocabulary.
     ///
     /// Token-set marker types let crates publish one canonical registration
-    /// path for the classes, pseudoclasses, type tags, and parts they own. The
-    /// implementation may intern names through methods such as
+    /// path for the classes, pseudoclasses, type tags, resources, and parts
+    /// they own. The implementation may intern names through methods such as
     /// [`Self::class_id`] or bind pre-existing ids through [`Self::id_bindings`].
     pub fn style_tokens<T>(&mut self) -> T::Resolved
     where
@@ -188,6 +211,12 @@ impl StyleVocabulary {
     #[must_use]
     pub fn type_tag_by_name(&self, name: &str) -> Option<TypeTag> {
         token_id_by_name(&self.type_tags, name)
+    }
+
+    /// Returns the registered key for a resource name.
+    #[must_use]
+    pub fn resource_key_by_name(&self, name: &str) -> Option<ResourceKey> {
+        token_id_by_name(&self.resources, name)
     }
 
     /// Returns the registered owner-local part id for a part name.
@@ -219,6 +248,12 @@ impl StyleVocabulary {
         token_name(&self.type_tags, id)
     }
 
+    /// Returns the registered name for a resource key.
+    #[must_use]
+    pub fn resource_name(&self, id: ResourceKey) -> Option<&str> {
+        token_name(&self.resources, id)
+    }
+
     /// Returns the registered name for an owner-local part tag.
     #[must_use]
     pub fn part_name(&self, owner_type_tag: TypeTag, part_tag: PartTag) -> Option<&str> {
@@ -248,6 +283,12 @@ impl StyleVocabulary {
         &self.type_tags
     }
 
+    /// Returns all registered resource names in registration order.
+    #[must_use]
+    pub fn resources(&self) -> &[StyleTokenName<ResourceKey>] {
+        &self.resources
+    }
+
     /// Returns all registered owner-local part names in registration order.
     #[must_use]
     pub fn parts(&self) -> &[StylePartName] {
@@ -263,28 +304,34 @@ impl StyleVocabulary {
 /// construction needs.
 ///
 /// ```rust
-/// use understory_style::{ClassId, StyleTokenSet, StyleVocabulary};
+/// use understory_style::{ClassId, ResourceKey, StyleTokenSet, StyleVocabulary};
 ///
 /// struct AppStyleTokens;
 ///
 /// #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-/// struct AppClasses {
+/// struct AppTokens {
 ///     card: ClassId,
+///     card_background: ResourceKey,
 /// }
 ///
 /// impl StyleTokenSet for AppStyleTokens {
-///     type Resolved = AppClasses;
+///     type Resolved = AppTokens;
 ///
 ///     fn resolve(vocabulary: &mut StyleVocabulary) -> Self::Resolved {
-///         AppClasses {
+///         AppTokens {
 ///             card: vocabulary.class_id(".card"),
+///             card_background: vocabulary.resource_key("card.background"),
 ///         }
 ///     }
 /// }
 ///
 /// let mut vocabulary = StyleVocabulary::new();
-/// let classes = vocabulary.style_tokens::<AppStyleTokens>();
-/// assert_eq!(vocabulary.class_name(classes.card), Some(".card"));
+/// let tokens = vocabulary.style_tokens::<AppStyleTokens>();
+/// assert_eq!(vocabulary.class_name(tokens.card), Some(".card"));
+/// assert_eq!(
+///     vocabulary.resource_name(tokens.card_background),
+///     Some("card.background")
+/// );
 /// ```
 pub trait StyleTokenSet {
     /// The resolved handles returned after registration.
@@ -341,6 +388,19 @@ impl StyleVocabularyIdBindings<'_> {
     /// to a different id.
     pub fn type_tag(&mut self, id: TypeTag, name: impl Into<String>) -> &mut Self {
         bind_token_name(&mut self.vocabulary.type_tags, id, name, "type tag");
+        self
+    }
+
+    /// Binds an author-facing name to an externally assigned resource key.
+    ///
+    /// Rebinding the same key to the same name is a no-op.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the key already has a different name or the name already maps
+    /// to a different key.
+    pub fn resource(&mut self, id: ResourceKey, name: impl Into<String>) -> &mut Self {
+        bind_token_name(&mut self.vocabulary.resources, id, name, "resource");
         self
     }
 
@@ -483,6 +543,12 @@ fn next_part_tag(parts: &[StylePartName], owner_type_tag: TypeTag) -> PartTag {
         .unwrap_or_else(|| panic!("too many style part ids registered for owner"))
 }
 
+fn resource_key_from_raw(raw: u32) -> ResourceKey {
+    let index =
+        u16::try_from(raw).unwrap_or_else(|_| panic!("too many style resource ids registered"));
+    ResourceKey::new(index)
+}
+
 impl ClassId {
     const fn raw(self) -> u32 {
         self.0
@@ -519,11 +585,16 @@ mod tests {
             .id_bindings()
             .class(ClassId(1), ".primary")
             .pseudo_class(PseudoClassId(2), ":hover")
-            .type_tag(TypeTag(3), "Button");
+            .type_tag(TypeTag(3), "Button")
+            .resource(ResourceKey::new(4), "accent.bg");
 
         assert_eq!(vocabulary.class_name(ClassId(1)), Some(".primary"));
         assert_eq!(vocabulary.pseudo_name(PseudoClassId(2)), Some(":hover"));
         assert_eq!(vocabulary.type_name(TypeTag(3)), Some("Button"));
+        assert_eq!(
+            vocabulary.resource_name(ResourceKey::new(4)),
+            Some("accent.bg")
+        );
         assert_eq!(vocabulary.class_name(ClassId(99)), None);
     }
 
@@ -534,14 +605,17 @@ mod tests {
         let class = vocabulary.class_id(".primary");
         let pseudo = vocabulary.pseudo_class_id(":hover");
         let type_tag = vocabulary.type_tag("Button");
+        let resource = vocabulary.resource_key("accent.bg");
 
         assert_eq!(vocabulary.class_id(".primary"), class);
         assert_eq!(vocabulary.pseudo_class_id(":hover"), pseudo);
         assert_eq!(vocabulary.type_tag("Button"), type_tag);
+        assert_eq!(vocabulary.resource_key("accent.bg"), resource);
         assert_eq!(vocabulary.class_name(class), Some(".primary"));
         assert_eq!(vocabulary.class_id_by_name(".primary"), Some(class));
         assert_eq!(vocabulary.pseudo_class_id_by_name(":hover"), Some(pseudo));
         assert_eq!(vocabulary.type_tag_by_name("Button"), Some(type_tag));
+        assert_eq!(vocabulary.resource_key_by_name("accent.bg"), Some(resource));
     }
 
     #[test]
@@ -551,6 +625,7 @@ mod tests {
         #[derive(Debug, Eq, PartialEq)]
         struct ExampleClasses {
             primary: ClassId,
+            accent: ResourceKey,
         }
 
         impl StyleTokenSet for ExampleTokens {
@@ -559,6 +634,7 @@ mod tests {
             fn resolve(vocabulary: &mut StyleVocabulary) -> Self::Resolved {
                 ExampleClasses {
                     primary: vocabulary.class_id(".primary"),
+                    accent: vocabulary.resource_key("accent.bg"),
                 }
             }
         }
@@ -568,11 +644,14 @@ mod tests {
         let classes = vocabulary.style_tokens::<ExampleTokens>();
 
         assert_eq!(classes.primary, ClassId(1));
+        assert_eq!(classes.accent, ResourceKey::new(1));
         assert_eq!(vocabulary.class_name(classes.primary), Some(".primary"));
+        assert_eq!(vocabulary.resource_name(classes.accent), Some("accent.bg"));
         assert_eq!(
             vocabulary.style_tokens::<ExampleTokens>(),
             ExampleClasses {
-                primary: ClassId(1)
+                primary: ClassId(1),
+                accent: ResourceKey::new(1)
             }
         );
     }
@@ -586,6 +665,7 @@ mod tests {
             card: ClassId,
             hover: PseudoClassId,
             button: TypeTag,
+            accent: ResourceKey,
             icon: PartTag,
         }
 
@@ -597,6 +677,7 @@ mod tests {
                     card: ClassId(40),
                     hover: PseudoClassId(41),
                     button: TypeTag(42),
+                    accent: ResourceKey::new(44),
                     icon: PartTag(43),
                 };
 
@@ -605,6 +686,7 @@ mod tests {
                     .class(handles.card, ".card")
                     .pseudo_class(handles.hover, ":hover")
                     .type_tag(handles.button, "Button")
+                    .resource(handles.accent, "accent.bg")
                     .part(handles.button, handles.icon, "Button.Icon");
 
                 handles
@@ -619,6 +701,7 @@ mod tests {
         assert_eq!(vocabulary.class_name(handles.card), Some(".card"));
         assert_eq!(vocabulary.pseudo_name(handles.hover), Some(":hover"));
         assert_eq!(vocabulary.type_name(handles.button), Some("Button"));
+        assert_eq!(vocabulary.resource_name(handles.accent), Some("accent.bg"));
         assert_eq!(
             vocabulary.part_name(handles.button, handles.icon),
             Some("Button.Icon")
@@ -629,6 +712,10 @@ mod tests {
             Some(handles.hover)
         );
         assert_eq!(vocabulary.type_tag_by_name("Button"), Some(handles.button));
+        assert_eq!(
+            vocabulary.resource_key_by_name("accent.bg"),
+            Some(handles.accent)
+        );
         assert_eq!(
             vocabulary.part_tag_by_name(handles.button, "Button.Icon"),
             Some(handles.icon)
@@ -643,6 +730,7 @@ mod tests {
         assert_eq!(vocabulary.class_id(".primary"), ClassId(1));
         assert_eq!(vocabulary.pseudo_class_id(":hover"), PseudoClassId(1));
         assert_eq!(vocabulary.type_tag("Button"), TypeTag(1));
+        assert_eq!(vocabulary.resource_key("accent.bg"), ResourceKey::new(1));
         assert_eq!(vocabulary.part_tag(TypeTag(1), "Label"), PartTag(1));
     }
 
@@ -655,16 +743,22 @@ mod tests {
             .class(ClassId(0), ".root")
             .pseudo_class(PseudoClassId(0), ":initial")
             .type_tag(TypeTag(0), "Root")
+            .resource(ResourceKey::new(0), "root.bg")
             .part(TypeTag(0), PartTag(0), "Root.Content");
 
         assert_eq!(vocabulary.class_name(ClassId(0)), Some(".root"));
         assert_eq!(vocabulary.pseudo_name(PseudoClassId(0)), Some(":initial"));
         assert_eq!(vocabulary.type_name(TypeTag(0)), Some("Root"));
         assert_eq!(
+            vocabulary.resource_name(ResourceKey::new(0)),
+            Some("root.bg")
+        );
+        assert_eq!(
             vocabulary.part_name(TypeTag(0), PartTag(0)),
             Some("Root.Content")
         );
         assert_eq!(vocabulary.class_id(".primary"), ClassId(1));
+        assert_eq!(vocabulary.resource_key("accent.bg"), ResourceKey::new(1));
     }
 
     #[test]
@@ -759,6 +853,17 @@ mod tests {
             .id_bindings()
             .class(ClassId(1), ".primary")
             .class(ClassId(2), ".primary");
+    }
+
+    #[test]
+    #[should_panic(expected = "style resource name already has a different id")]
+    fn duplicate_different_resource_id_panics() {
+        let mut vocabulary = StyleVocabulary::new();
+
+        vocabulary
+            .id_bindings()
+            .resource(ResourceKey::new(1), "accent.bg")
+            .resource(ResourceKey::new(2), "accent.bg");
     }
 
     #[test]

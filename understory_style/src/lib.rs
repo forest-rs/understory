@@ -42,8 +42,8 @@
 //! - **`PartTag`**: an owner-local part label, such as `track`, `thumb`, or
 //!   `icon`.
 //! - **`StyleVocabulary`**: the name-to-id table used by parsers, tools, and
-//!   embedders that want author-facing names without coordinating integer id
-//!   ranges by hand.
+//!   embedders that want author-facing selector and resource names without
+//!   coordinating integer id ranges by hand.
 //! - **`SelectorInputs`**: the type, part, class, and pseudoclass snapshot for
 //!   one subject.
 //! - **`MatchState`**: matcher progress after entering a subject. It is valid
@@ -51,34 +51,41 @@
 //!
 //! ### Vocabulary
 //!
-//! Selector matching uses compact ids, but parsers and tools usually start from
-//! names. [`StyleVocabulary`] is the shared name-to-id layer for that boundary:
+//! Selector matching and theme lookup use compact ids, but parsers and tools
+//! usually start from names. [`StyleVocabulary`] is the shared name-to-id layer
+//! for that boundary:
 //!
 //! ```rust
-//! use understory_style::{ClassId, StyleTokenSet, StyleVocabulary};
+//! use understory_style::{ClassId, ResourceKey, StyleTokenSet, StyleVocabulary};
 //!
 //! struct AppStyleTokens;
 //!
 //! #[derive(Clone, Copy)]
-//! struct AppClasses {
+//! struct AppTokens {
 //!     primary: ClassId,
+//!     accent_background: ResourceKey,
 //! }
 //!
 //! impl StyleTokenSet for AppStyleTokens {
-//!     type Resolved = AppClasses;
+//!     type Resolved = AppTokens;
 //!
 //!     fn resolve(vocabulary: &mut StyleVocabulary) -> Self::Resolved {
-//!         AppClasses {
+//!         AppTokens {
 //!             primary: vocabulary.class_id(".primary"),
+//!             accent_background: vocabulary.resource_key("accent.background"),
 //!         }
 //!     }
 //! }
 //!
 //! let mut vocabulary = StyleVocabulary::new();
-//! let classes = vocabulary.style_tokens::<AppStyleTokens>();
+//! let tokens = vocabulary.style_tokens::<AppStyleTokens>();
 //! let hover = vocabulary.pseudo_class_id(":hover");
 //!
-//! assert_eq!(vocabulary.class_name(classes.primary), Some(".primary"));
+//! assert_eq!(vocabulary.class_name(tokens.primary), Some(".primary"));
+//! assert_eq!(
+//!     vocabulary.resource_name(tokens.accent_background),
+//!     Some("accent.background")
+//! );
 //! assert_eq!(vocabulary.pseudo_name(hover), Some(":hover"));
 //! ```
 //!
