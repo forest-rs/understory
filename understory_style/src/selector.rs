@@ -22,16 +22,17 @@ pub struct Specificity(pub u32, pub u32, pub u32, pub u32);
 
 /// A stable identifier for an element "type" in selectors.
 ///
-/// This is application-defined (e.g. `Button`, `Text`, `SliderThumb`).
+/// Embedders can expose fixed type tags for built-ins, but author-facing names
+/// should usually be resolved through [`crate::StyleVocabulary`].
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TypeTag(pub u32);
 
 /// A stable identifier for an embedder-defined style subject.
 ///
-/// This is application-defined. UI layers can use it for element parts such as
-/// `Button::icon`, `Toggle::track`, or `Slider::thumb`; non-UI embedders can
-/// use it for any addressable subject they want to style. The name is
-/// intentionally not tied to any particular widget, slot, or template system.
+/// UI layers can use it for element parts such as `Button::icon`,
+/// `Toggle::track`, or `Slider::thumb`; non-UI embedders can use it for any
+/// addressable subject they want to style. The name is intentionally not tied
+/// to any particular widget, slot, or template system.
 ///
 /// `PartTag` values are not globally namespaced by this crate. Embedders should
 /// usually anchor part selectors under an owner [`TypeTag`] so unrelated
@@ -41,13 +42,15 @@ pub struct PartTag(pub u32);
 
 /// A stable identifier for a user-defined class (e.g. `.primary`).
 ///
-/// Class IDs are application-defined and intentionally unbounded.
+/// Author-facing class names should usually be resolved through
+/// [`crate::StyleVocabulary`] instead of by coordinating raw integer ranges.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ClassId(pub u32);
 
 /// A stable identifier for a pseudoclass (e.g. `:hover`, `:focus`).
 ///
-/// Pseudoclass IDs are application-defined and intentionally unbounded.
+/// Author-facing pseudoclass names should usually be resolved through
+/// [`crate::StyleVocabulary`] instead of by coordinating raw integer ranges.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PseudoClassId(pub u32);
 

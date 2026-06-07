@@ -24,6 +24,7 @@
 //! The crate owns:
 //!
 //! - selector matching over child and descendant paths;
+//! - optional style vocabulary interning from author-facing names to compact ids;
 //! - style and theme values for dependency properties;
 //! - conservative style invalidation through `invalidation` channels;
 //! - inspection hooks for matched rules and winning style sources.
@@ -40,10 +41,50 @@
 //!   `Toggle`, or `Row`.
 //! - **`PartTag`**: an owner-local part label, such as `track`, `thumb`, or
 //!   `icon`.
+//! - **`StyleVocabulary`**: the name-to-id table used by parsers, tools, and
+//!   embedders that want author-facing names without coordinating integer id
+//!   ranges by hand.
 //! - **`SelectorInputs`**: the type, part, class, and pseudoclass snapshot for
 //!   one subject.
 //! - **`MatchState`**: matcher progress after entering a subject. It is valid
 //!   only with the cascade that produced it.
+//!
+//! ### Vocabulary
+//!
+//! Selector matching uses compact ids, but parsers and tools usually start from
+//! names. [`StyleVocabulary`] is the shared name-to-id layer for that boundary:
+//!
+//! ```rust
+//! use understory_style::{ClassId, StyleTokenSet, StyleVocabulary};
+//!
+//! struct AppStyleTokens;
+//!
+//! #[derive(Clone, Copy)]
+//! struct AppClasses {
+//!     primary: ClassId,
+//! }
+//!
+//! impl StyleTokenSet for AppStyleTokens {
+//!     type Resolved = AppClasses;
+//!
+//!     fn resolve(vocabulary: &mut StyleVocabulary) -> Self::Resolved {
+//!         AppClasses {
+//!             primary: vocabulary.class_id(".primary"),
+//!         }
+//!     }
+//! }
+//!
+//! let mut vocabulary = StyleVocabulary::new();
+//! let classes = vocabulary.style_tokens::<AppStyleTokens>();
+//! let hover = vocabulary.pseudo_class_id(":hover");
+//!
+//! assert_eq!(vocabulary.class_name(classes.primary), Some(".primary"));
+//! assert_eq!(vocabulary.pseudo_name(hover), Some(":hover"));
+//! ```
+//!
+//! Names are exact author-facing spellings. The vocabulary does not add or
+//! remove CSS-like sigils, so choose one canonical spelling for the language or
+//! parser that owns the names.
 //!
 //! ### First Example: Owner State Styling A Part
 //!
@@ -391,6 +432,7 @@ pub mod selectors;
 mod style;
 mod stylesheet;
 mod theme;
+mod vocabulary;
 
 pub use matcher::{
     MatchRule, MatchState, Matcher, MatcherBuilder, RuleCursor, StyleCascade, StyleCascadeBuilder,
@@ -406,3 +448,6 @@ pub use selector::{
 pub use style::{Style, StyleBuilder, StyleValueRef};
 pub use stylesheet::StyleOrigin;
 pub use theme::{ResourceKey, Theme, ThemeBuilder};
+pub use vocabulary::{
+    StylePartName, StyleTokenName, StyleTokenSet, StyleVocabulary, StyleVocabularyIdBindings,
+};
