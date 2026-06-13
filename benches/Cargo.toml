@@ -12,6 +12,7 @@ understory_inspector = { workspace = true, features = ["std"] }
 understory_outline = { workspace = true, features = ["std"] }
 understory_property.workspace = true
 understory_style.workspace = true
+understory_timeline_model = { workspace = true, features = ["std"] }
 kurbo.workspace = true
 rstar = { version = "0.11", optional = true }
 
@@ -52,4 +53,8 @@ harness = false
 
 [[bench]]
 name = "outline_inspector"
+harness = false
+
+[[bench]]
+name = "timeline_model"
 harness = false
