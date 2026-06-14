@@ -57,6 +57,8 @@ type BvhItem<TS> = (usize, Aabb2D<TS>);
 type BvhItems<TS> = Vec<BvhItem<TS>>;
 type BvhBestSplit<TS> = Option<(crate::types::ScalarAcc<TS>, BvhItems<TS>, BvhItems<TS>)>;
 
+const INLINE_STACK_CAP: usize = 64;
+
 impl<T: Scalar> Bvh<T> {
     fn ensure_slot(&mut self, slot: usize, bbox: Aabb2D<T>) {
         if self.slots.len() <= slot {
@@ -242,6 +244,37 @@ impl<T: Scalar> Bvh<T> {
         arena[node_idx].bbox = new_bbox;
         removed
     }
+
+    #[inline]
+    fn pop_stack(
+        inline: &mut [NodeIdx; INLINE_STACK_CAP],
+        inline_len: &mut usize,
+        heap: &mut Vec<NodeIdx>,
+    ) -> Option<NodeIdx> {
+        if let Some(idx) = heap.pop() {
+            Some(idx)
+        } else if *inline_len > 0 {
+            *inline_len -= 1;
+            Some(inline[*inline_len])
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    fn push_stack(
+        inline: &mut [NodeIdx; INLINE_STACK_CAP],
+        inline_len: &mut usize,
+        heap: &mut Vec<NodeIdx>,
+        idx: NodeIdx,
+    ) {
+        if !heap.is_empty() || *inline_len == inline.len() {
+            heap.push(idx);
+        } else {
+            inline[*inline_len] = idx;
+            *inline_len += 1;
+        }
+    }
 }
 
 impl<T: Scalar> Backend<T> for Bvh<T> {
@@ -292,12 +325,16 @@ impl<T: Scalar> Backend<T> for Bvh<T> {
         let Some(root_idx) = self.root else {
             return;
         };
-        let mut stack = vec![root_idx];
-        while let Some(i) = stack.pop() {
+        if !self.arena[root_idx.get()].bbox.contains_point(x, y) {
+            return;
+        }
+
+        let mut inline = [root_idx; INLINE_STACK_CAP];
+        let mut inline_len = 1_usize;
+        let mut heap = Vec::new();
+
+        while let Some(i) = Self::pop_stack(&mut inline, &mut inline_len, &mut heap) {
             let n = &self.arena[i.get()];
-            if !n.bbox.contains_point(x, y) {
-                continue;
-            }
             match &n.kind {
                 Kind::Leaf(items) => {
                     for (s, b) in items {
@@ -307,8 +344,14 @@ impl<T: Scalar> Backend<T> for Bvh<T> {
                     }
                 }
                 Kind::Internal { left, right } => {
-                    stack.push(*left);
-                    stack.push(*right);
+                    let lb = self.arena[left.get()].bbox;
+                    let rb = self.arena[right.get()].bbox;
+                    if rb.contains_point(x, y) {
+                        Self::push_stack(&mut inline, &mut inline_len, &mut heap, *right);
+                    }
+                    if lb.contains_point(x, y) {
+                        Self::push_stack(&mut inline, &mut inline_len, &mut heap, *left);
+                    }
                 }
             }
         }
@@ -318,12 +361,16 @@ impl<T: Scalar> Backend<T> for Bvh<T> {
         let Some(root_idx) = self.root else {
             return;
         };
-        let mut stack = vec![root_idx];
-        while let Some(i) = stack.pop() {
+        if !self.arena[root_idx.get()].bbox.overlaps(&rect) {
+            return;
+        }
+
+        let mut inline = [root_idx; INLINE_STACK_CAP];
+        let mut inline_len = 1_usize;
+        let mut heap = Vec::new();
+
+        while let Some(i) = Self::pop_stack(&mut inline, &mut inline_len, &mut heap) {
             let n = &self.arena[i.get()];
-            if !n.bbox.overlaps(&rect) {
-                continue;
-            }
             match &n.kind {
                 Kind::Leaf(items) => {
                     for (s, b) in items {
@@ -333,8 +380,14 @@ impl<T: Scalar> Backend<T> for Bvh<T> {
                     }
                 }
                 Kind::Internal { left, right } => {
-                    stack.push(*left);
-                    stack.push(*right);
+                    let lb = self.arena[left.get()].bbox;
+                    let rb = self.arena[right.get()].bbox;
+                    if rb.overlaps(&rect) {
+                        Self::push_stack(&mut inline, &mut inline_len, &mut heap, *right);
+                    }
+                    if lb.overlaps(&rect) {
+                        Self::push_stack(&mut inline, &mut inline_len, &mut heap, *left);
+                    }
                 }
             }
         }
@@ -369,7 +422,22 @@ pub type BvhI64 = Bvh<i64>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backends::flatvec::FlatVec;
     use crate::index::Index;
+
+    fn point_hits<B: Backend<i64>>(backend: &B, x: i64, y: i64) -> Vec<usize> {
+        let mut hits = Vec::new();
+        backend.visit_point(x, y, |slot| hits.push(slot));
+        hits.sort_unstable();
+        hits
+    }
+
+    fn rect_hits<B: Backend<i64>>(backend: &B, rect: Aabb2D<i64>) -> Vec<usize> {
+        let mut hits = Vec::new();
+        backend.visit_rect(rect, |slot| hits.push(slot));
+        hits.sort_unstable();
+        hits
+    }
 
     #[test]
     fn bvh_f64_basic() {
@@ -493,5 +561,54 @@ mod tests {
 
         // Structure sanity: arena should not grow unboundedly due to updates
         assert!(b.arena.len() <= baseline_nodes + 4);
+    }
+
+    #[test]
+    fn bvh_queries_match_flatvec_after_updates_and_removes() {
+        let mut bvh: Bvh<i64> = Bvh::default();
+        let mut flat: FlatVec<i64> = FlatVec::default();
+
+        for slot in 0..18 {
+            let x = (slot % 6) as i64 * 20;
+            let y = (slot / 6) as i64 * 20;
+            let bbox = Aabb2D::new(x, y, x + 12, y + 12);
+            bvh.insert(slot, bbox);
+            flat.insert(slot, bbox);
+        }
+
+        for (slot, bbox) in [
+            (1, Aabb2D::new(130, 0, 145, 15)),
+            (8, Aabb2D::new(-20, 40, -5, 55)),
+            (14, Aabb2D::new(55, -30, 75, -10)),
+        ] {
+            bvh.update(slot, bbox);
+            flat.update(slot, bbox);
+        }
+
+        for slot in [0, 5, 12, 17] {
+            bvh.remove(slot);
+            flat.remove(slot);
+        }
+
+        for (x, y) in [
+            (6, 6),
+            (25, 5),
+            (135, 7),
+            (-10, 48),
+            (65, -20),
+            (90, 50),
+            (1_000, 1_000),
+        ] {
+            assert_eq!(point_hits(&bvh, x, y), point_hits(&flat, x, y));
+        }
+
+        for rect in [
+            Aabb2D::new(-25, -35, 150, 60),
+            Aabb2D::new(0, 0, 40, 40),
+            Aabb2D::new(80, 0, 130, 80),
+            Aabb2D::new(500, 500, 600, 600),
+        ] {
+            assert_eq!(rect_hits(&bvh, rect), rect_hits(&flat, rect));
+        }
     }
 }
