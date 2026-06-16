@@ -54,10 +54,13 @@ precedence order.
 ### Key Operations
 
 - `set_local(property, value)` - set a local value
+- `clear_local(property)` - clear the ordinary Local source slot
 - `set_animation(property, value)` - set an animation value
 - `get_effective_local(property, registry)` - Animation → Local → default
 - `set_local_notifying(property, value, registry)` - set a local value and
   return dirty channels when the effective local value changes
+- `clear_local_erased_notifying(id, registry)` - clear a Local slot from
+  type-erased binding/adaptor code and return conservative dirty channels
 
 ## Invalidation Integration
 
