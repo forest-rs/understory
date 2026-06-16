@@ -9,7 +9,7 @@
 
 use invalidation::ChannelSet;
 
-use crate::id::Property;
+use crate::id::{Property, PropertyId};
 use crate::registry::PropertyRegistry;
 use crate::store::{LocalValueSource, PropertyStore};
 
@@ -564,7 +564,7 @@ pub trait DependencyObjectExt<K: Copy + Eq>: DependencyObject<K> {
         // winner and no animation is masking the layer. If a lower source
         // shadowed by `source` happens to hold an equal value, this still
         // contributes channels — bulk-clear doesn't compare typed values.
-        let ids_affected: alloc::vec::Vec<crate::id::PropertyId> = store
+        let ids_affected: alloc::vec::Vec<PropertyId> = store
             .local_property_ids_at_source(source)
             .filter(|id| {
                 // Animation masks the local layer entirely.
@@ -599,6 +599,18 @@ pub trait DependencyObjectExt<K: Copy + Eq>: DependencyObject<K> {
         self.property_store_mut().clear_local(property)
     }
 
+    /// Clears the value in the [`LocalValueSource::Local`] slot for a type-erased property id.
+    ///
+    /// This is useful for binding hosts and adapters that carry runtime
+    /// [`PropertyId`] values rather than typed [`Property<T>`] handles. Lower
+    /// local-layer source slots are untouched and may become the new winning
+    /// local value.
+    ///
+    /// Returns `true` if a value was removed.
+    fn clear_local_erased(&mut self, id: PropertyId) -> bool {
+        self.property_store_mut().clear_local_erased(id)
+    }
+
     /// Clears the value at a specific local-layer source for `property`.
     ///
     /// Returns `true` if a value was removed.
@@ -609,6 +621,17 @@ pub trait DependencyObjectExt<K: Copy + Eq>: DependencyObject<K> {
     ) -> bool {
         self.property_store_mut()
             .clear_local_at_source(property, source)
+    }
+
+    /// Clears a source slot for a type-erased property id.
+    ///
+    /// This is the erased twin of
+    /// [`clear_local_at_source`](Self::clear_local_at_source).
+    ///
+    /// Returns `true` if a value was removed.
+    fn clear_local_erased_at_source(&mut self, id: PropertyId, source: LocalValueSource) -> bool {
+        self.property_store_mut()
+            .clear_local_erased_at_source(id, source)
     }
 
     /// Clears every value (every local source and animation) for `property`.
@@ -661,6 +684,23 @@ pub trait DependencyObjectExt<K: Copy + Eq>: DependencyObject<K> {
         ChannelSet::empty()
     }
 
+    /// Clears the [`LocalValueSource::Local`] slot for a type-erased property id
+    /// and returns affected channels.
+    ///
+    /// This is conservative: it returns `affects_channels` when clearing Local
+    /// may change the effective local value, but it does not run typed
+    /// `on_changed` callbacks or compare the value revealed underneath. Use
+    /// [`clear_local_notifying`](Self::clear_local_notifying) when the caller
+    /// has a typed property handle and needs exact callback behavior.
+    fn clear_local_erased_notifying(
+        &mut self,
+        id: PropertyId,
+        registry: &PropertyRegistry,
+    ) -> ChannelSet {
+        self.property_store_mut()
+            .clear_local_erased_notifying(id, registry)
+    }
+
     /// Clears the value at `source` for `property` and notifies if the
     /// effective value changed.
     ///
@@ -705,6 +745,22 @@ pub trait DependencyObjectExt<K: Copy + Eq>: DependencyObject<K> {
         }
 
         ChannelSet::empty()
+    }
+
+    /// Clears a source slot for a type-erased property id and returns affected channels.
+    ///
+    /// This is the erased twin of
+    /// [`clear_local_at_source_notifying`](Self::clear_local_at_source_notifying).
+    /// It returns a conservative channel set and does not run typed
+    /// `on_changed` callbacks.
+    fn clear_local_erased_at_source_notifying(
+        &mut self,
+        id: PropertyId,
+        source: LocalValueSource,
+        registry: &PropertyRegistry,
+    ) -> ChannelSet {
+        self.property_store_mut()
+            .clear_local_erased_at_source_notifying(id, source, registry)
     }
 
     /// Clears the animation value.
@@ -877,6 +933,22 @@ mod tests {
 
         assert!(element.clear_local(width));
         assert!(!element.has_local(width));
+    }
+
+    #[test]
+    fn ext_clear_local_erased() {
+        let (_, width) = setup_registry();
+        let mut element = TestElement::new(1, None);
+
+        element.set_local_with_source(width, 25.0, LocalValueSource::TemplateBinding);
+        element.set_local(width, 100.0);
+
+        assert!(element.clear_local_erased(width.id()));
+        assert_eq!(element.get_local_value(width), Some(&25.0));
+        assert_eq!(
+            element.get_local_source(width),
+            Some(LocalValueSource::TemplateBinding)
+        );
     }
 
     #[test]
@@ -1173,6 +1245,43 @@ mod tests {
         assert!(element.get_local_value(width).is_none());
         assert_eq!(element.get_effective_local(width, &registry), 50.0);
         assert_eq!(callback_count.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn ext_clear_local_erased_notifying_returns_conservative_channels() {
+        use alloc::sync::Arc;
+        use core::sync::atomic::{AtomicUsize, Ordering};
+        use invalidation::Channel;
+
+        const LAYOUT: Channel = Channel::new(0);
+
+        let mut registry = PropertyRegistry::new();
+        let callback_count = Arc::new(AtomicUsize::new(0));
+        let width = registry.register(
+            "Width",
+            PropertyMetadataBuilder::new(0.0_f64)
+                .affects_channels(LAYOUT.into_set())
+                .on_changed({
+                    let callback_count = Arc::clone(&callback_count);
+                    move |_, _| {
+                        callback_count.fetch_add(1, Ordering::Relaxed);
+                    }
+                })
+                .build(),
+        );
+
+        let mut element = TestElement::new(1, None);
+        element.set_local(width, 10.0);
+
+        let channels = element.clear_local_erased_notifying(width.id(), &registry);
+
+        assert!(channels.contains(LAYOUT));
+        assert!(element.get_local_value(width).is_none());
+        assert_eq!(
+            callback_count.load(Ordering::Relaxed),
+            0,
+            "erased clear reports channels but cannot run typed callbacks"
+        );
     }
 
     #[test]
@@ -1690,6 +1799,37 @@ mod tests {
         );
 
         assert!(channels.is_empty());
+    }
+
+    #[test]
+    fn ext_clear_local_erased_at_source_notifying_clears_shadowed_slot_without_channels() {
+        use invalidation::Channel;
+
+        let mut registry = PropertyRegistry::new();
+        let width = registry.register(
+            "Width",
+            PropertyMetadataBuilder::new(0.0_f64)
+                .affects_channels(Channel::new(0).into_set())
+                .build(),
+        );
+
+        let mut element = TestElement::new(1, None);
+        element.set_local_with_source(width, 20.0, LocalValueSource::TemplateBinding);
+        element.set_local(width, 99.0);
+
+        let channels = element.clear_local_erased_at_source_notifying(
+            width.id(),
+            LocalValueSource::TemplateBinding,
+            &registry,
+        );
+
+        assert!(channels.is_empty());
+        assert_eq!(element.get_effective_local(width, &registry), 99.0);
+        assert!(
+            !element
+                .property_store()
+                .has_local_at_source(width, LocalValueSource::TemplateBinding)
+        );
     }
 
     #[test]
