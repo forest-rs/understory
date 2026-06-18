@@ -344,6 +344,21 @@ impl<K: Copy + Eq> PropertyStore<K> {
         self.local_layer_lookup(property.id()).map(|(s, _)| s)
     }
 
+    /// Returns the [`LocalValueSource`] that currently wins local-layer resolution.
+    ///
+    /// This is a provenance-oriented alias for [`Self::get_local_source`]. It
+    /// reports only the local layer (`Local`, `TemplateBinding`, or
+    /// `TemplateDefault`); animation is a separate higher-precedence stage and
+    /// is intentionally not represented by [`LocalValueSource`].
+    #[must_use]
+    #[inline]
+    pub fn winning_local_source<T: Clone + 'static>(
+        &self,
+        property: Property<T>,
+    ) -> Option<LocalValueSource> {
+        self.get_local_source(property)
+    }
+
     /// Gets the value at a specific local-layer source, if that source has one.
     #[must_use]
     #[inline]
@@ -1168,6 +1183,34 @@ mod tests {
 
         assert_eq!(store.get_local(width), Some(&30.0));
         assert_eq!(store.get_local_source(width), Some(LocalValueSource::Local));
+    }
+
+    #[test]
+    fn winning_local_source_reports_local_layer_winner() {
+        let (_, width, _) = setup_registry();
+        let mut store = PropertyStore::<u32>::new(1);
+
+        assert_eq!(store.winning_local_source(width), None);
+
+        store.set_local_with_source(width, 10.0, LocalValueSource::TemplateDefault);
+        assert_eq!(
+            store.winning_local_source(width),
+            Some(LocalValueSource::TemplateDefault)
+        );
+
+        store.set_local_with_source(width, 20.0, LocalValueSource::TemplateBinding);
+        assert_eq!(
+            store.winning_local_source(width),
+            Some(LocalValueSource::TemplateBinding)
+        );
+
+        store.set_local(width, 30.0);
+        store.set_animation(width, 40.0);
+        assert_eq!(
+            store.winning_local_source(width),
+            Some(LocalValueSource::Local),
+            "animation is a separate resolver stage, not a local-layer source"
+        );
     }
 
     #[test]
