@@ -752,6 +752,20 @@ impl StyleCascade {
         }
     }
 
+    /// Returns the style source that wins a property id at this state.
+    ///
+    /// This is the type-erased form of [`Self::winning_source`], intended for
+    /// diagnostics, inspection, and other code that already carries
+    /// [`PropertyId`] values.
+    #[must_use]
+    pub fn winning_source_for_id(
+        &self,
+        state: MatchState,
+        property_id: PropertyId,
+    ) -> Option<WinningStyleSource<'_>> {
+        self.compute_winning_source(state, property_id)
+    }
+
     /// Returns properties whose winning style source differs between states.
     ///
     /// The comparison is scoped to this cascade. It is intended for embedders
@@ -805,7 +819,7 @@ impl StyleCascade {
         state: MatchState,
         property: Property<T>,
     ) -> Option<WinningStyleSource<'_>> {
-        self.compute_winning_source(state, property.id())
+        self.winning_source_for_id(state, property.id())
     }
 
     fn candidate_property_ids(&self, old: MatchState, new: MatchState) -> Vec<PropertyId> {

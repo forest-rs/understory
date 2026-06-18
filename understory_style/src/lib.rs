@@ -447,6 +447,7 @@ pub use matcher::{
 };
 pub use resolve::{
     NoResolveParentLookup, PropertyParentLookup, ResolveCx, ResolveParent, ResolveParentLookup,
+    Resolved, ResolvedSource,
 };
 pub use selector::{
     ClassId, IdSet, PartTag, PseudoClassId, Selector, SelectorBuilder, SelectorCombinator,
