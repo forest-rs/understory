@@ -873,6 +873,24 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_for_route_can_carry_toolkit_event_state() {
+        let lookup = Lookup;
+        let router: Router<Node, Lookup, NoParent> = Router::new(lookup);
+        let dispatch = router.dispatch_for::<()>(Node(42));
+        let mut handled = false;
+
+        let result = dispatcher::run(&dispatch, &mut handled, |d, handled| {
+            if d.is_target() {
+                *handled = true;
+            }
+            Outcome::Continue
+        });
+
+        assert!(result.is_completed());
+        assert!(handled);
+    }
+
+    #[test]
     fn router_dispatch_and_dispatcher_run_visit_all_entries() {
         let lookup = Lookup;
         let router: Router<Node, Lookup, NoParent> = Router::new(lookup);
@@ -890,7 +908,7 @@ mod tests {
             Outcome::Continue
         });
 
-        assert!(stopped.is_none());
+        assert!(stopped.is_completed());
         assert_eq!(seen.len(), dispatch.len());
         assert_eq!(
             seen,
@@ -926,8 +944,8 @@ mod tests {
             }
         });
 
-        assert!(stopped.is_some());
-        let stopped = stopped.unwrap();
+        assert!(stopped.is_stopped());
+        let stopped = stopped.into_stopped_at().unwrap();
         assert!(matches!(stopped.phase, Phase::Target));
         assert_eq!(stopped.node.0, 3);
         assert_eq!(

@@ -69,7 +69,7 @@
 //!
 //! ```no_run
 //! use understory_responder::dispatcher;
-//! use understory_responder::types::{Dispatch, Outcome, Phase};
+//! use understory_responder::types::{Dispatch, Outcome};
 //! # #[derive(Copy, Clone, Debug)] struct Node(u32);
 //! # let seq: Vec<Dispatch<Node, (), ()>> = vec![
 //! #     Dispatch::capture(Node(1)),
@@ -77,13 +77,13 @@
 //! #     Dispatch::bubble(Node(1)),
 //! # ];
 //! let mut default_prevented = false;
-//! let stop_at = dispatcher::run(&seq, &mut default_prevented, |d, flag| {
-//!     if matches!(d.phase, Phase::Target) {
+//! let result = dispatcher::run(&seq, &mut default_prevented, |d, flag| {
+//!     if d.is_target() {
 //!         *flag = true;
 //!     }
 //!     Outcome::Continue
 //! });
-//! assert!(stop_at.is_none());
+//! assert!(result.is_completed());
 //! assert!(default_prevented);
 //! ```
 //!

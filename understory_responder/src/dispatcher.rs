@@ -18,8 +18,9 @@
 //! - Process entries in order.
 //! - Rely on the router to group phases into capture → target → bubble.
 //! - [`Outcome::Stop`] aborts propagation immediately (no target/bubble if raised in capture).
-//! - Returns the last visited dispatch entry if propagation stopped early, or
-//!   `None` if the sequence completed.
+//! - Returns [`DispatchRunResult::Stopped`] with the last visited dispatch entry
+//!   if propagation stopped early, or [`DispatchRunResult::Completed`] if the
+//!   sequence completed.
 //!
 //! Dispatch sequences are typically produced by
 //! [`Router::handle_with_hits`](crate::router::Router::handle_with_hits)
@@ -53,7 +54,7 @@
 //! });
 //!
 //! // It should visit all entries and not stop early.
-//! assert!(stop_at.is_none());
+//! assert!(stop_at.is_completed());
 //! assert_eq!(handled, vec![
 //!     (Phase::Capture, 1), (Phase::Capture, 2),
 //!     (Phase::Target, 2),
@@ -99,21 +100,74 @@
 //!     }
 //! });
 //!
-//! assert!(stopped.is_some());            // we chose to stop at target
+//! assert!(stopped.is_stopped());         // we chose to stop at target
 //! assert!(ev.handled);                   // event was consumed
 //! assert!(ev.default_prevented);         // skip default action
 //! ```
 
+use core::borrow::Borrow;
+
 use crate::types::{Dispatch, Outcome};
+
+/// Result of running a responder dispatch sequence.
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub enum DispatchRunResult<D> {
+    /// The full dispatch sequence was visited.
+    #[default]
+    Completed,
+    /// A handler stopped propagation at `at`.
+    Stopped {
+        /// The dispatch item whose handler returned [`Outcome::Stop`].
+        at: D,
+    },
+}
+
+impl<D> DispatchRunResult<D> {
+    /// Returns whether dispatch visited the full sequence.
+    #[inline]
+    #[must_use]
+    pub const fn is_completed(&self) -> bool {
+        matches!(self, Self::Completed)
+    }
+
+    /// Returns whether dispatch stopped before the sequence completed.
+    #[inline]
+    #[must_use]
+    pub const fn is_stopped(&self) -> bool {
+        matches!(self, Self::Stopped { .. })
+    }
+
+    /// Returns the dispatch item that stopped propagation, if any.
+    #[inline]
+    #[must_use]
+    pub const fn stopped_at(&self) -> Option<&D> {
+        match self {
+            Self::Completed => None,
+            Self::Stopped { at } => Some(at),
+        }
+    }
+
+    /// Returns the dispatch item that stopped propagation, if any.
+    #[inline]
+    #[must_use]
+    pub fn into_stopped_at(self) -> Option<D> {
+        match self {
+            Self::Completed => None,
+            Self::Stopped { at } => Some(at),
+        }
+    }
+}
 
 /// Run a handler over a dispatch sequence and honor stop outcomes.
 ///
 /// ## Usage
 ///
 /// - Inputs:
-///   - `seq`: a responder sequence typically produced by
+///   - `seq`: any iterator of dispatch items. The current router APIs produce
+///     owned responder sequences through
 ///     [`Router::handle_with_hits`](crate::router::Router::handle_with_hits) (pointer routing)
-///     or [`Router::dispatch_for`](crate::router::Router::dispatch_for) (focus/keyboard).
+///     or [`Router::dispatch_for`](crate::router::Router::dispatch_for) (focus/keyboard);
+///     callers may pass those sequences directly or iterate over them.
 ///     If you build a sequence by hand, it should follow the same capture → target → bubble
 ///     ordering that the router emits; `run` assumes this when applying [`Outcome::Stop`].
 ///   - `event`: a mutable event payload carried across handler calls; you own its shape.
@@ -122,9 +176,9 @@ use crate::types::{Dispatch, Outcome};
 ///   - [`Outcome::Continue`]: keep going.
 ///   - [`Outcome::Stop`]: abort propagation immediately (no later phases).
 /// - Return:
-///   - `None` if the full sequence was visited.
-///   - `Some(d)` with the last visited [`Dispatch`] entry if propagation was
-///     stopped early by a handler returning [`Outcome::Stop`].
+///   - [`DispatchRunResult::Completed`] if the full sequence was visited.
+///   - [`DispatchRunResult::Stopped`] with the last visited dispatch item if
+///     propagation was stopped early by a handler returning [`Outcome::Stop`].
 ///
 /// ## Tips
 ///
@@ -159,7 +213,7 @@ use crate::types::{Dispatch, Outcome};
 /// });
 ///
 /// // Dispatcher runs to completion; default prevention is recorded on the event.
-/// assert!(stopped.is_none());
+/// assert!(stopped.is_completed());
 /// assert!(ev.default_prevented);
 /// assert_eq!(ev.seen, vec![
 ///   (Phase::Capture, 1), (Phase::Capture, 2),
@@ -188,25 +242,28 @@ use crate::types::{Dispatch, Outcome};
 /// });
 ///
 /// // Propagation aborted after the first capture; we stopped at that entry.
-/// assert!(stopped.is_some());
+/// assert_eq!(stopped.stopped_at().map(|d| d.node.0), Some(1));
 /// assert_eq!(seen, vec![(Phase::Capture, 1)]);
 /// ```
-pub fn run<'a, K, W, M, E>(
-    seq: &'a [Dispatch<K, W, M>],
+pub fn run<D, K, W, M, E>(
+    seq: impl IntoIterator<Item = D>,
     event: &mut E,
     mut handler: impl FnMut(&Dispatch<K, W, M>, &mut E) -> Outcome,
-) -> Option<&'a Dispatch<K, W, M>> {
+) -> DispatchRunResult<D>
+where
+    D: Borrow<Dispatch<K, W, M>>,
+{
     // The router already emits dispatch entries in capture → target → bubble
     // order, grouped by phase. We simply walk them in sequence and apply the
     // outcome rules.
     for d in seq {
-        match handler(d, event) {
+        match handler(d.borrow(), event) {
             Outcome::Continue => {}
             // Abort propagation immediately (spec-aligned: no target/bubble if raised in capture).
-            Outcome::Stop => return Some(d),
+            Outcome::Stop => return DispatchRunResult::Stopped { at: d },
         }
     }
-    None
+    DispatchRunResult::Completed
 }
 
 #[cfg(test)]
@@ -237,8 +294,24 @@ mod tests {
             seen.push((d.phase, d.node.0));
             Outcome::Continue
         });
-        assert!(stopped.is_none());
+        assert!(stopped.is_completed());
         assert_eq!(seen.len(), seq.len());
+    }
+
+    #[test]
+    fn owned_iterators_report_owned_stop_item() {
+        let seq = mk_seq();
+        let stopped = run(seq, &mut (), |d, _| {
+            if d.is_target() {
+                Outcome::Stop
+            } else {
+                Outcome::Continue
+            }
+        });
+
+        let stopped = stopped.into_stopped_at().unwrap();
+        assert!(stopped.is_target());
+        assert_eq!(stopped.node.0, 2);
     }
 
     #[test]
@@ -259,7 +332,7 @@ mod tests {
             Outcome::Continue
         });
 
-        assert!(stopped.is_none());
+        assert!(stopped.is_completed());
         assert!(ev.default_prevented);
         assert_eq!(
             ev.seen,
@@ -285,8 +358,8 @@ mod tests {
                 Outcome::Continue
             }
         });
-        assert!(stopped.is_some());
-        let stopped = stopped.unwrap();
+        assert!(stopped.is_stopped());
+        let stopped = stopped.into_stopped_at().unwrap();
         assert!(matches!(stopped.phase, Phase::Capture));
         assert_eq!(stopped.node.0, 1);
         // Stop during first capture aborts propagation immediately.
@@ -305,8 +378,8 @@ mod tests {
                 Outcome::Continue
             }
         });
-        assert!(stopped.is_some());
-        let stopped = stopped.unwrap();
+        assert!(stopped.is_stopped());
+        let stopped = stopped.into_stopped_at().unwrap();
         assert!(matches!(stopped.phase, Phase::Target));
         assert_eq!(stopped.node.0, 2);
         assert_eq!(
@@ -327,8 +400,8 @@ mod tests {
                 Outcome::Continue
             }
         });
-        assert!(stopped.is_some());
-        let stopped = stopped.unwrap();
+        assert!(stopped.is_stopped());
+        let stopped = stopped.into_stopped_at().unwrap();
         assert!(matches!(stopped.phase, Phase::Bubble));
         assert_eq!(stopped.node.0, 2);
         assert_eq!(
@@ -356,8 +429,8 @@ mod tests {
                 Outcome::Continue
             }
         });
-        assert!(stopped.is_some());
-        let stopped = stopped.unwrap();
+        assert!(stopped.is_stopped());
+        let stopped = stopped.into_stopped_at().unwrap();
         assert!(matches!(stopped.phase, Phase::Target));
         assert_eq!(stopped.node.0, 2);
         // Should include both capture entries and the target; bubbles are skipped.

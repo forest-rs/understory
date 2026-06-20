@@ -24,17 +24,42 @@ pub enum Phase {
     Bubble,
 }
 
+impl Phase {
+    /// Returns whether this is the capture phase.
+    #[inline]
+    #[must_use]
+    pub const fn is_capture(self) -> bool {
+        matches!(self, Self::Capture)
+    }
+
+    /// Returns whether this is the target phase.
+    #[inline]
+    #[must_use]
+    pub const fn is_target(self) -> bool {
+        matches!(self, Self::Target)
+    }
+
+    /// Returns whether this is the bubble phase.
+    #[inline]
+    #[must_use]
+    pub const fn is_bubble(self) -> bool {
+        matches!(self, Self::Bubble)
+    }
+}
+
 /// Handler outcome controlling propagation.
 ///
 /// A higher‑level dispatcher (see crate docs) can use this as the return
-/// value from per‑node handlers to decide whether to continue within a phase
-/// or abort remaining phases. Consumption / default‑prevention should be
-/// tracked on the event payload, not in this enum.
+/// value from per-node handlers to decide whether to visit the next dispatch
+/// step or abort all remaining dispatch steps. Consumption/default prevention
+/// should be tracked on the event payload, not in this enum. In particular,
+/// [`Outcome::Stop`] means "stop propagation"; it does not mean handled,
+/// consumed, canceled, or default-prevented.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Outcome {
     /// Continue within the current phase.
     Continue,
-    /// Stop propagation within the current phase.
+    /// Stop propagation after the current dispatch step.
     Stop,
 }
 
@@ -348,6 +373,27 @@ impl<K, W, M> Dispatch<K, W, M> {
         self.meta = Some(m);
         self
     }
+
+    /// Returns whether this dispatch step is in the capture phase.
+    #[inline]
+    #[must_use]
+    pub const fn is_capture(&self) -> bool {
+        self.phase.is_capture()
+    }
+
+    /// Returns whether this dispatch step is in the target phase.
+    #[inline]
+    #[must_use]
+    pub const fn is_target(&self) -> bool {
+        self.phase.is_target()
+    }
+
+    /// Returns whether this dispatch step is in the bubble phase.
+    #[inline]
+    #[must_use]
+    pub const fn is_bubble(&self) -> bool {
+        self.phase.is_bubble()
+    }
 }
 
 #[cfg(test)]
@@ -362,6 +408,30 @@ mod tests {
             DepthKey::Z(7).cmp(&DepthKey::Z(7)),
             core::cmp::Ordering::Equal
         );
+    }
+
+    #[test]
+    fn phase_predicates_match_variants() {
+        assert!(Phase::Capture.is_capture());
+        assert!(Phase::Target.is_target());
+        assert!(Phase::Bubble.is_bubble());
+        assert!(!Phase::Capture.is_bubble());
+        assert!(!Phase::Target.is_capture());
+        assert!(!Phase::Bubble.is_target());
+    }
+
+    #[test]
+    fn dispatch_phase_helpers_delegate_to_phase() {
+        let capture = Dispatch::<_, (), ()>::capture(1_u32);
+        let target = Dispatch::<_, (), ()>::target(2_u32);
+        let bubble = Dispatch::<_, (), ()>::bubble(3_u32);
+
+        assert!(capture.is_capture());
+        assert!(target.is_target());
+        assert!(bubble.is_bubble());
+        assert!(!capture.is_bubble());
+        assert!(!target.is_capture());
+        assert!(!bubble.is_target());
     }
 
     #[test]
