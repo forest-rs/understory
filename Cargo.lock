@@ -661,6 +661,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "understory_motion"
+version = "0.1.0"
+dependencies = [
+ "kurbo",
+ "peniko",
+ "understory_timing",
+]
+
+[[package]]
 name = "understory_node_graph"
 version = "0.1.0"
 dependencies = [
