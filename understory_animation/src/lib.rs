@@ -59,7 +59,9 @@ mod stack;
 mod timing;
 
 pub use effect::{CompositeOperation, Keyframe, KeyframeEffect};
-pub use playback::{AnimationPlayState, FillMode, PlaybackDirection};
+pub use playback::{
+    AnimationPlayState, AnimationPlayback, AnimationPlaybackEventKind, FillMode, PlaybackDirection,
+};
 pub use stack::{StackEffect, TargetSample, TargetStack, sample_effects};
 pub use timing::{AnimationTiming, TimingPhase, TimingSample};
 

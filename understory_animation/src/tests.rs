@@ -6,8 +6,9 @@ use alloc::vec;
 use understory_animation_timeline::{AnimationTimeline, ManualTimeline, TimelineTime};
 
 use crate::{
-    AnimationTiming, CompositeOperation, FillMode, Keyframe, KeyframeEffect, PlaybackDirection,
-    StackEffect, TargetStack, TimingPhase, sample_effects,
+    AnimationPlayState, AnimationPlayback, AnimationPlaybackEventKind, AnimationTiming,
+    CompositeOperation, FillMode, Keyframe, KeyframeEffect, PlaybackDirection, StackEffect,
+    TargetStack, TimingPhase, sample_effects,
 };
 
 const MS: u64 = 1_000_000;
@@ -148,4 +149,148 @@ fn additive_and_accumulative_effects_fold_into_current_value() {
     assert_eq!(sample.value, 1.0 + 3.0 + 15.0);
     assert_eq!(sample.active_effects, 2);
     assert_eq!(sample.unsupported_composites, 0);
+}
+
+#[test]
+fn playback_maps_timeline_time_to_local_time() {
+    let playback = AnimationPlayback::running_at(at_ms(10));
+
+    assert_eq!(playback.state(), AnimationPlayState::Running);
+    assert_eq!(playback.current_time(at_ms(10)), Some(at_ms(0)));
+    assert_eq!(playback.current_time(at_ms(35)), Some(at_ms(25)));
+}
+
+#[test]
+fn playback_pause_holds_and_play_resumes_from_hold_time() {
+    let mut playback = AnimationPlayback::running_at(at_ms(10));
+
+    playback.pause(at_ms(35));
+    assert_eq!(playback.state(), AnimationPlayState::Paused);
+    assert_eq!(playback.current_time(at_ms(80)), Some(at_ms(25)));
+
+    assert_eq!(playback.play(at_ms(80)), None);
+    assert_eq!(playback.current_time(at_ms(95)), Some(at_ms(40)));
+}
+
+#[test]
+fn playback_seek_reanchors_without_forcing_running_state() {
+    let mut playback = AnimationPlayback::new();
+
+    playback.seek(at_ms(40), at_ms(10));
+
+    assert_eq!(playback.state(), AnimationPlayState::Paused);
+    assert_eq!(playback.current_time(at_ms(100)), Some(at_ms(40)));
+
+    assert_eq!(playback.play(at_ms(100)), None);
+    assert_eq!(playback.current_time(at_ms(125)), Some(at_ms(65)));
+}
+
+#[test]
+fn playback_rate_and_reverse_preserve_local_continuity() {
+    let mut playback = AnimationPlayback::running_at(at_ms(0));
+
+    playback.set_playback_rate(2.0, at_ms(20));
+    assert_eq!(playback.current_time(at_ms(30)), Some(at_ms(40)));
+
+    playback.reverse(at_ms(30));
+    assert_eq!(playback.playback_rate(), -2.0);
+    assert_eq!(playback.current_time(at_ms(35)), Some(at_ms(30)));
+}
+
+#[test]
+fn playback_fractional_rate_does_not_sample_ahead() {
+    let mut playback = AnimationPlayback::running_at(at_ms(0));
+
+    playback.set_playback_rate(0.5, at_ms(0));
+
+    // Local time may lag by sub-nanosecond truncation, but it must not round
+    // ahead of the timeline. Early samples can finish or fire cues too soon.
+    assert_eq!(
+        playback.current_time(TimelineTime::from_duration(3)),
+        Some(TimelineTime::from_duration(1))
+    );
+}
+
+#[test]
+fn playback_completion_finishes_at_boundaries() {
+    let mut playback = AnimationPlayback::running_at(at_ms(0));
+
+    let (local_time, event) = playback
+        .sample_with_completion(at_ms(150), AnimationTiming::new(100 * MS).total_duration());
+
+    assert_eq!(local_time, Some(at_ms(100)));
+    assert_eq!(event, Some(AnimationPlaybackEventKind::Finished));
+    assert_eq!(playback.state(), AnimationPlayState::Finished);
+    assert_eq!(playback.current_time(at_ms(300)), Some(at_ms(100)));
+}
+
+#[test]
+fn playback_from_inactive_normalizes_non_positive_rate() {
+    let mut playback = AnimationPlayback::new();
+
+    playback.set_playback_rate(-2.0, at_ms(0));
+    assert_eq!(playback.playback_rate(), -2.0);
+    assert_eq!(
+        playback.play(at_ms(10)),
+        Some(AnimationPlaybackEventKind::Started)
+    );
+    assert_eq!(playback.playback_rate(), 2.0);
+    assert_eq!(playback.current_time(at_ms(20)), Some(at_ms(20)));
+
+    assert_eq!(
+        playback.cancel(),
+        Some(AnimationPlaybackEventKind::Canceled)
+    );
+    playback.set_playback_rate(0.0, at_ms(20));
+    assert_eq!(
+        playback.play(at_ms(30)),
+        Some(AnimationPlaybackEventKind::Started)
+    );
+    assert_eq!(playback.playback_rate(), 1.0);
+}
+
+#[test]
+fn playback_reverse_completion_finishes_at_zero_from_sought_endpoint() {
+    let mut playback = AnimationPlayback::new();
+
+    playback.seek(at_ms(100), at_ms(0));
+    playback.reverse(at_ms(0));
+    let (local_time, event) = playback
+        .sample_with_completion(at_ms(150), AnimationTiming::new(100 * MS).total_duration());
+
+    assert_eq!(playback.playback_rate(), -1.0);
+    assert_eq!(local_time, Some(TimelineTime::ZERO));
+    assert_eq!(event, Some(AnimationPlaybackEventKind::Finished));
+    assert_eq!(playback.state(), AnimationPlayState::Finished);
+}
+
+#[test]
+fn playback_cancel_returns_to_idle() {
+    let mut playback = AnimationPlayback::running_at(at_ms(0));
+
+    assert_eq!(
+        playback.cancel(),
+        Some(AnimationPlaybackEventKind::Canceled)
+    );
+
+    assert_eq!(playback.state(), AnimationPlayState::Idle);
+    assert_eq!(playback.current_time(at_ms(40)), None);
+    assert_eq!(playback.cancel(), None);
+}
+
+#[test]
+fn playback_cancel_from_finished_returns_to_idle() {
+    let mut playback = AnimationPlayback::running_at(at_ms(0));
+
+    assert_eq!(
+        playback.finish(at_ms(100)),
+        Some(AnimationPlaybackEventKind::Finished)
+    );
+    assert_eq!(
+        playback.cancel(),
+        Some(AnimationPlaybackEventKind::Canceled)
+    );
+
+    assert_eq!(playback.state(), AnimationPlayState::Idle);
+    assert_eq!(playback.current_time(at_ms(100)), None);
 }
