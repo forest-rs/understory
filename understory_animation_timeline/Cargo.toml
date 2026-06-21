@@ -1,0 +1,21 @@
+[package]
+name = "understory_animation_timeline"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Timeline abstractions for typed animation runtimes."
+readme = "README.md"
+keywords = ["ui", "animation", "timeline", "no_std", "understory"]
+categories = ["gui", "no-std"]
+
+[dependencies]
+understory_timing.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.docs.rs]
+default-target = "x86_64-unknown-linux-gnu"
+targets = []
