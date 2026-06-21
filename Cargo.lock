@@ -555,6 +555,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "understory_animation"
+version = "0.1.0"
+dependencies = [
+ "kurbo",
+ "understory_animation_timeline",
+ "understory_motion",
+ "understory_timing",
+]
+
+[[package]]
+name = "understory_animation_timeline"
+version = "0.1.0"
+dependencies = [
+ "understory_timing",
+]
+
+[[package]]
 name = "understory_axis"
 version = "0.1.0"
 dependencies = [
