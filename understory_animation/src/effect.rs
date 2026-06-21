@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use alloc::vec::Vec;
+use core::cmp::Ordering;
 
 use understory_motion::AnimatableValue;
 
@@ -41,9 +42,16 @@ pub struct KeyframeEffect<T> {
 }
 
 impl<T> KeyframeEffect<T> {
-    /// Creates a replacement keyframe effect from sorted keyframes.
+    /// Creates a replacement keyframe effect from keyframes.
+    ///
+    /// Keyframes are stored in ascending offset order.
     #[must_use]
-    pub fn new(keyframes: Vec<Keyframe<T>>) -> Self {
+    pub fn new(mut keyframes: Vec<Keyframe<T>>) -> Self {
+        debug_assert!(
+            keyframes.iter().all(|keyframe| keyframe.offset.is_finite()),
+            "keyframe offsets must be finite"
+        );
+        keyframes.sort_by(|a, b| a.offset.partial_cmp(&b.offset).unwrap_or(Ordering::Equal));
         Self {
             keyframes,
             composite: CompositeOperation::Replace,

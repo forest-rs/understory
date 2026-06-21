@@ -107,7 +107,10 @@ impl AnimationTiming {
         )
     }
 
-    fn active_duration(self) -> Option<TimerDuration> {
+    /// Returns the duration of the active interval, or `None` for indefinite
+    /// positive iterations.
+    #[must_use]
+    pub fn active_duration(self) -> Option<TimerDuration> {
         if self.duration == 0 || self.iterations <= 0.0 {
             return Some(0);
         }
@@ -118,6 +121,19 @@ impl AnimationTiming {
             return Some(0);
         }
         Some(f64_ceil_to_duration(self.duration as f64 * self.iterations))
+    }
+
+    /// Returns the full finite effect duration including delay and end delay.
+    ///
+    /// Returns `None` for indefinite positive iterations.
+    #[must_use]
+    pub fn total_duration(self) -> Option<TimerDuration> {
+        let active = self.active_duration()?;
+        Some(
+            self.delay
+                .saturating_add(active)
+                .saturating_add(self.end_delay),
+        )
     }
 
     fn final_iteration_progress(self) -> (u64, f64) {

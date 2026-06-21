@@ -6,8 +6,8 @@ use alloc::vec;
 use understory_animation_timeline::{AnimationTimeline, ManualTimeline, TimelineTime};
 
 use crate::{
-    AnimationTiming, CompositeOperation, FillMode, KeyframeEffect, PlaybackDirection, StackEffect,
-    TargetStack, TimingPhase,
+    AnimationTiming, CompositeOperation, FillMode, Keyframe, KeyframeEffect, PlaybackDirection,
+    StackEffect, TargetStack, TimingPhase, sample_effects,
 };
 
 const MS: u64 = 1_000_000;
@@ -66,6 +66,32 @@ fn manual_timeline_seek_samples_effect_deterministically() {
 }
 
 #[test]
+fn keyframes_are_sampled_in_offset_order() {
+    let effect = KeyframeEffect::new(vec![Keyframe::new(1.0, 10.0_f64), Keyframe::new(0.0, 0.0)]);
+
+    assert_eq!(effect.sample_at(0.25), Some(2.5));
+    assert_eq!(effect.keyframes()[0].value, 0.0);
+    assert_eq!(effect.keyframes()[1].value, 10.0);
+}
+
+#[test]
+fn stack_effect_start_time_delays_sampling() {
+    let effect = KeyframeEffect::from_values(vec![0.0_f64, 10.0]);
+    let stack_effect =
+        StackEffect::new(effect, AnimationTiming::new(100 * MS)).starting_at(at_ms(40));
+    let mut stack = TargetStack::new();
+    stack.push(stack_effect);
+
+    let before = stack.sample(&100.0, at_ms(20));
+    assert_eq!(before.value, 100.0);
+    assert_eq!(before.active_effects, 0);
+
+    let active = stack.sample(&100.0, at_ms(90));
+    assert_eq!(active.value, 5.0);
+    assert_eq!(active.active_effects, 1);
+}
+
+#[test]
 fn later_replace_effect_wins() {
     let mut stack = TargetStack::new();
     stack.push(StackEffect::new(
@@ -82,6 +108,26 @@ fn later_replace_effect_wins() {
     assert_eq!(sample.value, 150.0);
     assert_eq!(sample.active_effects, 2);
     assert_eq!(sample.unsupported_composites, 0);
+}
+
+#[test]
+fn borrowed_effect_reducer_matches_target_stack_sampling() {
+    let first = StackEffect::new(
+        KeyframeEffect::from_values(vec![10.0_f64, 20.0]),
+        AnimationTiming::new(100 * MS),
+    );
+    let second = StackEffect::new(
+        KeyframeEffect::from_values(vec![100.0_f64, 200.0]),
+        AnimationTiming::new(100 * MS),
+    );
+    let mut stack = TargetStack::new();
+    stack.push(first.clone());
+    stack.push(second.clone());
+
+    let borrowed = sample_effects(&1.0, [&first, &second], at_ms(50));
+    let owned = stack.sample(&1.0, at_ms(50));
+
+    assert_eq!(borrowed, owned);
 }
 
 #[test]
