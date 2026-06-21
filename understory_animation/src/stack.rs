@@ -15,13 +15,95 @@ pub struct StackEffect<T> {
     pub effect: KeyframeEffect<T>,
     /// Local timing for the effect.
     pub timing: AnimationTiming,
+    /// Timeline time when this effect starts.
+    pub starts_at: TimelineTime,
 }
 
 impl<T> StackEffect<T> {
     /// Creates a stack effect.
     #[must_use]
     pub const fn new(effect: KeyframeEffect<T>, timing: AnimationTiming) -> Self {
-        Self { effect, timing }
+        Self {
+            effect,
+            timing,
+            starts_at: TimelineTime::ZERO,
+        }
+    }
+
+    /// Sets the timeline time when this effect starts.
+    #[must_use]
+    pub const fn starting_at(mut self, starts_at: TimelineTime) -> Self {
+        self.starts_at = starts_at;
+        self
+    }
+
+    /// Returns the finite timeline time when this effect is complete.
+    ///
+    /// Returns `None` for indefinitely repeating effects.
+    #[must_use]
+    pub fn end_time(&self) -> Option<TimelineTime> {
+        self.timing
+            .total_duration()
+            .map(|duration| self.starts_at.saturating_add(duration))
+    }
+}
+
+impl<T: AnimatableValue> StackEffect<T> {
+    /// Samples this effect at absolute `time`.
+    #[must_use]
+    pub fn sample(&self, time: TimelineTime) -> Option<T> {
+        if time < self.starts_at {
+            return None;
+        }
+        let local = TimelineTime::from_duration(time.saturating_duration_since(self.starts_at));
+        let timing_sample = self.timing.sample(local);
+        let progress = timing_sample.eased_progress?;
+        self.effect.sample_at(progress)
+    }
+}
+
+/// Samples and composites borrowed stack effects over `underlying`.
+#[must_use]
+pub fn sample_effects<'a, T, I>(underlying: &T, effects: I, time: TimelineTime) -> TargetSample<T>
+where
+    T: AnimatableValue + 'a,
+    I: IntoIterator<Item = &'a StackEffect<T>>,
+{
+    let mut value = underlying.clone();
+    let mut active_effects = 0;
+    let mut unsupported_composites = 0;
+
+    for stack_effect in effects {
+        let Some(sampled) = stack_effect.sample(time) else {
+            continue;
+        };
+
+        active_effects += 1;
+        match stack_effect.effect.composite() {
+            CompositeOperation::Replace => {
+                value = sampled;
+            }
+            CompositeOperation::Add => {
+                if let Some(composited) = value.add(&sampled) {
+                    value = composited;
+                } else {
+                    unsupported_composites += 1;
+                }
+            }
+            CompositeOperation::Accumulate => {
+                if let Some(composited) = value.accumulate(&sampled, 1) {
+                    value = composited;
+                } else {
+                    unsupported_composites += 1;
+                }
+            }
+        }
+    }
+
+    TargetSample {
+        value,
+        active_effects,
+        unsupported_composites,
     }
 }
 
@@ -56,46 +138,7 @@ impl<T: AnimatableValue> TargetStack<T> {
     /// Samples and composites the stack over `underlying` at `time`.
     #[must_use]
     pub fn sample(&self, underlying: &T, time: TimelineTime) -> TargetSample<T> {
-        let mut value = underlying.clone();
-        let mut active_effects = 0;
-        let mut unsupported_composites = 0;
-
-        for stack_effect in &self.effects {
-            let timing_sample = stack_effect.timing.sample(time);
-            let Some(progress) = timing_sample.eased_progress else {
-                continue;
-            };
-            let Some(sampled) = stack_effect.effect.sample_at(progress) else {
-                continue;
-            };
-
-            active_effects += 1;
-            match stack_effect.effect.composite() {
-                CompositeOperation::Replace => {
-                    value = sampled;
-                }
-                CompositeOperation::Add => {
-                    if let Some(composited) = value.add(&sampled) {
-                        value = composited;
-                    } else {
-                        unsupported_composites += 1;
-                    }
-                }
-                CompositeOperation::Accumulate => {
-                    if let Some(composited) = value.accumulate(&sampled, 1) {
-                        value = composited;
-                    } else {
-                        unsupported_composites += 1;
-                    }
-                }
-            }
-        }
-
-        TargetSample {
-            value,
-            active_effects,
-            unsupported_composites,
-        }
+        sample_effects(underlying, &self.effects, time)
     }
 }
 
