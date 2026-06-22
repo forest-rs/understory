@@ -5,8 +5,11 @@ use alloc::vec::Vec;
 
 use understory_animation_timeline::TimelineTime;
 use understory_motion::AnimatableValue;
+use understory_timing::TimerDuration;
 
-use crate::{AnimationTiming, CompositeOperation, KeyframeEffect};
+use crate::{
+    AnimationTiming, CompositeOperation, KeyframeEffect, RetainedAnimationEffect, TimingSample,
+};
 
 /// One effect plus its timing inside a target stack.
 #[derive(Clone, Debug, PartialEq)]
@@ -59,6 +62,29 @@ impl<T: AnimatableValue> StackEffect<T> {
         let timing_sample = self.timing.sample(local);
         let progress = timing_sample.eased_progress?;
         self.effect.sample_at(progress)
+    }
+}
+
+impl<T> RetainedAnimationEffect for StackEffect<T> {
+    fn timing_sample_at(&self, local_time: TimelineTime) -> Option<TimingSample> {
+        if local_time < self.starts_at {
+            return None;
+        }
+        let local =
+            TimelineTime::from_duration(local_time.saturating_duration_since(self.starts_at));
+        Some(self.timing.sample(local))
+    }
+
+    fn iteration_at(&self, local_time: TimelineTime) -> Option<u64> {
+        self.timing_sample_at(local_time)?.iteration
+    }
+
+    fn total_duration(&self) -> Option<TimerDuration> {
+        self.end_time().map(TimelineTime::duration)
+    }
+
+    fn completion_iteration(&self) -> Option<u64> {
+        self.timing.completion_iteration()
     }
 }
 

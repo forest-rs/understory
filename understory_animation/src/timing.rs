@@ -136,6 +136,19 @@ impl AnimationTiming {
         )
     }
 
+    /// Returns the final iteration index reached by finite active playback.
+    ///
+    /// This is useful for retained playback bookkeeping at a natural finish,
+    /// where the ordinary timing sample may be empty because forwards fill is
+    /// disabled.
+    #[must_use]
+    pub fn completion_iteration(self) -> Option<u64> {
+        if self.active_duration()? == 0 {
+            return None;
+        }
+        Some(self.final_iteration_progress().0)
+    }
+
     fn final_iteration_progress(self) -> (u64, f64) {
         if self.iterations <= 0.0 || !self.iterations.is_finite() {
             return (0, 0.0);

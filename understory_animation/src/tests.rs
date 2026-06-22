@@ -7,8 +7,8 @@ use understory_animation_timeline::{AnimationTimeline, ManualTimeline, TimelineT
 
 use crate::{
     AnimationPlayState, AnimationPlayback, AnimationPlaybackEventKind, AnimationTiming,
-    CompositeOperation, FillMode, Keyframe, KeyframeEffect, PlaybackDirection, StackEffect,
-    TargetStack, TimingPhase, sample_effects,
+    CompositeOperation, FillMode, Keyframe, KeyframeEffect, PlaybackDirection,
+    RetainedAnimationInstance, StackEffect, TargetStack, TimingPhase, sample_effects,
 };
 
 const MS: u64 = 1_000_000;
@@ -222,6 +222,162 @@ fn playback_completion_finishes_at_boundaries() {
     assert_eq!(event, Some(AnimationPlaybackEventKind::Finished));
     assert_eq!(playback.state(), AnimationPlayState::Finished);
     assert_eq!(playback.current_time(at_ms(300)), Some(at_ms(100)));
+}
+
+#[test]
+fn retained_instance_controls_playback_continuously() {
+    let effect = StackEffect::new(
+        KeyframeEffect::from_values(vec![0.0_f64, 1.0]),
+        AnimationTiming::new(100 * MS),
+    );
+    let mut instance = RetainedAnimationInstance::new(7_u64, 3_u64, effect, at_ms(10));
+
+    assert_eq!(instance.id(), &7);
+    assert_eq!(instance.timeline(), &3);
+    assert_eq!(instance.state(), AnimationPlayState::Running);
+    assert_eq!(instance.current_time(at_ms(35)), Some(25 * MS));
+
+    assert!(instance.pause(at_ms(35)));
+    assert!(!instance.pause(at_ms(40)));
+    assert_eq!(instance.state(), AnimationPlayState::Paused);
+    assert_eq!(instance.current_time(at_ms(90)), Some(25 * MS));
+
+    assert!(instance.play(at_ms(90)));
+    assert_eq!(instance.current_time(at_ms(115)), Some(50 * MS));
+
+    assert!(instance.set_playback_rate(2.0, at_ms(115)));
+    assert_eq!(instance.current_time(at_ms(125)), Some(70 * MS));
+
+    assert!(instance.reverse(at_ms(125)));
+    assert_eq!(instance.current_time(at_ms(130)), Some(60 * MS));
+}
+
+#[test]
+fn retained_instance_reports_crossed_iterations() {
+    let timing = AnimationTiming {
+        duration: 10 * MS,
+        iterations: 5.0,
+        ..AnimationTiming::new(10 * MS)
+    };
+    let effect = StackEffect::new(KeyframeEffect::from_values(vec![0.0_f64, 1.0]), timing);
+    let mut instance = RetainedAnimationInstance::new(7_u64, 3_u64, effect, at_ms(0));
+
+    let change = instance.take_iteration_change(at_ms(35)).unwrap();
+    assert_eq!(change.previous(), Some(0));
+    assert_eq!(change.current(), 3);
+
+    let mut crossed = vec![];
+    change.for_each_crossed(|iteration| crossed.push(iteration));
+    assert_eq!(crossed, vec![1, 2, 3]);
+
+    instance.reverse(at_ms(35));
+    let reverse_change = instance.take_iteration_change(at_ms(55)).unwrap();
+    let mut reverse_crossed = vec![];
+    reverse_change.for_each_crossed(|iteration| reverse_crossed.push(iteration));
+    assert_eq!(reverse_crossed, vec![2, 1]);
+}
+
+#[test]
+fn retained_instance_reports_no_iteration_change_without_crossing() {
+    let timing = AnimationTiming {
+        duration: 10 * MS,
+        iterations: 5.0,
+        ..AnimationTiming::new(10 * MS)
+    };
+    let effect = StackEffect::new(KeyframeEffect::from_values(vec![0.0_f64, 1.0]), timing);
+    let mut instance = RetainedAnimationInstance::new(7_u64, 3_u64, effect, at_ms(0));
+
+    assert_eq!(instance.take_iteration_change(at_ms(0)), None);
+    assert_eq!(instance.take_iteration_change(at_ms(5)), None);
+}
+
+#[test]
+fn retained_instance_stack_effect_respects_start_offset() {
+    let effect = StackEffect::new(
+        KeyframeEffect::from_values(vec![0.0_f64, 1.0]),
+        AnimationTiming::new(100 * MS),
+    )
+    .starting_at(at_ms(40));
+    let mut instance = RetainedAnimationInstance::new(7_u64, 3_u64, effect, at_ms(0));
+
+    assert_eq!(instance.timing_sample(at_ms(20)), None);
+    assert_eq!(instance.take_iteration_change(at_ms(20)), None);
+    assert!(!instance.finish_if_complete(at_ms(100)));
+    assert!(instance.finish_if_complete(at_ms(140)));
+}
+
+#[test]
+fn retained_instance_play_after_finish_resets_iteration_baseline() {
+    let timing = AnimationTiming {
+        duration: 10 * MS,
+        iterations: 5.0,
+        ..AnimationTiming::new(10 * MS)
+    };
+    let effect = StackEffect::new(KeyframeEffect::from_values(vec![0.0_f64, 1.0]), timing);
+    let mut instance = RetainedAnimationInstance::new(7_u64, 3_u64, effect, at_ms(0));
+
+    assert_eq!(
+        instance.take_iteration_change(at_ms(35)),
+        Some(crate::AnimationIterationChange::new(Some(0), 3))
+    );
+    assert!(instance.finish_if_complete(at_ms(50)));
+    assert!(instance.play(at_ms(100)));
+
+    let change = instance.take_iteration_change(at_ms(110)).unwrap();
+    let mut crossed = vec![];
+    change.for_each_crossed(|iteration| crossed.push(iteration));
+    assert_eq!(crossed, vec![1]);
+}
+
+#[test]
+fn retained_instance_finish_resets_iteration_baseline_before_reverse() {
+    let timing = AnimationTiming {
+        duration: 10 * MS,
+        iterations: 5.0,
+        ..AnimationTiming::new(10 * MS)
+    };
+    let effect = StackEffect::new(KeyframeEffect::from_values(vec![0.0_f64, 1.0]), timing);
+    let mut instance = RetainedAnimationInstance::new(7_u64, 3_u64, effect, at_ms(0));
+
+    assert!(instance.finish_if_complete(at_ms(50)));
+    assert!(instance.reverse(at_ms(50)));
+
+    assert_eq!(instance.take_iteration_change(at_ms(60)), None);
+
+    let change = instance.take_iteration_change(at_ms(70)).unwrap();
+    let mut crossed = vec![];
+    change.for_each_crossed(|iteration| crossed.push(iteration));
+    assert_eq!(crossed, vec![3]);
+}
+
+#[test]
+fn retained_instance_replace_effect_resets_iteration_baseline() {
+    let timing = AnimationTiming {
+        duration: 10 * MS,
+        iterations: 5.0,
+        ..AnimationTiming::new(10 * MS)
+    };
+    let first = StackEffect::new(KeyframeEffect::from_values(vec![0.0_f64, 1.0]), timing);
+    let second = StackEffect::new(KeyframeEffect::from_values(vec![0.0_f64, 2.0]), timing);
+    let mut instance = RetainedAnimationInstance::new(7_u64, 3_u64, first, at_ms(0));
+
+    assert!(instance.take_iteration_change(at_ms(35)).is_some());
+    let _old = instance.replace_effect(second, at_ms(35));
+
+    assert_eq!(instance.take_iteration_change(at_ms(35)), None);
+}
+
+#[test]
+fn retained_instance_finishes_at_effect_total_duration() {
+    let effect = StackEffect::new(
+        KeyframeEffect::from_values(vec![0.0_f64, 1.0]),
+        AnimationTiming::new(100 * MS),
+    );
+    let mut instance = RetainedAnimationInstance::new(7_u64, 3_u64, effect, at_ms(0));
+
+    assert!(instance.finish_if_complete(at_ms(150)));
+    assert_eq!(instance.state(), AnimationPlayState::Finished);
+    assert_eq!(instance.current_time(at_ms(300)), Some(100 * MS));
 }
 
 #[test]
