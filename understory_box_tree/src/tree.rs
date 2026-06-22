@@ -4,7 +4,7 @@
 //! Core tree implementation: structure, updates, queries.
 
 use alloc::{vec, vec::Vec};
-use kurbo::{Affine, Point, Rect, RoundedRect, Shape};
+use kurbo::{Affine, Insets, Point, Rect, RoundedRect, Shape};
 use understory_index::{Backend, IndexGeneric, Key as AabbKey, backends::FlatVec};
 
 use crate::damage::Damage;
@@ -56,6 +56,7 @@ pub struct Tree<B: Backend<f64> = FlatVec<f64>> {
     pub(crate) index: IndexGeneric<f64, NodeId, B>,
     needs_commit: bool,
     dirty_roots: Vec<NodeId>,
+    pending_damage: Damage,
 }
 
 impl<B: Backend<f64> + core::fmt::Debug> core::fmt::Debug for Tree<B> {
@@ -145,6 +146,10 @@ struct WorldNode {
     world_transform: Affine,
     world_transform_inverse: Affine,
     world_bounds: Rect, // AABB of transformed (and clipped) local bounds
+    // AABB of the transformed (and clipped) hit region (`local_bounds + hit_slop`). This is what
+    // the spatial index stores, so the coarse phase of hit testing includes interaction slop.
+    // Equals `world_bounds` when `hit_slop` is zero.
+    world_hit_bounds: Rect,
     world_clip: Option<Rect>,
     depth: u16,
 }
@@ -202,6 +207,7 @@ impl Tree {
             index: IndexGeneric::new(),
             needs_commit: false,
             dirty_roots: Vec::new(),
+            pending_damage: Damage::default(),
         }
     }
 }
@@ -217,6 +223,7 @@ impl<B: Backend<f64>> Tree<B> {
             index: IndexGeneric::with_backend(backend),
             needs_commit: false,
             dirty_roots: Vec::new(),
+            pending_damage: Damage::default(),
         }
     }
 
@@ -296,6 +303,8 @@ impl<B: Backend<f64>> Tree<B> {
         for child in children {
             self.remove(child);
         }
+        let world_bounds = self.node(id).world.world_bounds;
+        push_damage_rect(&mut self.pending_damage, world_bounds);
         if let Some(key) = self.node(id).index_key {
             self.index.remove(key);
         }
@@ -389,6 +398,26 @@ impl<B: Backend<f64>> Tree<B> {
         }
     }
 
+    /// Update the node's hit slop.
+    ///
+    /// Hit slop expands (or contracts) only the [hit-test](Tree::hit_test_point) region; see
+    /// [`LocalNode::hit_slop`]. This dirties the tree. The change is propagated on the next call
+    /// to [`Tree::commit`].
+    pub fn set_hit_slop(&mut self, id: NodeId, slop: Insets) {
+        let changed = match self.node_opt_mut(id) {
+            Some(n) if n.local.hit_slop != slop => {
+                n.local.hit_slop = slop;
+                n.dirty.layout = true;
+                n.dirty.index = true;
+                true
+            }
+            _ => false,
+        };
+        if changed {
+            self.mark_dirty(id);
+        }
+    }
+
     /// Update node flags.
     ///
     /// The change takes effect immediately and does not require a [`Tree::commit`].
@@ -419,10 +448,11 @@ impl<B: Backend<f64>> Tree<B> {
 
     /// Return the world-space axis-aligned bounding box for a live node.
     ///
-    /// This is the loose AABB computed during [`Tree::commit`], after applying
-    /// local transforms and any active clips. It fully contains the transformed
-    /// bounds but may not be tight, especially under rotation or rounded clips.
-    /// This is the same AABB used for spatial indexing and rectangle queries.
+    /// This is the loose content AABB computed during [`Tree::commit`], after
+    /// applying local transforms and any active clips. It fully contains the
+    /// transformed content bounds but may not be tight, especially under
+    /// rotation or rounded clips. Rectangle and point containment queries report
+    /// this content geometry; the spatial index may store a larger hit AABB.
     /// Returns `None` for stale identifiers.
     pub fn world_bounds(&self, id: NodeId) -> Option<Rect> {
         if !self.is_alive(id) {
@@ -433,6 +463,23 @@ impl<B: Backend<f64>> Tree<B> {
             .get(id.idx())
             .and_then(|slot| slot.as_ref())
             .map(|node| node.world.world_bounds)
+    }
+
+    /// Return the world-space axis-aligned bounding box of a live node's hit region.
+    ///
+    /// This is [`world_bounds`](Tree::world_bounds) expanded by the node's
+    /// [`hit_slop`](LocalNode::hit_slop) (and clipped the same way). It is the AABB stored in the
+    /// spatial index and used as the coarse candidate set for [`hit_test_point`](Tree::hit_test_point).
+    /// With the default zero slop it equals `world_bounds`. Returns `None` for stale identifiers.
+    pub fn world_hit_bounds(&self, id: NodeId) -> Option<Rect> {
+        if !self.is_alive(id) {
+            return None;
+        }
+        self.debug_assert_committed();
+        self.nodes
+            .get(id.idx())
+            .and_then(|slot| slot.as_ref())
+            .map(|node| node.world.world_hit_bounds)
     }
 
     /// Return the local clip for a live node.
@@ -480,6 +527,21 @@ impl<B: Backend<f64>> Tree<B> {
             .map(|node| node.local.local_bounds)
     }
 
+    /// Return the hit slop for a live node.
+    ///
+    /// This is the value set through [`Tree::set_hit_slop`] (or [`LocalNode::hit_slop`] at
+    /// insertion). It does not require a [`Tree::commit`] to be observed here. Returns `None`
+    /// for stale identifiers.
+    pub fn hit_slop(&self, id: NodeId) -> Option<Insets> {
+        if !self.is_alive(id) {
+            return None;
+        }
+        self.nodes
+            .get(id.idx())
+            .and_then(|slot| slot.as_ref())
+            .map(|node| node.local.hit_slop)
+    }
+
     /// Access a node for debugging; panics if `id` is stale.
     pub(crate) fn node(&self, id: NodeId) -> &Node {
         self.nodes[id.idx()].as_ref().expect("dangling NodeId")
@@ -505,7 +567,7 @@ impl<B: Backend<f64>> Tree<B> {
         if !self.needs_commit {
             return Damage::default();
         }
-        let mut damage = Damage::default();
+        let mut damage = core::mem::take(&mut self.pending_damage);
         let mut starts = core::mem::take(&mut self.dirty_roots);
         starts.retain(|id| self.is_alive(*id));
         starts.sort_by_key(|id| (id.1, id.0));
@@ -552,11 +614,7 @@ impl<B: Backend<f64>> Tree<B> {
             self.update_world_subtree(id, parent_tf, parent_clip, depth, false, &mut damage);
         }
 
-        let idx_damage = self.index.commit();
-        if let Some(u) = idx_damage.union() {
-            let r = Rect::new(u.min_x, u.min_y, u.max_x, u.max_y);
-            damage.dirty_rects.push(r);
-        }
+        let _ = self.index.commit();
 
         self.needs_commit = false;
         damage
@@ -567,7 +625,9 @@ impl<B: Backend<f64>> Tree<B> {
     ///
     /// - `point` is interpreted in world coordinates.
     /// - Nodes must satisfy the [`QueryFilter`] and contain the point within their
-    ///   world-space bounds and clip to be eligible.
+    ///   hit region and clip to be eligible. The hit region is the node's
+    ///   `local_bounds` expanded by its [`hit_slop`](LocalNode::hit_slop); with the
+    ///   default zero slop it is exactly `local_bounds`.
     /// - Among candidates, higher `z_index` wins; if `z_index` ties, deeper nodes
     ///   in the tree win; if that also ties, the newer [`NodeId`] wins.
     ///
@@ -586,9 +646,12 @@ impl<B: Backend<f64>> Tree<B> {
                 return;
             }
 
-            // Finely test whether `point` is within the node's bounds and the node's own clip.
+            // Finely test whether `point` is within the node's hit region and the node's own
+            // clip. The hit region is `local_bounds + hit_slop`; with the default zero slop this
+            // is exactly `local_bounds`.
             let local_point = node.world.world_transform_inverse * point;
-            if !node.local.local_bounds.contains(local_point) {
+            let hit_bounds = node.local.local_bounds + node.local.hit_slop;
+            if !hit_bounds.contains(local_point) {
                 return;
             }
             if let Some(clip) = node.local.local_clip
@@ -662,7 +725,15 @@ impl<B: Backend<f64>> Tree<B> {
                 let Some(node) = self.nodes[id.idx()].as_ref() else {
                     return false;
                 };
-                filter.matches(node.local.flags)
+                if !filter.matches(node.local.flags) {
+                    return false;
+                }
+                // The index stores the hit AABB (which may include interaction slop), so re-test
+                // against the true content `world_bounds`. Visibility/intersection queries report
+                // painted content, never hit slop. This is an edge-inclusive AABB overlap, matching
+                // the spatial index's own overlap semantics.
+                let b = node.world.world_bounds;
+                b.x0 <= rect.x1 && rect.x0 <= b.x1 && b.y0 <= rect.y1 && rect.y0 <= b.y1
             })
     }
 
@@ -688,7 +759,14 @@ impl<B: Backend<f64>> Tree<B> {
                 let Some(node) = self.nodes[id.idx()].as_ref() else {
                     return false;
                 };
-                filter.matches(node.local.flags)
+                if !filter.matches(node.local.flags) {
+                    return false;
+                }
+                // The index stores the hit AABB (which may include interaction slop), so re-test
+                // against the true content `world_bounds`. This query reports painted content, not
+                // hit slop. Edge-inclusive, matching [`Aabb2D::contains_point`] semantics.
+                let b = node.world.world_bounds;
+                b.x0 <= point.x && point.x <= b.x1 && b.y0 <= point.y && point.y <= b.y1
             })
     }
 }
@@ -696,6 +774,12 @@ impl<B: Backend<f64>> Tree<B> {
 #[inline]
 fn id_is_newer(a: NodeId, b: NodeId) -> bool {
     (a.1 > b.1) || (a.1 == b.1 && a.0 > b.0)
+}
+
+fn push_damage_rect(damage: &mut Damage, rect: Rect) {
+    if rect.width() > 0.0 && rect.height() > 0.0 {
+        damage.dirty_rects.push(rect);
+    }
 }
 
 impl<B: Backend<f64>> Tree<B> {
@@ -905,6 +989,7 @@ impl<B: Backend<f64>> Tree<B> {
 
                 if needs_update_world {
                     let old_world_bounds = node.world.world_bounds;
+                    let old_world_hit_bounds = node.world.world_hit_bounds;
 
                     node.world.world_transform = current_tf * node.local.local_transform;
                     node.world.world_transform_inverse = node.world.world_transform.inverse();
@@ -928,21 +1013,34 @@ impl<B: Backend<f64>> Tree<B> {
                     node.world.world_bounds = world_bounds;
                     node.world.world_clip = world_clip;
 
+                    // The hit region is the content bounds expanded by `hit_slop`, clipped the
+                    // same way. When there is no slop it coincides with the content bounds, so we
+                    // avoid the extra transform and keep the index AABB identical to before.
+                    node.world.world_hit_bounds = if node.local.hit_slop == Insets::ZERO {
+                        world_bounds
+                    } else {
+                        let mut hit = transform_rect_bbox(
+                            node.world.world_transform,
+                            node.local.local_bounds + node.local.hit_slop,
+                        );
+                        if let Some(c) = world_clip {
+                            hit = hit.intersect(c);
+                        }
+                        hit
+                    };
+
+                    // Damage tracks painted content, which is never affected by hit slop.
                     let bounds_changed = old_world_bounds != node.world.world_bounds;
                     if bounds_changed {
-                        if old_world_bounds.width() > 0.0 && old_world_bounds.height() > 0.0 {
-                            damage.dirty_rects.push(old_world_bounds);
-                        }
-                        if node.world.world_bounds.width() > 0.0
-                            && node.world.world_bounds.height() > 0.0
-                        {
-                            damage.dirty_rects.push(node.world.world_bounds);
-                        }
+                        push_damage_rect(damage, old_world_bounds);
+                        push_damage_rect(damage, node.world.world_bounds);
                     }
 
-                    // Only touch the spatial index when the AABB changes (or for new nodes).
-                    if bounds_changed || node.index_key.is_none() {
-                        let aabb = rect_to_aabb(node.world.world_bounds);
+                    // The spatial index stores the hit AABB; only touch it when that AABB changes
+                    // (or for new nodes).
+                    let hit_bounds_changed = old_world_hit_bounds != node.world.world_hit_bounds;
+                    if hit_bounds_changed || node.index_key.is_none() {
+                        let aabb = rect_to_aabb(node.world.world_hit_bounds);
                         index_op = Some(if let Some(key) = node.index_key {
                             IndexOp::Update(key, aabb)
                         } else {
@@ -2326,5 +2424,268 @@ mod tests {
 
         let prev = tree.prev_depth_first(a).unwrap();
         assert_eq!(prev, root);
+    }
+
+    #[test]
+    fn hit_slop_expands_hit_region_only() {
+        let mut tree = Tree::new();
+        let root = tree.insert(
+            None,
+            LocalNode {
+                local_bounds: Rect::new(0.0, 0.0, 200.0, 200.0),
+                ..Default::default()
+            },
+        );
+        let button = tree.insert(
+            Some(root),
+            LocalNode {
+                local_bounds: Rect::new(50.0, 50.0, 60.0, 60.0),
+                hit_slop: Insets::uniform(10.0),
+                z_index: 1,
+                ..Default::default()
+            },
+        );
+        let _ = tree.commit();
+
+        // A point 5px outside the button's content bounds is inside the slop region and hits the
+        // button (which is on top of root by z-index).
+        let hit = tree
+            .hit_test_point(Point::new(45.0, 55.0), QueryFilter::new())
+            .unwrap();
+        assert_eq!(
+            hit.node, button,
+            "point in slop region should hit the button"
+        );
+
+        // A point inside the content bounds still hits.
+        let hit = tree
+            .hit_test_point(Point::new(55.0, 55.0), QueryFilter::new())
+            .unwrap();
+        assert_eq!(hit.node, button);
+
+        // A point beyond the slop region falls through to the root.
+        let hit = tree
+            .hit_test_point(Point::new(30.0, 55.0), QueryFilter::new())
+            .unwrap();
+        assert_eq!(
+            hit.node, root,
+            "point beyond slop should not hit the button"
+        );
+    }
+
+    #[test]
+    fn overlapping_hit_slop_uses_normal_tie_breaks() {
+        let mut tree = Tree::new();
+        let root = tree.insert(
+            None,
+            LocalNode {
+                local_bounds: Rect::new(0.0, 0.0, 200.0, 200.0),
+                ..Default::default()
+            },
+        );
+        let older = tree.insert(
+            Some(root),
+            LocalNode {
+                local_bounds: Rect::new(50.0, 50.0, 54.0, 70.0),
+                hit_slop: Insets::uniform(12.0),
+                z_index: 10,
+                ..Default::default()
+            },
+        );
+        let newer = tree.insert(
+            Some(root),
+            LocalNode {
+                local_bounds: Rect::new(70.0, 50.0, 74.0, 70.0),
+                hit_slop: Insets::uniform(12.0),
+                z_index: 0,
+                ..Default::default()
+            },
+        );
+        let _ = tree.commit();
+
+        // The point is outside both content bounds but inside both hit-slop regions.
+        let point = Point::new(62.0, 60.0);
+        assert!(!tree.local_bounds(older).unwrap().contains(point));
+        assert!(!tree.local_bounds(newer).unwrap().contains(point));
+
+        let hit = tree.hit_test_point(point, QueryFilter::new()).unwrap();
+        assert_eq!(hit.node, older, "higher z-index wins in overlapping slop");
+
+        tree.set_z_index(older, 0);
+        let hit = tree.hit_test_point(point, QueryFilter::new()).unwrap();
+        assert_eq!(
+            hit.node, newer,
+            "newer node wins when z-index and depth tie"
+        );
+    }
+
+    #[test]
+    fn hit_slop_does_not_affect_content_bounds_or_visibility_queries() {
+        let mut tree = Tree::new();
+        let node = tree.insert(
+            None,
+            LocalNode {
+                local_bounds: Rect::new(50.0, 50.0, 60.0, 60.0),
+                hit_slop: Insets::uniform(10.0),
+                ..Default::default()
+            },
+        );
+        let _ = tree.commit();
+
+        // Content bounds are unchanged by slop; the hit bounds grow by the slop.
+        assert_eq!(
+            tree.world_bounds(node).unwrap(),
+            Rect::new(50.0, 50.0, 60.0, 60.0)
+        );
+        assert_eq!(
+            tree.world_hit_bounds(node).unwrap(),
+            Rect::new(40.0, 40.0, 70.0, 70.0)
+        );
+
+        // A rectangle that only overlaps the slop region (not the content) must not yield the node.
+        let only_slop: Vec<NodeId> = tree
+            .intersect_rect(Rect::new(40.0, 40.0, 45.0, 45.0), QueryFilter::new())
+            .collect();
+        assert!(set_equality(&only_slop, &[]));
+
+        // A rectangle overlapping the content does yield it.
+        let overlaps_content: Vec<NodeId> = tree
+            .intersect_rect(Rect::new(55.0, 55.0, 58.0, 58.0), QueryFilter::new())
+            .collect();
+        assert!(set_equality(&overlaps_content, &[node]));
+
+        // containing_point ignores slop too.
+        let in_slop: Vec<NodeId> = tree
+            .containing_point(Point::new(45.0, 45.0), QueryFilter::new())
+            .collect();
+        assert!(set_equality(&in_slop, &[]));
+        let in_content: Vec<NodeId> = tree
+            .containing_point(Point::new(55.0, 55.0), QueryFilter::new())
+            .collect();
+        assert!(set_equality(&in_content, &[node]));
+    }
+
+    #[test]
+    fn hit_slop_respects_ancestor_clip() {
+        let mut tree = Tree::new();
+        // Parent clips tightly to its content; the child's slop would otherwise spill outside it.
+        let parent = tree.insert(
+            None,
+            LocalNode {
+                local_bounds: Rect::new(0.0, 0.0, 100.0, 100.0),
+                local_clip: Some(RoundedRect::from_rect(
+                    Rect::new(0.0, 0.0, 100.0, 100.0),
+                    0.0,
+                )),
+                ..Default::default()
+            },
+        );
+        let child = tree.insert(
+            Some(parent),
+            LocalNode {
+                local_bounds: Rect::new(90.0, 40.0, 100.0, 60.0),
+                hit_slop: Insets::uniform(20.0),
+                z_index: 1,
+                ..Default::default()
+            },
+        );
+        let _ = tree.commit();
+
+        // Inside the parent clip but in the child's slop: hits the child.
+        let hit = tree
+            .hit_test_point(Point::new(95.0, 35.0), QueryFilter::new())
+            .unwrap();
+        assert_eq!(hit.node, child);
+
+        // Outside the parent clip (x > 100) but still within the child's raw slop region: the
+        // ancestor clip blocks the hit, so it falls through to nothing.
+        let miss = tree.hit_test_point(Point::new(110.0, 50.0), QueryFilter::new());
+        assert!(miss.is_none(), "slop must not leak past an ancestor clip");
+
+        // The indexed hit AABB is clipped to the parent as well.
+        assert_eq!(
+            tree.world_hit_bounds(child).unwrap(),
+            Rect::new(70.0, 20.0, 100.0, 80.0)
+        );
+    }
+
+    #[test]
+    fn set_hit_slop_observes_commit_boundary() {
+        let mut tree = Tree::new();
+        let node = tree.insert(
+            None,
+            LocalNode {
+                local_bounds: Rect::new(50.0, 50.0, 60.0, 60.0),
+                ..Default::default()
+            },
+        );
+        let _ = tree.commit();
+
+        // No slop yet: a point just outside the content misses.
+        assert!(
+            tree.hit_test_point(Point::new(45.0, 55.0), QueryFilter::new())
+                .is_none()
+        );
+        assert_eq!(tree.hit_slop(node), Some(Insets::ZERO));
+
+        tree.set_hit_slop(node, Insets::uniform(10.0));
+        // The local value is observable immediately, but the query needs a commit.
+        assert_eq!(tree.hit_slop(node), Some(Insets::uniform(10.0)));
+        assert!(tree.needs_commit());
+        let _ = tree.commit();
+
+        let hit = tree
+            .hit_test_point(Point::new(45.0, 55.0), QueryFilter::new())
+            .unwrap();
+        assert_eq!(hit.node, node);
+
+        // Stale ids return None.
+        tree.remove(node);
+        assert_eq!(tree.hit_slop(node), None);
+    }
+
+    #[test]
+    fn hit_slop_change_does_not_create_paint_damage() {
+        let mut tree = Tree::new();
+        let node = tree.insert(
+            None,
+            LocalNode {
+                local_bounds: Rect::new(50.0, 50.0, 60.0, 60.0),
+                ..Default::default()
+            },
+        );
+        let _ = tree.commit();
+
+        tree.set_hit_slop(node, Insets::uniform(10.0));
+        let damage = tree.commit();
+
+        assert!(damage.dirty_rects.is_empty());
+        assert_eq!(
+            tree.world_bounds(node).unwrap(),
+            Rect::new(50.0, 50.0, 60.0, 60.0)
+        );
+        assert_eq!(
+            tree.world_hit_bounds(node).unwrap(),
+            Rect::new(40.0, 40.0, 70.0, 70.0)
+        );
+    }
+
+    #[test]
+    fn removal_damage_uses_content_bounds_not_hit_bounds() {
+        let mut tree = Tree::new();
+        let node = tree.insert(
+            None,
+            LocalNode {
+                local_bounds: Rect::new(50.0, 50.0, 60.0, 60.0),
+                hit_slop: Insets::uniform(10.0),
+                ..Default::default()
+            },
+        );
+        let _ = tree.commit();
+
+        tree.remove(node);
+        let damage = tree.commit();
+
+        assert_eq!(damage.dirty_rects, vec![Rect::new(50.0, 50.0, 60.0, 60.0)]);
     }
 }

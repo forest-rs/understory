@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 
-use kurbo::{Affine, Point, Rect};
+use kurbo::{Affine, Insets, Point, Rect};
 use understory_box_tree::{LocalNode, NodeFlags, NodeId, QueryFilter, Tree};
 use understory_event_state::hover::HoverState;
 use understory_responder::adapters::box_tree::{hits_for_rect, top_hit_for_point};
@@ -27,6 +27,7 @@ fn main() {
         local_bounds: Rect::new(0.0, 0.0, 400.0, 400.0),
         local_transform: Affine::IDENTITY,
         local_clip: None,
+        hit_slop: Insets::ZERO,
         z_index: 0,
         flags: NodeFlags::VISIBLE | NodeFlags::PICKABLE,
     };
@@ -66,6 +67,22 @@ fn main() {
     info.insert(
         child_b,
         ("B".into(), Rect::new(100.0, 100.0, 200.0, 200.0), 5),
+    );
+
+    // Child C: a narrow handle with a larger hit target than its painted bounds.
+    let child_c = bt.insert(
+        Some(root),
+        LocalNode {
+            local_bounds: Rect::new(240.0, 80.0, 244.0, 120.0),
+            hit_slop: Insets::uniform(12.0),
+            z_index: 20,
+            ..Default::default()
+        },
+    );
+    edges.entry(root).or_default().push(child_c);
+    info.insert(
+        child_c,
+        ("C handle".into(), Rect::new(240.0, 80.0, 244.0, 120.0), 20),
     );
 
     // Commit to compute world transforms/AABBs and update the spatial index.
@@ -116,6 +133,17 @@ fn main() {
     let path2 = path_from_dispatch(&dispatch2);
     let second = hover.update_path(&path2);
     println!("\n== Hover transitions (second) ==\n  {:?}", second);
+
+    // Move to a point outside C's content rect but inside its hit slop.
+    let pt3 = Point::new(232.0, 100.0);
+    let hit3 = top_hit_for_point(&bt, pt3, filter).expect("expected hit in C hit slop");
+    println!("\nQuery point #3: ({:.1}, {:.1})", pt3.x, pt3.y);
+    let dispatch3 = router.handle_with_hits(&[hit3]);
+    println!("\n== Dispatch (C hit slop @ {:.1},{:.1}) ==", pt3.x, pt3.y);
+    let _ = dispatcher::run(&dispatch3, &mut (), |d, _| {
+        println!("  {:?}  node={:?}  widget={:?}", d.phase, d.node, d.widget);
+        Outcome::Continue
+    });
 
     // Visible set example: query a viewport.
     let viewport = Rect::new(0.0, 0.0, 300.0, 300.0);

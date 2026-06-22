@@ -3,7 +3,7 @@
 
 //! Public types for the box tree: node identifiers, flags, and local geometry.
 
-use kurbo::{Affine, Rect, RoundedRect};
+use kurbo::{Affine, Insets, Rect, RoundedRect};
 
 /// Identifier for a node in the tree.
 ///
@@ -72,13 +72,40 @@ pub struct LocalNode {
     /// Local (untransformed) bounds for this node's own content.
     ///
     /// - Expressed in the node's local coordinate space, before `local_transform`.
-    /// - Used to derive the node's world-space AABB for spatial indexing and hit-testing.
+    /// - Used to derive the node's world-space content AABB for paint damage and visibility
+    ///   queries. Hit testing uses these bounds expanded by [`LocalNode::hit_slop`].
     /// - Children are **not** constrained by their parent's `local_bounds`; their bounds are
     ///   computed independently from their own `LocalNode`.
     ///
     /// For non-axis-aligned content, use a loose AABB that fully contains what is drawn; it may be
     /// larger than the tight bounding box.
     pub local_bounds: Rect,
+    /// Per-edge expansion of the node's *hit-test* region, in local coordinates.
+    ///
+    /// This is interaction slop: it grows (or, with negative values, shrinks) the area that
+    /// [hit testing](crate::Tree::hit_test_point) treats as belonging to this node, without
+    /// changing what the node draws or occupies for any other purpose. It exists so a small
+    /// visual control (a thin slider, a hairline divider, a vector path) can present a larger,
+    /// finger-friendly touch target.
+    ///
+    /// Semantics:
+    /// - The hit region is `local_bounds + hit_slop` using kurbo's
+    ///   [`Rect + Insets`](kurbo::Rect) convention, so **positive components expand outward**
+    ///   and negative components contract.
+    /// - Slop applies only to [`Tree::hit_test_point`](crate::Tree::hit_test_point). It does
+    ///   **not** affect [`world_bounds`](crate::Tree::world_bounds),
+    ///   [`intersect_rect`](crate::Tree::intersect_rect),
+    ///   [`containing_point`](crate::Tree::containing_point), visibility, or paint damage, which
+    ///   continue to use the true content `local_bounds`.
+    /// - The expanded region is still subject to this node's `local_clip` and to every ancestor
+    ///   clip, exactly like `local_bounds`. Slop does not let a node grab input outside the
+    ///   clips it lives within.
+    /// - Slop is expressed in local units and is therefore scaled and rotated along with the
+    ///   node by `local_transform`. Callers wanting a constant screen-space target should size
+    ///   the insets to undo the node's scale.
+    ///
+    /// Defaults to [`Insets::ZERO`], i.e. the hit region equals `local_bounds`.
+    pub hit_slop: Insets,
     /// Local transform from this node's coordinate space into its parent's.
     ///
     /// - Combined with ancestor transforms to produce `world_transform`.
@@ -120,6 +147,7 @@ impl Default for LocalNode {
     fn default() -> Self {
         Self {
             local_bounds: Rect::ZERO,
+            hit_slop: Insets::ZERO,
             local_transform: Affine::IDENTITY,
             local_clip: None,
             z_index: 0,
