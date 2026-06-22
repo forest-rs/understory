@@ -17,9 +17,9 @@ use kurbo::Rect;
 pub struct Damage {
     /// World-space rectangles that should be repainted or re-evaluated.
     ///
-    /// These include previous and new bounds for nodes whose world-space
-    /// rectangles changed, plus any spatial-index damage. Callers can use
-    /// this to bound paint or query traversals.
+    /// These include previous and new content bounds for nodes whose
+    /// world-space rectangles changed, plus removed node content bounds.
+    /// Callers can use this to bound paint or visibility traversals.
     pub dirty_rects: Vec<Rect>,
 }
 

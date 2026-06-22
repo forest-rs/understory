@@ -38,7 +38,9 @@ We’re standardizing on a simple separation of concerns for UI stacks.
 - Box tree: geometry/spatial indexing (this crate).
 - Render tree: display list (future crate).
 
-The box tree computes world-space AABBs from local bounds, transforms, and clips, and synchronizes them into a spatial index for fast hit testing and visibility queries.
+The box tree computes world-space content and hit AABBs from local bounds,
+hit slop, transforms, and clips, and synchronizes hit AABBs into a spatial
+index for fast hit testing and coarse visibility queries.
 This decouples scene structure from the spatial acceleration and makes debugging and incremental updates tractable.
 
 ## Not a layout engine
@@ -69,8 +71,9 @@ for details.
 ## API overview
 
 - [`Tree`]: container managing nodes and the spatial index synchronization.
-- [`LocalNode`]: per-node local data (bounds, transform, optional clip, z, flags).
-  See [`LocalNode::flags`] for visibility/picking/focusable controls.
+- [`LocalNode`]: per-node local data (bounds, hit slop, transform, optional clip, z, flags).
+  See [`LocalNode::flags`] for visibility/picking/focusable controls and
+  [`LocalNode::hit_slop`] for per-node hit-target expansion.
 - [`NodeFlags`]: visibility, picking, and focusable controls.
 - [`NodeId`]: generational handle of a node.
 - [`QueryFilter`]: restricts hit/intersect results (visible/pickable/focusable).
@@ -79,15 +82,16 @@ for details.
 Key operations:
 - [`Tree::insert`] → [`NodeId`]
 - [`Tree::set_local_transform`] / [`Tree::set_local_clip`] /
-  [`Tree::set_local_bounds`] / [`Tree::set_flags`]
+  [`Tree::set_local_bounds`] / [`Tree::set_hit_slop`] / [`Tree::set_flags`]
 - [`Tree::commit`] → damage summary; updates world data and the spatial index.
 - [`Tree::hit_test_point`] and [`Tree::intersect_rect`].
 - [`Tree::z_index`] exposes the stacking order of a live [`NodeId`].
 - [`Tree::parent_of`] returns the parent of a live [`NodeId`].
 - [`Tree::flags`] returns the [`NodeFlags`] of a live [`NodeId`].
-- [`Tree::world_transform`] / [`Tree::world_bounds`]
-  expose the local→world transform and world-space AABB for a live [`NodeId`].
-- [`Tree::local_transform`] / [`Tree::local_bounds`] /
+- [`Tree::world_transform`] / [`Tree::world_bounds`] / [`Tree::world_hit_bounds`]
+  expose the local→world transform, the world-space content AABB, and the
+  world-space hit AABB (content expanded by hit slop) for a live [`NodeId`].
+- [`Tree::local_transform`] / [`Tree::local_bounds`] / [`Tree::hit_slop`] /
   [`Tree::local_clip`] expose the node's current local geometry state for a
   live [`NodeId`].
 - [`Tree::children_of`] returns the children of a live [`NodeId`].
@@ -100,6 +104,11 @@ Key operations:
   but are sufficient to bound a paint traversal in most UIs.
 - World AABBs are loose under rotation/shear and rounded-rect clips are approximated by
   their axis-aligned bounds for acceleration; precise hit-filtering is applied where cheap.
+- Hit geometry and content geometry are kept separate. [`LocalNode::hit_slop`] expands a
+  node's hit-test target (for example to meet a minimum touch-target size) without changing
+  its painted content. Only [`Tree::hit_test_point`] honors the slop; `world_bounds`,
+  `intersect_rect`, `containing_point`, and damage continue to report true content. The
+  expanded region is still subject to the node's own clip and all ancestor clips.
 
 ## Examples
 
@@ -113,6 +122,7 @@ This crate is `no_std` and uses `alloc`.
 
 [`LocalNode`]: https://docs.rs/understory_box_tree/latest/understory_box_tree/struct.LocalNode.html
 [`LocalNode::flags`]: https://docs.rs/understory_box_tree/latest/understory_box_tree/struct.LocalNode.html#structfield.flags
+[`LocalNode::hit_slop`]: https://docs.rs/understory_box_tree/latest/understory_box_tree/struct.LocalNode.html#structfield.hit_slop
 [`NodeFlags`]: https://docs.rs/understory_box_tree/latest/understory_box_tree/struct.NodeFlags.html
 [`NodeFlags::FOCUSABLE`]: https://docs.rs/understory_box_tree/latest/understory_box_tree/struct.NodeFlags.html#associatedconstant.FOCUSABLE
 [`NodeFlags::PICKABLE`]: https://docs.rs/understory_box_tree/latest/understory_box_tree/struct.NodeFlags.html#associatedconstant.PICKABLE
@@ -123,6 +133,7 @@ This crate is `no_std` and uses `alloc`.
 [`Tree::children_of`]: https://docs.rs/understory_box_tree/latest/understory_box_tree/struct.Tree.html#method.children_of
 [`Tree::commit`]: https://docs.rs/understory_box_tree/latest/understory_box_tree/struct.Tree.html#method.commit
 [`Tree::flags`]: https://docs.rs/understory_box_tree/latest/understory_box_tree/struct.Tree.html#method.flags
+[`Tree::hit_slop`]: https://docs.rs/understory_box_tree/latest/understory_box_tree/struct.Tree.html#method.hit_slop
 [`Tree::hit_test_point`]: https://docs.rs/understory_box_tree/latest/understory_box_tree/struct.Tree.html#method.hit_test_point
 [`Tree::insert`]: https://docs.rs/understory_box_tree/latest/understory_box_tree/struct.Tree.html#method.insert
 [`Tree::intersect_rect`]: https://docs.rs/understory_box_tree/latest/understory_box_tree/struct.Tree.html#method.intersect_rect
@@ -135,8 +146,10 @@ This crate is `no_std` and uses `alloc`.
 [`Tree::set_flags`]: https://docs.rs/understory_box_tree/latest/understory_box_tree/struct.Tree.html#method.set_flags
 [`Tree::set_local_bounds`]: https://docs.rs/understory_box_tree/latest/understory_box_tree/struct.Tree.html#method.set_local_bounds
 [`Tree::set_local_clip`]: https://docs.rs/understory_box_tree/latest/understory_box_tree/struct.Tree.html#method.set_local_clip
+[`Tree::set_hit_slop`]: https://docs.rs/understory_box_tree/latest/understory_box_tree/struct.Tree.html#method.set_hit_slop
 [`Tree::set_local_transform`]: https://docs.rs/understory_box_tree/latest/understory_box_tree/struct.Tree.html#method.set_local_transform
 [`Tree::world_bounds`]: https://docs.rs/understory_box_tree/latest/understory_box_tree/struct.Tree.html#method.world_bounds
+[`Tree::world_hit_bounds`]: https://docs.rs/understory_box_tree/latest/understory_box_tree/struct.Tree.html#method.world_hit_bounds
 [`Tree::world_transform`]: https://docs.rs/understory_box_tree/latest/understory_box_tree/struct.Tree.html#method.world_transform
 [`Tree::z_index`]: https://docs.rs/understory_box_tree/latest/understory_box_tree/struct.Tree.html#method.z_index
 [`understory_index`]: https://docs.rs/understory_index/latest/understory_index/
