@@ -54,11 +54,13 @@
 extern crate alloc;
 
 mod effect;
+mod instance;
 mod playback;
 mod stack;
 mod timing;
 
 pub use effect::{CompositeOperation, Keyframe, KeyframeEffect};
+pub use instance::{AnimationIterationChange, RetainedAnimationEffect, RetainedAnimationInstance};
 pub use playback::{
     AnimationPlayState, AnimationPlayback, AnimationPlaybackEventKind, FillMode, PlaybackDirection,
 };
