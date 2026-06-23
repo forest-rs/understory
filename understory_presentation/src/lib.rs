@@ -37,6 +37,8 @@
 //! - [`Primitive`]: resolved drawing primitive stored on a presentation node.
 //! - [`SurfacePrimitive`]: resolved surface fill, border, padding, corner
 //!   shape, and shadow intent.
+//! - [`unit_brush_transform`]: common unit-square to bounds transform for
+//!   brush fills authored in unit coordinates.
 //! - [`TextPrimitive`]: umbrella for resolved text drawing intent.
 //! - [`PlainTextPrimitive`]: resolved plain-text content, foreground brush,
 //!   decorations, and `parlance`-based single-run style.
@@ -142,7 +144,7 @@ pub use primitive::{
     BackgroundLayer, Border, BorderSide, ImageFit, ImagePrimitive, ImageSlice, NineSlice, PathFill,
     PathPaintOrder, PathPrimitive, PathStroke, PlainTextPrimitive, Primitive, Shadow, SliceMode,
     SurfacePrimitive, TextAlign, TextContent, TextDecoration, TextDecorations, TextLayout,
-    TextLineHeight, TextOverflow, TextPrimitive, TextStyle,
+    TextLineHeight, TextOverflow, TextPrimitive, TextStyle, unit_brush_transform,
 };
 pub use store::{PresentationNode, PresentationStore};
 pub use understory_box_decoration::{

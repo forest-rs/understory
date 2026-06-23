@@ -90,6 +90,12 @@ pub struct PathFill {
     /// Brush used to fill the path interior.
     pub brush: Brush,
 
+    /// Optional brush-local to path-local transform.
+    ///
+    /// `None` means identity: the renderer samples the brush in path-local
+    /// coordinates without an additional brush transform.
+    pub brush_transform: Option<Affine>,
+
     /// Fill rule used to determine the path interior.
     pub rule: Fill,
 }
@@ -100,8 +106,16 @@ impl PathFill {
     pub fn new(brush: impl Into<Brush>) -> Self {
         Self {
             brush: brush.into(),
+            brush_transform: None,
             rule: Fill::NonZero,
         }
+    }
+
+    /// Sets the brush-local to path-local transform.
+    #[must_use]
+    pub fn with_brush_transform(mut self, transform: Affine) -> Self {
+        self.brush_transform = Some(transform);
+        self
     }
 
     /// Sets the fill rule.
@@ -118,6 +132,12 @@ pub struct PathStroke {
     /// Brush used to stroke the path outline.
     pub brush: Brush,
 
+    /// Optional brush-local to path-local transform.
+    ///
+    /// `None` means identity: the renderer samples the brush in path-local
+    /// coordinates without an additional brush transform.
+    pub brush_transform: Option<Affine>,
+
     /// Stroke style.
     pub stroke: Stroke,
 }
@@ -128,8 +148,16 @@ impl PathStroke {
     pub fn new(brush: impl Into<Brush>, width: f64) -> Self {
         Self {
             brush: brush.into(),
+            brush_transform: None,
             stroke: Stroke::new(width),
         }
+    }
+
+    /// Sets the brush-local to path-local transform.
+    #[must_use]
+    pub fn with_brush_transform(mut self, transform: Affine) -> Self {
+        self.brush_transform = Some(transform);
+        self
     }
 
     /// Replaces the stroke style.
@@ -170,6 +198,19 @@ mod tests {
             .stroke(PathStroke::new(Color::BLACK, 2.0));
 
         assert!(!path.is_empty());
+        assert_eq!(path.fill.as_ref().unwrap().brush_transform, None);
         assert_eq!(path.stroke.unwrap().stroke.width, 2.0);
+    }
+
+    #[test]
+    fn fill_and_stroke_can_carry_brush_transforms() {
+        let fill_transform = Affine::scale_non_uniform(8.0, 12.0);
+        let stroke_transform = Affine::translate((3.0, 5.0));
+
+        let fill = PathFill::new(Color::WHITE).with_brush_transform(fill_transform);
+        let stroke = PathStroke::new(Color::BLACK, 2.0).with_brush_transform(stroke_transform);
+
+        assert_eq!(fill.brush_transform, Some(fill_transform));
+        assert_eq!(stroke.brush_transform, Some(stroke_transform));
     }
 }

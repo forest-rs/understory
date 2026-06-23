@@ -4,6 +4,7 @@
 //! Presentation primitives.
 
 use alloc::boxed::Box;
+use peniko::kurbo::{Affine, Rect, Vec2};
 
 mod image;
 mod path;
@@ -17,6 +18,18 @@ pub use text::{
     PlainTextPrimitive, TextAlign, TextContent, TextDecoration, TextDecorations, TextLayout,
     TextLineHeight, TextOverflow, TextPrimitive, TextStyle,
 };
+
+/// Returns a brush transform that maps the unit square into `bounds`.
+///
+/// This is the common base transform for gradients or image brushes authored in
+/// unit coordinates and fitted to a node's local bounds. Callers can compose an
+/// animated transform with this value before storing it on a brush-carrying
+/// primitive.
+#[must_use]
+pub fn unit_brush_transform(bounds: Rect) -> Affine {
+    Affine::translate(Vec2::new(bounds.x0, bounds.y0))
+        * Affine::scale_non_uniform(bounds.width(), bounds.height())
+}
 
 /// Resolved drawing primitive stored on a presentation node.
 ///
@@ -146,5 +159,19 @@ impl<ImageKey> Primitive<ImageKey> {
             Self::Surface(_) | Self::Text(_) | Self::Image(_) => None,
             Self::Path(path) => Some(path.as_mut()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use peniko::kurbo::Point;
+
+    #[test]
+    fn unit_brush_transform_maps_unit_square_to_bounds() {
+        let transform = unit_brush_transform(Rect::new(10.0, 20.0, 110.0, 70.0));
+
+        assert_eq!(transform * Point::new(0.0, 0.0), Point::new(10.0, 20.0));
+        assert_eq!(transform * Point::new(1.0, 1.0), Point::new(110.0, 70.0));
     }
 }
