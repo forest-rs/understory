@@ -4,7 +4,7 @@
 use smallvec::SmallVec;
 
 use crate::{BoxDecorationGeometry, Brush, Color, CornerRadii, CornerShapes, Edges};
-use peniko::kurbo::Rect;
+use peniko::kurbo::{Affine, Rect};
 
 /// Resolved box-decoration drawing intent.
 ///
@@ -79,6 +79,12 @@ impl SurfacePrimitive {
 pub struct BackgroundLayer {
     /// Brush used to fill the node's local bounds.
     pub brush: Brush,
+
+    /// Optional brush-local to node-local transform.
+    ///
+    /// `None` means identity: the renderer samples the brush in the primitive's
+    /// local coordinate space without an additional brush transform.
+    pub brush_transform: Option<Affine>,
 }
 
 impl BackgroundLayer {
@@ -87,7 +93,15 @@ impl BackgroundLayer {
     pub fn new(brush: impl Into<Brush>) -> Self {
         Self {
             brush: brush.into(),
+            brush_transform: None,
         }
+    }
+
+    /// Sets the brush-local to node-local transform.
+    #[must_use]
+    pub fn with_brush_transform(mut self, transform: Affine) -> Self {
+        self.brush_transform = Some(transform);
+        self
     }
 }
 
@@ -168,6 +182,12 @@ pub struct BorderSide {
     /// Border brush.
     pub brush: Option<Brush>,
 
+    /// Optional brush-local to node-local transform for this side.
+    ///
+    /// `None` means identity: the renderer samples the brush in the primitive's
+    /// local coordinate space without an additional brush transform.
+    pub brush_transform: Option<Affine>,
+
     /// Border width in logical pixels.
     pub width: f64,
 }
@@ -178,8 +198,16 @@ impl BorderSide {
     pub fn new(brush: impl Into<Brush>, width: f64) -> Self {
         Self {
             brush: Some(brush.into()),
+            brush_transform: None,
             width,
         }
+    }
+
+    /// Sets the brush-local to node-local transform.
+    #[must_use]
+    pub fn with_brush_transform(mut self, transform: Affine) -> Self {
+        self.brush_transform = Some(transform);
+        self
     }
 
     /// Returns true when the side should not draw.
@@ -250,6 +278,15 @@ mod tests {
             surface.backgrounds[0].brush,
             Brush::from(Color::from_rgb8(40, 50, 60))
         );
+        assert_eq!(surface.backgrounds[0].brush_transform, None);
+    }
+
+    #[test]
+    fn background_layer_can_carry_brush_transform() {
+        let transform = Affine::scale_non_uniform(12.0, 24.0);
+        let layer = BackgroundLayer::new(Color::BLACK).with_brush_transform(transform);
+
+        assert_eq!(layer.brush_transform, Some(transform));
     }
 
     #[test]
@@ -296,6 +333,7 @@ mod tests {
                 top: BorderSide::new(Color::BLACK, 2.0),
                 right: BorderSide {
                     brush: None,
+                    brush_transform: None,
                     width: 6.0,
                 },
                 bottom: BorderSide::new(Color::BLACK, -4.0),
@@ -335,5 +373,13 @@ mod tests {
         assert_eq!(mixed.uniform_visible_side(), None);
 
         assert_eq!(Border::default().uniform_visible_side(), None);
+    }
+
+    #[test]
+    fn border_side_can_carry_brush_transform() {
+        let transform = Affine::translate((3.0, 5.0));
+        let side = BorderSide::new(Color::BLACK, 2.0).with_brush_transform(transform);
+
+        assert_eq!(side.brush_transform, Some(transform));
     }
 }

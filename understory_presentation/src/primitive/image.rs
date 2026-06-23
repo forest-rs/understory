@@ -1,7 +1,10 @@
 // Copyright 2026 the Understory Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use peniko::{ImageBrush, ImageSampler, kurbo::Insets};
+use peniko::{
+    ImageBrush, ImageSampler,
+    kurbo::{Affine, Insets},
+};
 
 /// Resolved image drawing intent.
 ///
@@ -16,6 +19,14 @@ use peniko::{ImageBrush, ImageSampler, kurbo::Insets};
 pub struct ImagePrimitive<ImageKey = u64> {
     /// Image resource and sampling parameters.
     pub brush: ImageBrush<ImageKey>,
+
+    /// Optional image-brush transform.
+    ///
+    /// `ImageFit` and [`ImageSlice`] still define the image's placement in the
+    /// primitive bounds. This optional transform is an additional renderer-facing
+    /// brush transform for animated or art-directed image sampling. `None`
+    /// preserves the placement implied by `fit` and `slice`.
+    pub brush_transform: Option<Affine>,
 
     /// How the image maps into the node bounds.
     pub fit: ImageFit,
@@ -33,9 +44,17 @@ impl<ImageKey> ImagePrimitive<ImageKey> {
                 image,
                 sampler: ImageSampler::default(),
             },
+            brush_transform: None,
             fit: ImageFit::default(),
             slice: ImageSlice::default(),
         }
+    }
+
+    /// Sets the optional image-brush transform.
+    #[must_use]
+    pub fn with_brush_transform(mut self, transform: Affine) -> Self {
+        self.brush_transform = Some(transform);
+        self
     }
 }
 
@@ -122,8 +141,17 @@ mod tests {
 
         assert_eq!(image.brush.image, "button-background");
         assert_eq!(image.brush.sampler, ImageSampler::default());
+        assert_eq!(image.brush_transform, None);
         assert_eq!(image.fit, ImageFit::Stretch);
         assert_eq!(image.slice, ImageSlice::None);
+    }
+
+    #[test]
+    fn image_primitive_can_carry_brush_transform() {
+        let transform = Affine::scale_non_uniform(64.0, 32.0);
+        let image = ImagePrimitive::new("button-background").with_brush_transform(transform);
+
+        assert_eq!(image.brush_transform, Some(transform));
     }
 
     #[test]

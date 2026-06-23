@@ -354,18 +354,22 @@ impl SurfacePropertyValues {
             border: Border {
                 top: BorderSide {
                     brush: self.border_brushes.top,
+                    brush_transform: None,
                     width: self.border_widths.top,
                 },
                 right: BorderSide {
                     brush: self.border_brushes.right,
+                    brush_transform: None,
                     width: self.border_widths.right,
                 },
                 bottom: BorderSide {
                     brush: self.border_brushes.bottom,
+                    brush_transform: None,
                     width: self.border_widths.bottom,
                 },
                 left: BorderSide {
                     brush: self.border_brushes.left,
+                    brush_transform: None,
                     width: self.border_widths.left,
                 },
             },

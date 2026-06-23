@@ -11,6 +11,7 @@ use parlance::{
 };
 
 use crate::Brush;
+use peniko::kurbo::Affine;
 
 /// Resolved text drawing intent.
 ///
@@ -66,6 +67,12 @@ pub struct PlainTextPrimitive {
 
     /// Optional foreground brush.
     pub foreground: Option<Brush>,
+
+    /// Optional brush-local to text-local transform for the foreground brush.
+    ///
+    /// `None` means identity: the lowerer samples the foreground brush in
+    /// text-local coordinates without an additional brush transform.
+    pub foreground_brush_transform: Option<Affine>,
 
     /// Resolved single-run font and typographic inputs.
     pub style: TextStyle,
@@ -322,6 +329,12 @@ pub struct TextDecoration {
 
     /// Optional decoration brush override.
     pub brush: Option<Brush>,
+
+    /// Optional brush-local to text-local transform for the decoration brush.
+    ///
+    /// `None` means identity: the lowerer samples the decoration brush in
+    /// text-local coordinates without an additional brush transform.
+    pub brush_transform: Option<Affine>,
 }
 
 /// Resolved underline and strikethrough decoration state.
@@ -552,6 +565,7 @@ mod tests {
             text.style.font_family,
             FontFamily::from(GenericFamily::SystemUi)
         );
+        assert_eq!(text.foreground_brush_transform, None);
         assert_eq!(text.style.font_width, FontWidth::NORMAL);
         assert_eq!(text.style.font_weight, FontWeight::NORMAL);
         assert!(text.style.font_features.is_empty());
@@ -630,11 +644,13 @@ mod tests {
 
     #[test]
     fn text_decoration_carries_paint_and_metrics() {
+        let transform = Affine::scale_non_uniform(2.0, 3.0);
         let decoration = TextDecoration {
             enabled: true,
             offset: Some(1.0),
             size: Some(2.0),
             brush: Some(Brush::from(crate::Color::WHITE)),
+            brush_transform: Some(transform),
         };
 
         let text = PlainTextPrimitive {
@@ -646,6 +662,19 @@ mod tests {
         };
 
         assert_eq!(text.decorations.underline, decoration);
+        assert_eq!(text.decorations.underline.brush_transform, Some(transform));
         assert!(!text.decorations.strikethrough.enabled);
+    }
+
+    #[test]
+    fn plain_text_can_carry_foreground_brush_transform() {
+        let transform = Affine::translate((4.0, 6.0));
+        let text = PlainTextPrimitive {
+            foreground: Some(Brush::from(crate::Color::WHITE)),
+            foreground_brush_transform: Some(transform),
+            ..PlainTextPrimitive::default()
+        };
+
+        assert_eq!(text.foreground_brush_transform, Some(transform));
     }
 }
