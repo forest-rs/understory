@@ -115,7 +115,7 @@ jobs:
       - name: install cargo-rdme
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-rdme
+          tool: cargo-rdme@1.5.1
 
       - name: check crate READMEs
         shell: bash
