@@ -53,6 +53,10 @@ invalidation = "0.2.0"
 parlance = { version = "0.1.0", default-features = false }
 peniko = { version = "0.6.1", default-features = false }
 smallvec = { version = "1.13.2", default-features = false }
+serde = { version = "1.0.217", default-features = false, features = [
+  "alloc",
+  "derive",
+] }
 
 # Internal crate dependencies are centralized here so path dependencies carry
 # the version requirements needed for packaging.

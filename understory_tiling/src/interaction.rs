@@ -17,6 +17,7 @@ use crate::{
 /// Pass this to [`begin_drag`] with a pointer position in a [`LayoutFrame`] to
 /// choose what kind of drag session may start from the hit region.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum DragIntent {
     /// Move the hit pane, tab, or tab group.
     Move,
@@ -28,6 +29,7 @@ pub enum DragIntent {
 /// enum for drag and resize state. The free functions also work if the host
 /// stores [`DragSession`] and [`ResizeSession`] separately.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum InteractionState {
     /// No active interaction.
     None,
@@ -43,6 +45,7 @@ pub enum InteractionState {
 /// moves, then pass it to [`commit_drag`] on pointer-up to apply the current
 /// proposal.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DragSession {
     /// Subject being dragged.
     pub subject: DragSubject,
@@ -63,6 +66,7 @@ pub struct DragSession {
 /// Stored in [`DragSession`] and echoed in overlay frames so renderers know
 /// whether they are previewing one pane, one tab, or a whole tab group.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum DragSubject {
     /// Dragging a pane.
     Pane(PaneId),
@@ -82,6 +86,7 @@ pub enum DragSubject {
 /// Stored in [`DragSession`] for embedders that need to distinguish a tab drag
 /// from pane-chrome or tab-bar gestures.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum DragSource {
     /// Drag started on a tab.
     Tab {
@@ -108,6 +113,7 @@ pub enum DragSource {
 /// pointer moves, then pass it to [`commit_resize`] to apply the proposed split
 /// shares.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ResizeSession {
     /// Split being resized.
     pub split: TileId,
@@ -131,6 +137,7 @@ pub struct ResizeSession {
 /// functions return [`DragUpdate`] and [`ResizeUpdate`], whose fields map to
 /// this shape.
 #[derive(Clone, Debug, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct InteractionFrame {
     /// Overlay geometry.
     pub overlay: OverlayFrame,
@@ -146,6 +153,7 @@ pub struct InteractionFrame {
 /// targets, ghosts, and active interaction affordances without mutating the
 /// committed [`TileTree`].
 #[derive(Clone, Debug, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct OverlayFrame {
     /// Drop targets.
     pub drop_targets: Vec<DropTargetFrame>,
@@ -164,6 +172,7 @@ pub struct OverlayFrame {
 /// Produced inside [`OverlayFrame::hit_regions`] so overlay hit testing can
 /// take precedence over the base [`LayoutFrame`] during drag/drop.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct OverlayHitRegion {
     /// Region rectangle.
     pub rect: Rect,
@@ -178,6 +187,7 @@ pub struct OverlayHitRegion {
 /// Returned in [`DropTargetFrame`] and [`OverlayFrame::active_target`] to give
 /// renderers a stable handle for highlighting one generated target.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DropTargetId(
     /// Numeric target id.
     pub u32,
@@ -189,6 +199,7 @@ pub struct DropTargetId(
 /// `rect` or `preview_rect`; commit code lowers the selected `target` into a
 /// [`TileOp`].
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DropTargetFrame {
     /// Drop target id.
     pub id: DropTargetId,
@@ -211,6 +222,7 @@ pub struct DropTargetFrame {
 /// Produced in [`OverlayFrame::ghost_rects`] when an interaction wants a simple
 /// preview rectangle instead of a full [`PreviewFrame`].
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GhostFrame {
     /// Ghost rectangle.
     pub rect: Rect,
@@ -223,6 +235,7 @@ pub struct GhostFrame {
 /// Used by [`GhostFrame`] so renderers can style valid pane/group previews and
 /// invalid targets differently.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum GhostKind {
     /// Preview for one pane.
     PreviewPane,
@@ -237,6 +250,7 @@ pub enum GhostKind {
 /// Returned in [`OverlayFrame::dragged`] from [`update_drag`] so renderers can
 /// draw the item following the pointer.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DraggedFrame {
     /// Dragged subject.
     pub subject: DragSubject,
@@ -249,6 +263,7 @@ pub struct DraggedFrame {
 /// Reserved for interactions that want to preview a complete solved layout.
 /// Current MVP updates usually return simple overlay targets instead.
 #[derive(Clone, Debug, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PreviewFrame {
     /// Preview panes.
     pub panes: Vec<PaneFrame>,
@@ -266,6 +281,7 @@ pub struct PreviewFrame {
 /// [`validate_proposal`](crate::validate_proposal) when the host wants policy
 /// validation before committing the corresponding [`TileOp`].
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Proposal {
     /// Docking or move proposal.
     Dock(DockProposal),
@@ -279,6 +295,7 @@ pub enum Proposal {
 /// mutate the tree until [`commit_drag`] or
 /// [`validate_proposal`](crate::validate_proposal) lowers it to a [`TileOp`].
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum DockProposal {
     /// Move one pane.
     MovePane {
@@ -317,6 +334,7 @@ pub enum DockProposal {
 /// Returned from [`update_resize`] and stored in [`ResizeSession`]. Commit it
 /// with [`commit_resize`] to apply the proposed split shares.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ResizeProposal {
     /// Split tile.
     pub split: TileId,
@@ -335,6 +353,7 @@ pub struct ResizeProposal {
 /// Returned by [`update_drag`] on every pointer move. Render `overlay`, inspect
 /// `proposal`, and leave the committed tree untouched until commit.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DragUpdate {
     /// Current proposal.
     pub proposal: Option<DockProposal>,
@@ -350,6 +369,7 @@ pub struct DragUpdate {
 /// overlay immediately and choose whether to commit the proposal live or on
 /// pointer-up.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ResizeUpdate {
     /// Current proposal.
     pub proposal: Option<ResizeProposal>,
@@ -364,6 +384,7 @@ pub struct ResizeUpdate {
 /// Store this in [`ResizeOptions`] to describe how the embedding layer plans to
 /// commit proposals. The core still returns proposals either way.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum CommitMode {
     /// Commit on every pointer move.
     OnEveryMove,
@@ -376,6 +397,7 @@ pub enum CommitMode {
 /// Construct this and pass it to [`update_resize`] to describe host resize
 /// policy and geometry constraints.
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ResizeOptions {
     /// Minimum pane size.
     ///
@@ -390,6 +412,7 @@ pub struct ResizeOptions {
 /// Construct this and pass it to [`update_drag`] or [`drop_targets_for_drag`] to
 /// control which targets are generated for a drag session.
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DragOptions {
     /// Fraction of a tile edge used for split targets.
     ///

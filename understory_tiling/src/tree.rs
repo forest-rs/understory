@@ -19,6 +19,7 @@ use crate::{
 /// with [`TileTree::apply`], and call [`TileTree::layout`] whenever the host
 /// needs a fresh [`LayoutFrame`] for rendering, hit testing, or interactions.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TileTree {
     root: TileId,
     revision: Revision,
@@ -26,6 +27,7 @@ pub struct TileTree {
 }
 
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 struct NodeSlot {
     node: Option<TileNode>,
 }

@@ -407,3 +407,79 @@ fn commit_proposal_applies_validated_operation() {
     };
     assert_eq!(tabs.panes, vec![PaneId(2), PaneId(1)]);
 }
+
+#[cfg(feature = "serde")]
+#[test]
+fn serde_covers_public_data_types() {
+    fn assert_serde<T>()
+    where
+        T: serde::Serialize + for<'de> serde::Deserialize<'de>,
+    {
+    }
+
+    assert_serde::<TileId>();
+    assert_serde::<PaneId>();
+    assert_serde::<SurfaceId>();
+    assert_serde::<Revision>();
+
+    assert_serde::<Axis>();
+    assert_serde::<Placement>();
+    assert_serde::<TabBarPlacement>();
+    assert_serde::<LayoutConstraints>();
+    assert_serde::<SplitConstraints>();
+    assert_serde::<TileNode>();
+    assert_serde::<SplitNode>();
+    assert_serde::<TabNode>();
+    assert_serde::<PaneNode>();
+    assert_serde::<SurfaceKind>();
+    assert_serde::<TileSurface>();
+    assert_serde::<LayoutInput>();
+    assert_serde::<TileTree>();
+
+    assert_serde::<LayoutFrame>();
+    assert_serde::<PaneFrame>();
+    assert_serde::<TabBarFrame>();
+    assert_serde::<TabFrame>();
+    assert_serde::<SplitHandleFrame>();
+    assert_serde::<FrameItemId>();
+    assert_serde::<HitRegion>();
+    assert_serde::<HitKind>();
+
+    assert_serde::<DockTarget>();
+    assert_serde::<TileOp>();
+    assert_serde::<TileError>();
+    assert_serde::<LayoutSnapshot>();
+    assert_serde::<RestoreOptions>();
+    assert_serde::<RepairReport>();
+    assert_serde::<RepairAction>();
+
+    assert_serde::<PaneCapabilities>();
+    assert_serde::<EdgeSet>();
+    assert_serde::<ZoneSet>();
+    assert_serde::<DockPolicyData>();
+    assert_serde::<ValidatedProposal>();
+
+    assert_serde::<DragIntent>();
+    assert_serde::<InteractionState>();
+    assert_serde::<DragSession>();
+    assert_serde::<DragSubject>();
+    assert_serde::<DragSource>();
+    assert_serde::<ResizeSession>();
+    assert_serde::<InteractionFrame>();
+    assert_serde::<OverlayFrame>();
+    assert_serde::<OverlayHitRegion>();
+    assert_serde::<DropTargetId>();
+    assert_serde::<DropTargetFrame>();
+    assert_serde::<GhostFrame>();
+    assert_serde::<GhostKind>();
+    assert_serde::<DraggedFrame>();
+    assert_serde::<PreviewFrame>();
+    assert_serde::<Proposal>();
+    assert_serde::<DockProposal>();
+    assert_serde::<ResizeProposal>();
+    assert_serde::<DragUpdate>();
+    assert_serde::<ResizeUpdate>();
+    assert_serde::<CommitMode>();
+    assert_serde::<ResizeOptions>();
+    assert_serde::<DragOptions>();
+}

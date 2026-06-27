@@ -87,6 +87,8 @@ assert!(hit_test(&frame, Point::new(10.0, 10.0)).is_some());
 
 This crate is `no_std` and uses `alloc` when built without default features.
 Enable the `libm` feature for no-std targets that need Kurbo geometry math.
+Enable the `serde` feature to serialize layout trees, snapshots, frames,
+policy data, and interaction proposals.
 
 <!-- cargo-rdme end -->
 

@@ -13,6 +13,7 @@ use crate::{Axis, LayoutSnapshot, PaneId, Placement, Rect, TileId};
 /// semantic destination; layout code later turns the committed tree into
 /// geometry.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum DockTarget {
     /// Root-level target.
     Root,
@@ -56,6 +57,7 @@ pub enum DockTarget {
 /// [`commit_resize`](crate::commit_resize) also return the operation they
 /// applied so callers can log, undo, or mirror the semantic change.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TileOp {
     /// Activate a pane within its tab group.
     ActivatePane {
@@ -136,6 +138,7 @@ pub enum TileOp {
 /// commits, proposal validation, and snapshot restore when an id, target,
 /// policy, or interaction revision is invalid.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TileError {
     /// The operation referenced a missing tile.
     InvalidTileId,
