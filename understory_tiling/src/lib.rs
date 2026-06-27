@@ -110,8 +110,8 @@ pub use model::{
 };
 pub use ops::{DockTarget, TileError, TileOp};
 pub use policy::{
-    DockPolicyData, EdgeSet, PaneCapabilities, ValidatedProposal, ZoneSet, commit_proposal,
-    validate_proposal,
+    DockPolicyData, EdgeSet, PaneCapabilities, ProposalValidationInput, ValidatedProposal, ZoneSet,
+    commit_proposal, validate_proposal,
 };
 pub use snapshot::{LayoutSnapshot, RepairAction, RepairReport, RestoreOptions, restore_snapshot};
 pub use tree::TileTree;

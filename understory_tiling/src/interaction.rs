@@ -7,7 +7,7 @@ use core::cmp::Ordering;
 
 use crate::Placement;
 use crate::frame::hit_test;
-use crate::util::rect_distance;
+use crate::util::{major_length, major_size, rect_distance, split_min_major};
 use crate::{
     Axis, DockTarget, HitKind, LayoutFrame, LayoutInput, PaneFrame, PaneId, Point, Rect, Revision,
     Size, SplitChildFrame, SplitHandleFrame, TabBarFrame, TabFrame, TileError, TileId, TileNode,
@@ -1150,7 +1150,8 @@ fn resize_proposal_from_frame(
         return None;
     }
 
-    let min_major = resize_min_major(split.children.len(), split, resize.axis, options);
+    let fallback_min_major = major_size(options.min_pane_size, resize.axis);
+    let min_major = split_min_major(split.children.len(), &split.constraints, fallback_min_major);
     let min_left = min_major[resize.handle];
     let min_right = min_major[resize.handle + 1];
     let lower = min_left - left_length;
@@ -1228,33 +1229,6 @@ fn split_child_frames(frame: &LayoutFrame, split: TileId) -> Vec<SplitChildFrame
         .collect::<Vec<_>>();
     children.sort_by_key(|child| child.index);
     children
-}
-
-fn resize_min_major(
-    count: usize,
-    split: &crate::SplitNode,
-    axis: Axis,
-    options: &ResizeOptions,
-) -> Vec<f64> {
-    let fallback = match axis {
-        Axis::Horizontal => options.min_pane_size.width,
-        Axis::Vertical => options.min_pane_size.height,
-    };
-    (0..count)
-        .map(
-            |index| match split.constraints.min_major.get(index).copied() {
-                Some(minimum) if minimum.is_finite() && minimum >= 0.0 => fallback.max(minimum),
-                _ => fallback,
-            },
-        )
-        .collect()
-}
-
-fn major_length(rect: Rect, axis: Axis) -> f64 {
-    match axis {
-        Axis::Horizontal => rect.width(),
-        Axis::Vertical => rect.height(),
-    }
 }
 
 fn handle_thickness(rect: Rect, axis: Axis) -> f64 {

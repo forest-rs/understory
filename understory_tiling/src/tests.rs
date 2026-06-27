@@ -457,6 +457,96 @@ fn resize_update_clamps_to_min_pane_size() {
 }
 
 #[test]
+fn validate_resize_requires_frame_context() {
+    let mut tree = TileTree::single_pane(PaneId(1));
+    tree.apply(TileOp::SplitPane {
+        pane: PaneId(1),
+        axis: Axis::Horizontal,
+        new_pane: PaneId(2),
+        placement: Placement::After,
+        share: 0.5,
+    })
+    .unwrap();
+
+    let result = validate_proposal(ProposalValidationInput::new(
+        &tree,
+        Proposal::Resize(ResizeProposal {
+            split: tree.root(),
+            handle: 0,
+            delta: 50.0,
+            new_shares: vec![195.0, 95.0],
+        }),
+        &DockPolicyData::default(),
+    ));
+
+    assert_eq!(result.unwrap_err(), TileError::InvalidOperation);
+}
+
+#[test]
+fn validate_resize_rejects_min_size_violation() {
+    let mut tree = TileTree::single_pane(PaneId(1));
+    tree.apply(TileOp::SplitPane {
+        pane: PaneId(1),
+        axis: Axis::Horizontal,
+        new_pane: PaneId(2),
+        placement: Placement::After,
+        share: 0.5,
+    })
+    .unwrap();
+    let frame = tree.layout(input());
+
+    let result = validate_proposal(
+        ProposalValidationInput::new(
+            &tree,
+            Proposal::Resize(ResizeProposal {
+                split: tree.root(),
+                handle: 0,
+                delta: 135.0,
+                new_shares: vec![280.0, 10.0],
+            }),
+            &DockPolicyData::default(),
+        )
+        .with_frame(&frame),
+    );
+
+    assert_eq!(result.unwrap_err(), TileError::InvalidOperation);
+}
+
+#[test]
+fn validate_resize_accepts_frame_checked_proposal() {
+    let mut tree = TileTree::single_pane(PaneId(1));
+    tree.apply(TileOp::SplitPane {
+        pane: PaneId(1),
+        axis: Axis::Horizontal,
+        new_pane: PaneId(2),
+        placement: Placement::After,
+        share: 0.5,
+    })
+    .unwrap();
+    let frame = tree.layout(input());
+    let mut resize = begin_resize(&frame, Point::new(150.0, 100.0)).unwrap();
+    let update = update_resize(
+        &tree,
+        &frame,
+        &mut resize,
+        Point::new(200.0, 100.0),
+        &ResizeOptions::default(),
+    );
+
+    let validated = validate_proposal(
+        ProposalValidationInput::new(
+            &tree,
+            Proposal::Resize(update.proposal.unwrap()),
+            &DockPolicyData::default(),
+        )
+        .with_frame(&frame),
+    )
+    .unwrap();
+
+    assert!(matches!(validated.op, TileOp::SetSplitShares { .. }));
+}
+
+#[test]
 fn tab_insert_threshold_controls_reorder_index() {
     let tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
     let frame = tree.layout(input());
@@ -516,7 +606,7 @@ fn validate_proposal_rejects_locked_layout() {
         ..DockPolicyData::default()
     };
 
-    let result = validate_proposal(
+    let result = validate_proposal(ProposalValidationInput::new(
         &tree,
         Proposal::Dock(DockProposal::ReorderTab {
             group,
@@ -524,7 +614,7 @@ fn validate_proposal_rejects_locked_layout() {
             index: 0,
         }),
         &policy,
-    );
+    ));
 
     assert_eq!(result.unwrap_err(), TileError::PolicyRejected);
 }
@@ -533,7 +623,7 @@ fn validate_proposal_rejects_locked_layout() {
 fn validate_proposal_rejects_invalid_target() {
     let tree = TileTree::single_pane(PaneId(1));
 
-    let result = validate_proposal(
+    let result = validate_proposal(ProposalValidationInput::new(
         &tree,
         Proposal::Dock(DockProposal::MovePane {
             pane: PaneId(1),
@@ -543,7 +633,7 @@ fn validate_proposal_rejects_invalid_target() {
             },
         }),
         &DockPolicyData::default(),
-    );
+    ));
 
     assert_eq!(result.unwrap_err(), TileError::InvalidTileId);
 }
@@ -568,14 +658,14 @@ fn validate_proposal_rejects_disallowed_tab_zone() {
         ..DockPolicyData::default()
     };
 
-    let result = validate_proposal(
+    let result = validate_proposal(ProposalValidationInput::new(
         &tree,
         Proposal::Dock(DockProposal::MovePane {
             pane: PaneId(2),
             target: DockTarget::TabInto { group, index: None },
         }),
         &policy,
-    );
+    ));
 
     assert_eq!(result.unwrap_err(), TileError::PolicyRejected);
 }
@@ -592,7 +682,7 @@ fn validate_proposal_rejects_disallowed_split_edge() {
         ..DockPolicyData::default()
     };
 
-    let result = validate_proposal(
+    let result = validate_proposal(ProposalValidationInput::new(
         &tree,
         Proposal::Dock(DockProposal::MovePane {
             pane: PaneId(2),
@@ -604,7 +694,7 @@ fn validate_proposal_rejects_disallowed_split_edge() {
             },
         }),
         &policy,
-    );
+    ));
 
     assert_eq!(result.unwrap_err(), TileError::PolicyRejected);
 }
@@ -614,7 +704,7 @@ fn commit_proposal_applies_validated_operation() {
     let mut tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
     let group = tree.root();
 
-    let proposal = validate_proposal(
+    let proposal = validate_proposal(ProposalValidationInput::new(
         &tree,
         Proposal::Dock(DockProposal::ReorderTab {
             group,
@@ -622,7 +712,7 @@ fn commit_proposal_applies_validated_operation() {
             index: 0,
         }),
         &DockPolicyData::default(),
-    )
+    ))
     .unwrap();
     let Some(TileNode::Tabs(tabs)) = tree.node(group) else {
         panic!("group should remain tabs");

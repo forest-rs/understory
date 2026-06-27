@@ -6,7 +6,8 @@ use alloc::vec::Vec;
 
 use crate::RepairAction;
 use crate::util::{
-    is_valid_split_fraction, repaired_shares, solve_lengths_with_min, split_tab_bar, tab_rects,
+    is_valid_split_fraction, repaired_shares, solve_lengths_with_min, split_min_major,
+    split_tab_bar, tab_rects,
 };
 use crate::{
     Axis, DockTarget, FrameItemId, HitKind, HitRegion, LayoutFrame, LayoutInput, PaneFrame, PaneId,
@@ -910,13 +911,4 @@ impl TileTree {
             None => 0,
         }
     }
-}
-
-fn split_min_major(count: usize, constraints: &SplitConstraints, fallback: f64) -> Vec<f64> {
-    (0..count)
-        .map(|index| match constraints.min_major.get(index).copied() {
-            Some(minimum) if minimum.is_finite() && minimum >= 0.0 => fallback.max(minimum),
-            _ => fallback,
-        })
-        .collect()
 }
