@@ -63,6 +63,60 @@ pub struct DragSession {
     pub proposal: Option<DockProposal>,
 }
 
+/// Pending drag gesture before the movement threshold is crossed.
+///
+/// Returned by [`begin_pending_drag`] on pointer-down. Pass it to
+/// [`PendingDrag::update`] on pointer movement; it returns a [`DragSession`]
+/// only after the pointer has moved at least `threshold` from the origin. If the
+/// pointer is released first, the host can treat the gesture as a click.
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct PendingDrag {
+    session: DragSession,
+    threshold: f64,
+}
+
+impl PendingDrag {
+    /// Returns the pointer-down origin.
+    #[must_use]
+    pub const fn origin(&self) -> Point {
+        self.session.origin
+    }
+
+    /// Returns the movement threshold in logical pixels.
+    #[must_use]
+    pub const fn threshold(&self) -> f64 {
+        self.threshold
+    }
+
+    /// Returns the drag subject that would be started.
+    #[must_use]
+    pub const fn subject(&self) -> DragSubject {
+        self.session.subject
+    }
+
+    /// Returns whether `point` crosses this pending drag's threshold.
+    #[must_use]
+    pub fn is_ready(&self, point: Point) -> bool {
+        debug_assert!(point.is_finite(), "point must be finite");
+        drag_distance_squared(self.session.origin, point) >= self.threshold * self.threshold
+    }
+
+    /// Returns a real drag session when `point` crosses the threshold.
+    ///
+    /// The returned session has the original pointer-down origin and the
+    /// supplied `point` as its current position.
+    #[must_use]
+    pub fn update(&self, point: Point) -> Option<DragSession> {
+        if !self.is_ready(point) {
+            return None;
+        }
+        let mut session = self.session.clone();
+        session.current = point;
+        Some(session)
+    }
+}
+
 /// Subject of a drag.
 ///
 /// Stored in [`DragSession`] and echoed in overlay frames so renderers know
@@ -541,6 +595,29 @@ pub fn begin_drag(frame: &LayoutFrame, point: Point, intent: DragIntent) -> Opti
         }),
         _ => None,
     }
+}
+
+/// Starts a pending drag from a frame hit.
+///
+/// Call this on pointer-down when the host needs to distinguish click from drag.
+/// If [`PendingDrag::update`] never returns a [`DragSession`] before pointer-up,
+/// the host can run its click behavior instead.
+#[must_use]
+pub fn begin_pending_drag(
+    frame: &LayoutFrame,
+    point: Point,
+    intent: DragIntent,
+    threshold: f64,
+) -> Option<PendingDrag> {
+    debug_assert!(point.is_finite(), "point must be finite");
+    debug_assert!(
+        threshold.is_finite() && threshold >= 0.0,
+        "drag threshold must be finite and non-negative",
+    );
+    Some(PendingDrag {
+        session: begin_drag(frame, point, intent)?,
+        threshold,
+    })
 }
 
 /// Updates a drag session.
@@ -1268,4 +1345,10 @@ fn tab_bar_thickness(frame: &LayoutFrame) -> f64 {
             crate::TabBarPlacement::Hidden => 0.0,
         })
         .fold(0.0, f64::max)
+}
+
+fn drag_distance_squared(origin: Point, point: Point) -> f64 {
+    let dx = point.x - origin.x;
+    let dy = point.y - origin.y;
+    dx * dx + dy * dy
 }
