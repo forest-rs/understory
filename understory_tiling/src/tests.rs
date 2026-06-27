@@ -47,6 +47,65 @@ fn split_pane_creates_two_panes_and_handle() {
 }
 
 #[test]
+fn frame_diff_reports_added_and_resized_items() {
+    let mut tree = TileTree::single_pane(PaneId(1));
+    let before = tree.layout(input());
+    tree.apply(TileOp::SplitPane {
+        pane: PaneId(1),
+        axis: Axis::Horizontal,
+        new_pane: PaneId(2),
+        placement: Placement::After,
+        share: 0.5,
+    })
+    .unwrap();
+    let after = tree.layout(input());
+
+    let diff = diff_frames(&before, &after);
+
+    assert!(diff.items.iter().any(|item| {
+        item.item == FrameItemId::Pane(PaneId(1)) && item.change == FrameChange::Resized
+    }));
+    assert!(diff.items.iter().any(|item| {
+        item.item == FrameItemId::Pane(PaneId(2)) && item.change == FrameChange::Added
+    }));
+    assert!(diff.items.iter().any(|item| matches!(
+        item,
+        FrameItemDiff {
+            item: FrameItemId::SplitHandle { handle: 0, .. },
+            change: FrameChange::Added,
+            ..
+        }
+    )));
+}
+
+#[test]
+fn frame_diff_reports_moved_and_resized_items() {
+    let mut tree = TileTree::single_pane(PaneId(1));
+    tree.apply(TileOp::SplitPane {
+        pane: PaneId(1),
+        axis: Axis::Horizontal,
+        new_pane: PaneId(2),
+        placement: Placement::After,
+        share: 0.5,
+    })
+    .unwrap();
+    let before = tree.layout(input());
+
+    tree.apply(TileOp::SetSplitShares {
+        split: tree.root(),
+        shares: vec![2.0, 1.0],
+    })
+    .unwrap();
+    let after = tree.layout(input());
+
+    let diff = diff_frames(&before, &after);
+
+    assert!(diff.items.iter().any(|item| {
+        item.item == FrameItemId::Pane(PaneId(2)) && item.change == FrameChange::MovedAndResized
+    }));
+}
+
+#[test]
 fn tabs_emit_bar_tabs_and_active_pane() {
     let tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
     let frame = tree.layout(input());
@@ -932,6 +991,9 @@ fn serde_covers_public_data_types() {
     assert_serde::<TileTree>();
 
     assert_serde::<LayoutFrame>();
+    assert_serde::<FrameDiff>();
+    assert_serde::<FrameItemDiff>();
+    assert_serde::<FrameChange>();
     assert_serde::<PaneFrame>();
     assert_serde::<TabBarFrame>();
     assert_serde::<TabFrame>();
