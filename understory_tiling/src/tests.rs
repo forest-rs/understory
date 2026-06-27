@@ -230,6 +230,31 @@ fn drag_update_proposes_move() {
 }
 
 #[test]
+fn drag_update_returns_preview_when_layout_input_is_provided() {
+    let mut tree = TileTree::single_pane(PaneId(1));
+    tree.apply(TileOp::SplitPane {
+        pane: PaneId(1),
+        axis: Axis::Horizontal,
+        new_pane: PaneId(2),
+        placement: Placement::After,
+        share: 0.5,
+    })
+    .unwrap();
+    let frame = tree.layout(input());
+    let mut drag = begin_drag(&frame, Point::new(20.0, 20.0), DragIntent::Move).unwrap();
+    let options = DragOptions {
+        preview_layout: Some(input()),
+        ..DragOptions::default()
+    };
+
+    let update = update_drag(&tree, &frame, &mut drag, Point::new(290.0, 50.0), &options);
+
+    let preview = update.preview.unwrap();
+    assert_eq!(preview.panes.len(), 2);
+    assert_eq!(preview.split_handles.len(), 1);
+}
+
+#[test]
 fn drag_local_pane_edge_target_wins_over_root_target() {
     let mut tree = TileTree::single_pane(PaneId(1));
     tree.apply(TileOp::SplitPane {
