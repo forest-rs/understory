@@ -230,16 +230,30 @@ fn drag_update_proposes_move() {
 }
 
 #[test]
-fn drag_root_edge_target_wins_over_pane_edge_target() {
-    let tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
+fn drag_local_pane_edge_target_wins_over_root_target() {
+    let mut tree = TileTree::single_pane(PaneId(1));
+    tree.apply(TileOp::SplitPane {
+        pane: PaneId(1),
+        axis: Axis::Horizontal,
+        new_pane: PaneId(2),
+        placement: Placement::After,
+        share: 0.5,
+    })
+    .unwrap();
     let frame = tree.layout(input());
-    let mut drag = begin_drag(&frame, Point::new(225.0, 10.0), DragIntent::Move).unwrap();
+    let target_tile = frame
+        .panes
+        .iter()
+        .find(|pane| pane.pane == PaneId(2))
+        .unwrap()
+        .tile;
+    let mut drag = begin_drag(&frame, Point::new(20.0, 100.0), DragIntent::Move).unwrap();
 
     let update = update_drag(
         &tree,
         &frame,
         &mut drag,
-        Point::new(5.0, 100.0),
+        Point::new(200.0, 5.0),
         &DragOptions::default(),
     );
 
@@ -248,17 +262,19 @@ fn drag_root_edge_target_wins_over_pane_edge_target() {
         Some(DockProposal::MovePane {
             target: DockTarget::Split {
                 tile,
-                axis: Axis::Horizontal,
+                axis: Axis::Vertical,
                 placement: Placement::Before,
                 ..
             },
             ..
-        }) if tile == tree.root()
+        }) if tile == target_tile
     ));
+    assert!(update.candidates.len() > update.overlay.drop_targets.len());
+    assert_eq!(update.overlay.drop_targets.len(), 1);
     assert_eq!(
         update.overlay.ghost_rects,
         vec![GhostFrame {
-            rect: Rect::new(0.0, 0.0, 150.0, 200.0),
+            rect: Rect::new(155.0, 0.0, 300.0, 100.0),
             kind: GhostKind::PreviewPane,
         }]
     );
@@ -372,20 +388,9 @@ fn unsupported_tab_group_drag_targets_are_invalid() {
 
     assert!(update.proposal.is_none());
     assert!(update.overlay.active_target.is_none());
-    assert!(
-        update
-            .overlay
-            .drop_targets
-            .iter()
-            .all(|target| !target.accepts)
-    );
-    assert_eq!(
-        update.overlay.ghost_rects,
-        vec![GhostFrame {
-            rect: Rect::new(0.0, 0.0, 150.0, 200.0),
-            kind: GhostKind::Invalid,
-        }]
-    );
+    assert!(update.candidates.is_empty());
+    assert!(update.overlay.drop_targets.is_empty());
+    assert!(update.overlay.ghost_rects.is_empty());
 }
 
 #[test]
