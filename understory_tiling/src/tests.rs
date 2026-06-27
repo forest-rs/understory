@@ -248,3 +248,134 @@ fn stale_drag_commit_is_rejected() {
         Err(TileError::StaleInteraction)
     ));
 }
+
+#[test]
+fn validate_proposal_rejects_locked_layout() {
+    let tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
+    let group = tree.root();
+    let policy = DockPolicyData {
+        locked_layout: true,
+        ..DockPolicyData::default()
+    };
+
+    let result = validate_proposal(
+        &tree,
+        Proposal::Dock(DockProposal::ReorderTab {
+            group,
+            pane: PaneId(2),
+            index: 0,
+        }),
+        &policy,
+    );
+
+    assert_eq!(result.unwrap_err(), TileError::PolicyRejected);
+}
+
+#[test]
+fn validate_proposal_rejects_invalid_target() {
+    let tree = TileTree::single_pane(PaneId(1));
+
+    let result = validate_proposal(
+        &tree,
+        Proposal::Dock(DockProposal::MovePane {
+            pane: PaneId(1),
+            target: DockTarget::TabInto {
+                group: TileId(999),
+                index: None,
+            },
+        }),
+        &DockPolicyData::default(),
+    );
+
+    assert_eq!(result.unwrap_err(), TileError::InvalidTileId);
+}
+
+#[test]
+fn validate_proposal_rejects_disallowed_tab_zone() {
+    let mut tree = TileTree::new(TileNode::tabs(vec![PaneId(1)]));
+    let group = tree.root();
+    tree.apply(TileOp::SplitPane {
+        pane: PaneId(1),
+        axis: Axis::Horizontal,
+        new_pane: PaneId(2),
+        placement: Placement::After,
+        share: 0.5,
+    })
+    .unwrap();
+    let policy = DockPolicyData {
+        default_pane_capabilities: PaneCapabilities {
+            allowed_zones: ZoneSet::SPLIT,
+            ..PaneCapabilities::default()
+        },
+        ..DockPolicyData::default()
+    };
+
+    let result = validate_proposal(
+        &tree,
+        Proposal::Dock(DockProposal::MovePane {
+            pane: PaneId(2),
+            target: DockTarget::TabInto { group, index: None },
+        }),
+        &policy,
+    );
+
+    assert_eq!(result.unwrap_err(), TileError::PolicyRejected);
+}
+
+#[test]
+fn validate_proposal_rejects_disallowed_split_edge() {
+    let tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
+    let group = tree.root();
+    let policy = DockPolicyData {
+        default_pane_capabilities: PaneCapabilities {
+            allowed_edges: EdgeSet::RIGHT,
+            ..PaneCapabilities::default()
+        },
+        ..DockPolicyData::default()
+    };
+
+    let result = validate_proposal(
+        &tree,
+        Proposal::Dock(DockProposal::MovePane {
+            pane: PaneId(2),
+            target: DockTarget::Split {
+                tile: group,
+                axis: Axis::Horizontal,
+                placement: Placement::Before,
+                ratio: 0.5,
+            },
+        }),
+        &policy,
+    );
+
+    assert_eq!(result.unwrap_err(), TileError::PolicyRejected);
+}
+
+#[test]
+fn commit_proposal_applies_validated_operation() {
+    let mut tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
+    let group = tree.root();
+
+    let proposal = validate_proposal(
+        &tree,
+        Proposal::Dock(DockProposal::ReorderTab {
+            group,
+            pane: PaneId(2),
+            index: 0,
+        }),
+        &DockPolicyData::default(),
+    )
+    .unwrap();
+    let Some(TileNode::Tabs(tabs)) = tree.node(group) else {
+        panic!("group should remain tabs");
+    };
+    assert_eq!(tabs.panes, vec![PaneId(1), PaneId(2)]);
+
+    let op = commit_proposal(&mut tree, proposal).unwrap();
+
+    assert!(matches!(op, TileOp::ReorderTab { .. }));
+    let Some(TileNode::Tabs(tabs)) = tree.node(group) else {
+        panic!("group should remain tabs");
+    };
+    assert_eq!(tabs.panes, vec![PaneId(2), PaneId(1)]);
+}
