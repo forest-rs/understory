@@ -397,7 +397,7 @@ pub struct DragOptions {
     pub edge_zone_fraction: f64,
     /// Fraction used for tab insertion decisions.
     ///
-    /// Expected to be finite.
+    /// Expected to be finite and in the range `0.0..=1.0`.
     pub tab_insert_threshold: f64,
     /// Whether floating is allowed.
     pub allow_float: bool,
@@ -597,16 +597,12 @@ pub fn drop_targets_for_drag(
 ) -> Vec<DropTargetFrame> {
     let mut targets = Vec::new();
     debug_assert!(
-        options.edge_zone_fraction.is_finite(),
-        "DragOptions::edge_zone_fraction must be finite",
-    );
-    debug_assert!(
         (0.0..=0.5).contains(&options.edge_zone_fraction),
-        "DragOptions::edge_zone_fraction must be in 0.0..=0.5",
+        "DragOptions::edge_zone_fraction must be finite and in 0.0..=0.5",
     );
     debug_assert!(
-        options.tab_insert_threshold.is_finite(),
-        "DragOptions::tab_insert_threshold must be finite",
+        (0.0..=1.0).contains(&options.tab_insert_threshold),
+        "DragOptions::tab_insert_threshold must be finite and in 0.0..=1.0",
     );
     let edge_fraction = options.edge_zone_fraction;
 
@@ -629,7 +625,7 @@ pub fn drop_targets_for_drag(
                 DragSubject::Tab { group, .. }
                     if group == bar.group && options.allow_reorder_tabs =>
                 {
-                    tab_insert_index(frame, bar.group, drag.current)
+                    tab_insert_index(frame, bar.group, drag.current, options.tab_insert_threshold)
                 }
                 _ => None,
             };
@@ -797,7 +793,12 @@ fn compare_target(
         .then_with(|| best_index.cmp(&candidate_index))
 }
 
-fn tab_insert_index(frame: &LayoutFrame, group: TileId, point: Point) -> Option<usize> {
+fn tab_insert_index(
+    frame: &LayoutFrame,
+    group: TileId,
+    point: Point,
+    threshold: f64,
+) -> Option<usize> {
     let mut tabs: Vec<_> = frame
         .tabs
         .iter()
@@ -810,13 +811,13 @@ fn tab_insert_index(frame: &LayoutFrame, group: TileId, point: Point) -> Option<
     }
     for tab in &tabs {
         let horizontal = tab.rect.width() >= tab.rect.height();
-        let midpoint = if horizontal {
-            (tab.rect.x0 + tab.rect.x1) * 0.5
+        let insert_before = if horizontal {
+            tab.rect.x0 + tab.rect.width() * threshold
         } else {
-            (tab.rect.y0 + tab.rect.y1) * 0.5
+            tab.rect.y0 + tab.rect.height() * threshold
         };
         let coordinate = if horizontal { point.x } else { point.y };
-        if coordinate < midpoint {
+        if coordinate < insert_before {
             return Some(tab.index);
         }
     }
