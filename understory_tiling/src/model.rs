@@ -213,7 +213,13 @@ pub struct LayoutInput {
     ///
     /// Expected to be finite and non-negative.
     pub min_pane_size: Size,
-    /// Whether callers want drag/drop target generation from layout.
+    /// Reserved switch for layout-time drop target generation.
+    ///
+    /// Current drag/drop target generation happens in
+    /// [`drop_targets_for_drag`](crate::drop_targets_for_drag) from a solved
+    /// [`LayoutFrame`](crate::LayoutFrame). This field is preserved for callers
+    /// that want to keep layout inputs forward-compatible with a future layout
+    /// pass that can emit target hints directly.
     pub generate_drop_targets: bool,
 }
 

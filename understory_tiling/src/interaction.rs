@@ -1,6 +1,7 @@
 // Copyright 2026 the Understory Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+use alloc::vec;
 use alloc::vec::Vec;
 use core::cmp::Ordering;
 
@@ -197,7 +198,8 @@ pub struct DropTargetId(
 ///
 /// Returned by [`drop_targets_for_drag`] and [`update_drag`]. Renderers draw the
 /// `rect` or `preview_rect`; commit code lowers the selected `target` into a
-/// [`TileOp`].
+/// [`TileOp`]. Non-accepting targets are still useful for overlays because they
+/// can show why a hovered destination is unavailable.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DropTargetFrame {
@@ -208,12 +210,19 @@ pub struct DropTargetFrame {
     /// Semantic dock target.
     pub target: DockTarget,
     /// Preview rectangle for overlays.
+    ///
+    /// This is usually larger than `rect`: the hit zone can be an edge strip
+    /// while the preview shows the pane area that would be created.
     pub preview_rect: Rect,
     /// Target priority. Higher values win.
     pub priority: i16,
     /// Distance from the pointer when generated.
     pub distance: f64,
     /// Whether this target accepts the current subject.
+    ///
+    /// [`pick_drop_target`] only returns accepting targets. Interaction updates
+    /// may still include non-accepting targets so renderers can display invalid
+    /// hover feedback.
     pub accepts: bool,
 }
 
@@ -422,7 +431,10 @@ pub struct DragOptions {
     ///
     /// Expected to be finite and in the range `0.0..=1.0`.
     pub tab_insert_threshold: f64,
-    /// Whether floating is allowed.
+    /// Whether floating targets should be generated.
+    ///
+    /// Floating targets are currently marked non-accepting because committed
+    /// floating surfaces are not implemented yet.
     pub allow_float: bool,
     /// Whether tab reordering is allowed.
     pub allow_reorder_tabs: bool,
@@ -491,10 +503,14 @@ pub fn update_drag(
     debug_assert!(point.is_finite(), "point must be finite");
     drag.current = point;
     let targets = drop_targets_for_drag(tree, frame, drag, options);
-    let active_target = pick_drop_target(&targets, point);
-    let proposal = active_target
-        .and_then(|id| targets.iter().find(|target| target.id == id))
-        .and_then(|target| proposal_for_drag(drag, target, options));
+    let active_frame = pick_drop_target_frame(&targets, point, true);
+    let active_target = active_frame.map(|target| target.id);
+    let rejected_frame = if active_frame.is_none() {
+        pick_drop_target_frame(&targets, point, false)
+    } else {
+        None
+    };
+    let proposal = active_frame.and_then(|target| proposal_for_drag(drag, &target, options));
     drag.proposal = proposal.clone();
 
     DragUpdate {
@@ -510,7 +526,7 @@ pub fn update_drag(
                 })
                 .collect(),
             drop_targets: targets,
-            ghost_rects: Vec::new(),
+            ghost_rects: ghost_rects_for_drag(drag, active_frame, rejected_frame),
             dragged: Some(DraggedFrame {
                 subject: drag.subject,
                 rect: Rect::new(point.x - 8.0, point.y - 8.0, point.x + 8.0, point.y + 8.0),
@@ -611,9 +627,15 @@ pub fn commit_resize(tree: &mut TileTree, resize: ResizeSession) -> Result<TileO
 }
 
 /// Generates candidate drop targets for a drag session.
+///
+/// Call this after [`begin_drag`] or from [`update_drag`] when the pointer
+/// moves. The returned targets are ranked and stable for deterministic
+/// selection. Some candidates may have [`DropTargetFrame::accepts`] set to
+/// `false`; renderers can still draw these as invalid destinations, but
+/// [`pick_drop_target`] ignores them when choosing the commit-ready target.
 #[must_use]
 pub fn drop_targets_for_drag(
-    _tree: &TileTree,
+    tree: &TileTree,
     frame: &LayoutFrame,
     drag: &DragSession,
     options: &DragOptions,
@@ -629,6 +651,20 @@ pub fn drop_targets_for_drag(
     );
     let edge_fraction = options.edge_zone_fraction;
 
+    if options.allow_split
+        && let Some(root_rect) = frame_bounds(frame)
+    {
+        push_edge_targets(
+            &mut targets,
+            tree.root(),
+            root_rect,
+            drag.current,
+            edge_fraction,
+            25,
+            |target| target_accepts(tree, frame, drag, target, options),
+        );
+    }
+
     if options.allow_split {
         for pane in &frame.panes {
             push_edge_targets(
@@ -637,7 +673,8 @@ pub fn drop_targets_for_drag(
                 pane.rect,
                 drag.current,
                 edge_fraction,
-                true,
+                20,
+                |target| target_accepts(tree, frame, drag, target, options),
             );
         }
     }
@@ -654,30 +691,88 @@ pub fn drop_targets_for_drag(
             };
             let id =
                 DropTargetId(u32::try_from(targets.len()).expect("drop target arena exhausted"));
+            let target = DockTarget::TabInto {
+                group: bar.group,
+                index,
+            };
             targets.push(DropTargetFrame {
                 id,
                 rect: bar.rect,
-                target: DockTarget::TabInto {
-                    group: bar.group,
-                    index,
-                },
+                target,
                 preview_rect: bar.rect,
                 priority: 30,
                 distance: rect_distance(bar.rect, drag.current),
-                accepts: true,
+                accepts: target_accepts(tree, frame, drag, target, options),
             });
         }
+
+        for pane in &frame.panes {
+            if matches!(tree.node(pane.tile), Some(TileNode::Tabs(_))) {
+                let rect = center_rect(pane.rect, edge_fraction);
+                if rect.width() > 0.0 && rect.height() > 0.0 {
+                    let target = DockTarget::TabInto {
+                        group: pane.tile,
+                        index: None,
+                    };
+                    let id = DropTargetId(
+                        u32::try_from(targets.len()).expect("drop target arena exhausted"),
+                    );
+                    targets.push(DropTargetFrame {
+                        id,
+                        rect,
+                        target,
+                        preview_rect: pane.rect,
+                        priority: 15,
+                        distance: rect_distance(rect, drag.current),
+                        accepts: target_accepts(tree, frame, drag, target, options),
+                    });
+                }
+            }
+        }
+    }
+
+    if options.allow_float
+        && let Some(root_rect) = frame_bounds(frame)
+        && !root_rect.contains(drag.current)
+    {
+        let bounds = Rect::new(
+            drag.current.x - 120.0,
+            drag.current.y - 80.0,
+            drag.current.x + 120.0,
+            drag.current.y + 80.0,
+        );
+        let id = DropTargetId(u32::try_from(targets.len()).expect("drop target arena exhausted"));
+        targets.push(DropTargetFrame {
+            id,
+            rect: bounds,
+            target: DockTarget::Float { bounds },
+            preview_rect: bounds,
+            priority: 5,
+            distance: 0.0,
+            accepts: false,
+        });
     }
 
     targets
 }
 
 /// Picks the active drop target for a point.
+///
+/// Only accepting targets are considered. Selection is deterministic: contained
+/// targets are ordered by priority, then distance, then original target order.
 #[must_use]
 pub fn pick_drop_target(targets: &[DropTargetFrame], point: Point) -> Option<DropTargetId> {
+    pick_drop_target_frame(targets, point, true).map(|target| target.id)
+}
+
+fn pick_drop_target_frame(
+    targets: &[DropTargetFrame],
+    point: Point,
+    accepts: bool,
+) -> Option<DropTargetFrame> {
     let mut best: Option<(usize, DropTargetFrame)> = None;
     for (index, target) in targets.iter().copied().enumerate() {
-        if !target.accepts || !target.rect.contains(point) {
+        if target.accepts != accepts || !target.rect.contains(point) {
             continue;
         }
         match best {
@@ -686,7 +781,7 @@ pub fn pick_drop_target(targets: &[DropTargetFrame], point: Point) -> Option<Dro
             _ => best = Some((index, target)),
         }
     }
-    best.map(|(_, target)| target.id)
+    best.map(|(_, target)| target)
 }
 
 fn proposal_for_drag(
@@ -736,7 +831,8 @@ fn push_edge_targets(
     rect: Rect,
     point: Point,
     edge_fraction: f64,
-    accepts: bool,
+    priority: i16,
+    mut accepts: impl FnMut(DockTarget) -> bool,
 ) {
     let width = rect.width();
     let height = rect.height();
@@ -749,6 +845,7 @@ fn push_edge_targets(
     let specs = [
         (
             Rect::new(rect.x0, rect.y0, rect.x0 + edge_w, rect.y1),
+            Rect::new(rect.x0, rect.y0, rect.x0 + width * 0.5, rect.y1),
             DockTarget::Split {
                 tile,
                 axis: Axis::Horizontal,
@@ -758,6 +855,7 @@ fn push_edge_targets(
         ),
         (
             Rect::new(rect.x1 - edge_w, rect.y0, rect.x1, rect.y1),
+            Rect::new(rect.x0 + width * 0.5, rect.y0, rect.x1, rect.y1),
             DockTarget::Split {
                 tile,
                 axis: Axis::Horizontal,
@@ -767,6 +865,7 @@ fn push_edge_targets(
         ),
         (
             Rect::new(rect.x0, rect.y0, rect.x1, rect.y0 + edge_h),
+            Rect::new(rect.x0, rect.y0, rect.x1, rect.y0 + height * 0.5),
             DockTarget::Split {
                 tile,
                 axis: Axis::Vertical,
@@ -776,6 +875,7 @@ fn push_edge_targets(
         ),
         (
             Rect::new(rect.x0, rect.y1 - edge_h, rect.x1, rect.y1),
+            Rect::new(rect.x0, rect.y0 + height * 0.5, rect.x1, rect.y1),
             DockTarget::Split {
                 tile,
                 axis: Axis::Vertical,
@@ -785,18 +885,148 @@ fn push_edge_targets(
         ),
     ];
 
-    for (rect, target) in specs {
+    for (rect, preview_rect, target) in specs {
         let id = DropTargetId(u32::try_from(targets.len()).expect("drop target arena exhausted"));
         targets.push(DropTargetFrame {
             id,
             rect,
             target,
-            preview_rect: rect,
-            priority: 20,
+            preview_rect,
+            priority,
             distance: rect_distance(rect, point),
-            accepts,
+            accepts: accepts(target),
         });
     }
+}
+
+fn target_accepts(
+    tree: &TileTree,
+    frame: &LayoutFrame,
+    drag: &DragSession,
+    target: DockTarget,
+    options: &DragOptions,
+) -> bool {
+    if matches!(drag.subject, DragSubject::TabGroup(_)) {
+        return false;
+    }
+    match target {
+        DockTarget::Root | DockTarget::Replace { .. } => true,
+        DockTarget::Split { tile, .. } => split_target_accepts(tree, frame, drag, tile),
+        DockTarget::TabInto { group, index } => {
+            if !options.allow_tab_into {
+                return false;
+            }
+            match drag.subject {
+                DragSubject::Tab { group: source, .. } if source == group => {
+                    index.is_some() && options.allow_reorder_tabs
+                }
+                DragSubject::Pane(pane) => source_group_for_pane(frame, tree, pane) != Some(group),
+                DragSubject::Tab { .. } => true,
+                DragSubject::TabGroup(_) => false,
+            }
+        }
+        DockTarget::Float { .. } => false,
+    }
+}
+
+fn split_target_accepts(
+    tree: &TileTree,
+    frame: &LayoutFrame,
+    drag: &DragSession,
+    tile: TileId,
+) -> bool {
+    match drag.subject {
+        DragSubject::Pane(pane) => match source_tile_for_pane(frame, pane) {
+            Some(source) if source == tile => match tree.node(tile) {
+                Some(TileNode::Tabs(tabs)) => tabs.panes.len() > 1,
+                _ => false,
+            },
+            Some(_) => true,
+            None => false,
+        },
+        DragSubject::Tab { group, .. } => {
+            if group != tile {
+                return true;
+            }
+            match tree.node(group) {
+                Some(TileNode::Tabs(tabs)) => tabs.panes.len() > 1,
+                _ => false,
+            }
+        }
+        DragSubject::TabGroup(_) => false,
+    }
+}
+
+fn source_tile_for_pane(frame: &LayoutFrame, pane: PaneId) -> Option<TileId> {
+    frame
+        .panes
+        .iter()
+        .find(|candidate| candidate.pane == pane)
+        .map(|candidate| candidate.tile)
+}
+
+fn source_group_for_pane(frame: &LayoutFrame, tree: &TileTree, pane: PaneId) -> Option<TileId> {
+    let tile = source_tile_for_pane(frame, pane)?;
+    matches!(tree.node(tile), Some(TileNode::Tabs(_))).then_some(tile)
+}
+
+fn ghost_rects_for_drag(
+    drag: &DragSession,
+    active: Option<DropTargetFrame>,
+    rejected: Option<DropTargetFrame>,
+) -> Vec<GhostFrame> {
+    if let Some(target) = active {
+        return vec![GhostFrame {
+            rect: target.preview_rect,
+            kind: ghost_kind_for_drag(drag),
+        }];
+    }
+    if let Some(target) = rejected {
+        return vec![GhostFrame {
+            rect: target.preview_rect,
+            kind: GhostKind::Invalid,
+        }];
+    }
+    Vec::new()
+}
+
+fn ghost_kind_for_drag(drag: &DragSession) -> GhostKind {
+    match drag.subject {
+        DragSubject::TabGroup(_) => GhostKind::PreviewGroup,
+        DragSubject::Pane(_) | DragSubject::Tab { .. } => GhostKind::PreviewPane,
+    }
+}
+
+fn frame_bounds(frame: &LayoutFrame) -> Option<Rect> {
+    let mut bounds: Option<Rect> = None;
+    for rect in frame
+        .panes
+        .iter()
+        .map(|pane| pane.rect)
+        .chain(frame.tab_bars.iter().map(|bar| bar.rect))
+        .chain(frame.split_handles.iter().map(|handle| handle.rect))
+    {
+        bounds = Some(match bounds {
+            Some(bounds) => union_rect(bounds, rect),
+            None => rect,
+        });
+    }
+    bounds
+}
+
+fn union_rect(a: Rect, b: Rect) -> Rect {
+    Rect::new(
+        a.x0.min(b.x0),
+        a.y0.min(b.y0),
+        a.x1.max(b.x1),
+        a.y1.max(b.y1),
+    )
+}
+
+fn center_rect(rect: Rect, edge_fraction: f64) -> Rect {
+    let dx = rect.width() * edge_fraction;
+    let dy = rect.height() * edge_fraction;
+    Rect::new(rect.x0 + dx, rect.y0 + dy, rect.x1 - dx, rect.y1 - dy)
 }
 
 fn compare_target(
