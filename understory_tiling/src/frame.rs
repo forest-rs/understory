@@ -11,6 +11,7 @@ use crate::{Axis, PaneId, Point, Rect, Revision, TabBarPlacement, TileId};
 /// testing should consume this flattened data instead of walking
 /// [`TileNode`](crate::TileNode) directly.
 #[derive(Clone, Debug, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LayoutFrame {
     /// Tree revision used for this frame.
     pub revision: Revision,
@@ -35,6 +36,7 @@ pub struct LayoutFrame {
 /// Produced in [`LayoutFrame::panes`] for every visible pane body. Use `pane` to
 /// look up application content and `rect`/`clip` to place it.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PaneFrame {
     /// Pane id.
     pub pane: PaneId,
@@ -54,6 +56,7 @@ pub struct PaneFrame {
 /// [`TabBarPlacement`] is not hidden. Renderers use it for tab strip chrome and
 /// hit regions use it to start tab-group drags.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TabBarFrame {
     /// Tab group tile id.
     pub group: TileId,
@@ -70,6 +73,7 @@ pub struct TabBarFrame {
 /// Produced in [`LayoutFrame::tabs`] for each tab in a visible tab group. Use it
 /// to render tab labels/chrome and to start tab drags or reorder gestures.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TabFrame {
     /// Tab group tile id.
     pub group: TileId,
@@ -89,6 +93,7 @@ pub struct TabFrame {
 /// hit result from these rectangles to [`begin_resize`](crate::begin_resize) to
 /// start a resize interaction.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SplitHandleFrame {
     /// Split tile id.
     pub split: TileId,
@@ -105,6 +110,7 @@ pub struct SplitHandleFrame {
 /// Returned in [`LayoutFrame::paint_order`] as an ordering hint for renderers
 /// that want a deterministic sequence matching the layout solver.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum FrameItemId {
     /// Pane item.
     Pane(PaneId),
@@ -132,6 +138,7 @@ pub enum FrameItemId {
 /// callers do not construct these manually unless they are building custom
 /// frame data for tests.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct HitRegion {
     /// Region rectangle.
     pub rect: Rect,
@@ -147,6 +154,7 @@ pub struct HitRegion {
 /// [`begin_drag`](crate::begin_drag) and [`begin_resize`](crate::begin_resize)
 /// to decide which session to create.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum HitKind {
     /// A pane body.
     Pane {

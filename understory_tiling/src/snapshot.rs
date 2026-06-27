@@ -12,6 +12,7 @@ use crate::{PaneId, TileError, TileId, TileTree};
 /// when loading saved state. The tree is normalized during restore when
 /// requested by [`RestoreOptions`].
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LayoutSnapshot {
     /// Snapshot schema version.
     pub schema_version: u16,
@@ -29,6 +30,7 @@ pub struct LayoutSnapshot {
 /// persisted data should be normalized or repaired before it becomes a live
 /// [`TileTree`].
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RestoreOptions {
     /// Repair references to missing panes when possible.
     pub repair_missing_panes: bool,
@@ -43,6 +45,7 @@ pub struct RestoreOptions {
 /// Returned by [`TileTree::repair`]. The MVP currently normalizes the tree and
 /// leaves detailed actions mostly reserved for future repair reporting.
 #[derive(Clone, Debug, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RepairReport {
     /// Repair actions performed.
     pub actions: Vec<RepairAction>,
@@ -53,6 +56,7 @@ pub struct RepairReport {
 /// Values of this enum appear in [`RepairReport::actions`] to explain what was
 /// changed while making a persisted or host-edited tree usable.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum RepairAction {
     /// Removed an invalid node.
     RemovedInvalidNode(TileId),

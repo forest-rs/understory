@@ -73,6 +73,8 @@
 //!
 //! This crate is `no_std` and uses `alloc` when built without default features.
 //! Enable the `libm` feature for no-std targets that need Kurbo geometry math.
+//! Enable the `serde` feature to serialize layout trees, snapshots, frames,
+//! policy data, and interaction proposals.
 
 extern crate alloc;
 

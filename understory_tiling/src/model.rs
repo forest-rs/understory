@@ -14,6 +14,7 @@ use crate::{PaneId, Rect, Size, SurfaceId, TileId};
 /// [`SplitHandleFrame`](crate::SplitHandleFrame) values so renderers know which
 /// direction a handle moves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Axis {
     /// Children are laid out left-to-right.
     Horizontal,
@@ -26,6 +27,7 @@ pub enum Axis {
 /// Used in split operations and dock targets to say whether a new pane or group
 /// should be inserted before or after the target tile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Placement {
     /// Place before the target in the relevant axis or order.
     Before,
@@ -40,6 +42,7 @@ pub enum Placement {
 /// [`TabBarFrame`](crate::TabBarFrame) so the renderer can draw the tab strip in
 /// the same place that the solver reserved geometry for it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TabBarPlacement {
     /// Place tabs along the top edge.
     Top,
@@ -59,6 +62,7 @@ pub enum TabBarPlacement {
 /// it in the model for forward compatibility; layout currently uses
 /// [`LayoutInput::min_pane_size`] as the global minimum.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LayoutConstraints {
     /// Minimum accepted size.
     pub min_size: Size,
@@ -72,6 +76,7 @@ pub struct LayoutConstraints {
 /// normalizes the data but mostly uses [`LayoutInput::min_pane_size`] while the
 /// per-child constraint solver matures.
 #[derive(Clone, Debug, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SplitConstraints {
     /// Minimum major-axis length per child.
     pub min_major: Vec<f64>,
@@ -85,6 +90,7 @@ pub struct SplitConstraints {
 /// flattened [`LayoutFrame`](crate::LayoutFrame) instead of walking `TileNode`
 /// recursively.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TileNode {
     /// N-ary split node.
     Split(SplitNode),
@@ -101,6 +107,7 @@ pub enum TileNode {
 /// then read the solved child and handle geometry from
 /// [`LayoutFrame`](crate::LayoutFrame).
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SplitNode {
     /// Major axis used to place children.
     pub axis: Axis,
@@ -122,6 +129,7 @@ pub struct SplitNode {
 /// [`TabFrame`](crate::TabFrame) per pane, and one active
 /// [`PaneFrame`](crate::PaneFrame) for the group.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TabNode {
     /// Panes in tab order.
     pub panes: Vec<PaneId>,
@@ -136,6 +144,7 @@ pub struct TabNode {
 /// Use this inside [`TileNode::Pane`] when a tile directly hosts one
 /// application pane. Layout lowers it into a [`PaneFrame`](crate::PaneFrame).
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PaneNode {
     /// Application-owned pane id.
     pub pane: PaneId,
@@ -146,6 +155,7 @@ pub struct PaneNode {
 /// Used by [`TileSurface`] to describe future root, floating, external-window,
 /// or auto-hide surfaces. The MVP layout API only solves the root tree.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum SurfaceKind {
     /// Primary root surface.
     Root,
@@ -163,6 +173,7 @@ pub enum SurfaceKind {
 /// surface. Current layout entry points take [`LayoutInput`] and solve the root
 /// tree directly; they do not open windows or manage floating surfaces.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TileSurface {
     /// Surface id.
     pub id: SurfaceId,
@@ -183,6 +194,7 @@ pub struct TileSurface {
 /// changing it produces a new [`LayoutFrame`](crate::LayoutFrame) without
 /// mutating semantic layout.
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LayoutInput {
     /// Bounds available to the root tile.
     ///

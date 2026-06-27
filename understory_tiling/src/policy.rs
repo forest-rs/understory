@@ -11,6 +11,7 @@ use crate::{Axis, DockProposal, DockTarget, Placement, Proposal, TileError, Tile
 /// dock proposals; close, float, and pin capabilities are reserved for
 /// operations that do not yet commit successfully.
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PaneCapabilities {
     /// Whether pane close operations are allowed.
     ///
@@ -39,6 +40,7 @@ pub struct PaneCapabilities {
 /// Use these constants in [`PaneCapabilities::allowed_edges`] to describe which
 /// edge split targets a pane may dock into.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EdgeSet(
     /// Edge bitset.
     pub u8,
@@ -49,6 +51,7 @@ pub struct EdgeSet(
 /// Use these constants in [`PaneCapabilities::allowed_zones`] to describe which
 /// broad docking zones a pane may use.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ZoneSet(
     /// Zone bitset.
     pub u8,
@@ -60,6 +63,7 @@ pub struct ZoneSet(
 /// resize, or command-generated proposal. The core uses data rather than
 /// callbacks so validation remains deterministic and testable.
 #[derive(Clone, Debug, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DockPolicyData {
     /// Default capabilities used by proposal validation.
     ///
@@ -75,6 +79,7 @@ pub struct DockPolicyData {
 /// Returned by [`validate_proposal`]. Pass it to [`commit_proposal`] to apply
 /// the already-validated operation without re-lowering the proposal.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ValidatedProposal {
     /// Original proposal.
     pub proposal: Proposal,

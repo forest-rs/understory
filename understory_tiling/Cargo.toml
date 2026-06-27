@@ -11,6 +11,7 @@ categories = ["gui", "data-structures", "no-std"]
 
 [dependencies]
 kurbo.workspace = true
+serde = { workspace = true, optional = true }
 
 [lints]
 workspace = true
@@ -22,6 +23,7 @@ default = ["std"]
 # no_std targets that need Kurbo geometry math, or `std` for std builds.
 std = ["kurbo/std"]
 libm = ["kurbo/libm"]
+serde = ["dep:serde", "kurbo/serde"]
 
 [package.metadata.docs.rs]
 all-features = true
