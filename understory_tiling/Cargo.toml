@@ -1,0 +1,29 @@
+[package]
+name = "understory_tiling"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+description = "Headless tiling, docking, and layout interaction primitives."
+keywords = ["tiling", "docking", "layout", "ui", "no_std"]
+categories = ["gui", "data-structures", "no-std"]
+
+[dependencies]
+kurbo.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["std"]
+
+# This crate is `no_std` + `alloc` without default features. Enable `libm` for
+# no_std targets that need Kurbo geometry math, or `std` for std builds.
+std = ["kurbo/std"]
+libm = ["kurbo/libm"]
+
+[package.metadata.docs.rs]
+all-features = true
+default-target = "x86_64-unknown-linux-gnu"
+targets = []
