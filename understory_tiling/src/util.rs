@@ -4,7 +4,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::{Point, Rect, TabBarPlacement};
+use crate::{Axis, Point, Rect, Size, SplitConstraints, TabBarPlacement};
 
 pub(crate) fn split_tab_bar(
     rect: Rect,
@@ -169,6 +169,36 @@ pub(crate) fn solve_lengths_with_min(total: f64, shares: &[f64], min_major: &[f6
     }
 
     lengths
+}
+
+pub(crate) fn split_min_major(
+    count: usize,
+    constraints: &SplitConstraints,
+    fallback: f64,
+) -> Vec<f64> {
+    if !fallback.is_finite() || fallback < 0.0 {
+        return vec![0.0; count];
+    }
+    (0..count)
+        .map(|index| match constraints.min_major.get(index).copied() {
+            Some(minimum) if minimum.is_finite() && minimum >= 0.0 => fallback.max(minimum),
+            _ => fallback,
+        })
+        .collect()
+}
+
+pub(crate) fn major_size(size: Size, axis: Axis) -> f64 {
+    match axis {
+        Axis::Horizontal => size.width,
+        Axis::Vertical => size.height,
+    }
+}
+
+pub(crate) fn major_length(rect: Rect, axis: Axis) -> f64 {
+    match axis {
+        Axis::Horizontal => rect.width(),
+        Axis::Vertical => rect.height(),
+    }
 }
 
 pub(crate) fn repaired_shares(count: usize, shares: &[f64]) -> Vec<f64> {
