@@ -227,6 +227,165 @@ fn drag_update_proposes_move() {
 }
 
 #[test]
+fn drag_root_edge_target_wins_over_pane_edge_target() {
+    let tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
+    let frame = tree.layout(input());
+    let mut drag = begin_drag(&frame, Point::new(225.0, 10.0), DragIntent::Move).unwrap();
+
+    let update = update_drag(
+        &tree,
+        &frame,
+        &mut drag,
+        Point::new(5.0, 100.0),
+        &DragOptions::default(),
+    );
+
+    assert!(matches!(
+        update.proposal,
+        Some(DockProposal::MovePane {
+            target: DockTarget::Split {
+                tile,
+                axis: Axis::Horizontal,
+                placement: Placement::Before,
+                ..
+            },
+            ..
+        }) if tile == tree.root()
+    ));
+    assert_eq!(
+        update.overlay.ghost_rects,
+        vec![GhostFrame {
+            rect: Rect::new(0.0, 0.0, 150.0, 200.0),
+            kind: GhostKind::PreviewPane,
+        }]
+    );
+}
+
+#[test]
+fn dragging_pane_to_its_own_edge_is_invalid() {
+    let tree = TileTree::single_pane(PaneId(1));
+    let frame = tree.layout(input());
+    let mut drag = begin_drag(&frame, Point::new(20.0, 20.0), DragIntent::Move).unwrap();
+
+    let update = update_drag(
+        &tree,
+        &frame,
+        &mut drag,
+        Point::new(5.0, 100.0),
+        &DragOptions::default(),
+    );
+
+    assert!(update.proposal.is_none());
+    assert!(update.overlay.active_target.is_none());
+    assert_eq!(
+        update.overlay.ghost_rects,
+        vec![GhostFrame {
+            rect: Rect::new(0.0, 0.0, 150.0, 200.0),
+            kind: GhostKind::Invalid,
+        }]
+    );
+}
+
+#[test]
+fn dragging_active_pane_from_tab_group_can_split_group() {
+    let tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
+    let frame = tree.layout(input());
+    let mut drag = begin_drag(&frame, Point::new(20.0, 50.0), DragIntent::Move).unwrap();
+
+    let update = update_drag(
+        &tree,
+        &frame,
+        &mut drag,
+        Point::new(5.0, 100.0),
+        &DragOptions::default(),
+    );
+
+    assert!(matches!(
+        update.proposal,
+        Some(DockProposal::MovePane {
+            pane: PaneId(1),
+            target: DockTarget::Split {
+                tile,
+                axis: Axis::Horizontal,
+                placement: Placement::Before,
+                ..
+            },
+        }) if tile == tree.root()
+    ));
+}
+
+#[test]
+fn drag_over_tab_group_body_proposes_tab_into_group() {
+    let mut tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
+    let group = tree.root();
+    tree.apply(TileOp::SplitPane {
+        pane: PaneId(1),
+        axis: Axis::Horizontal,
+        new_pane: PaneId(3),
+        placement: Placement::After,
+        share: 0.5,
+    })
+    .unwrap();
+    let frame = tree.layout(input());
+    let mut drag = begin_drag(&frame, Point::new(250.0, 100.0), DragIntent::Move).unwrap();
+
+    let update = update_drag(
+        &tree,
+        &frame,
+        &mut drag,
+        Point::new(80.0, 100.0),
+        &DragOptions::default(),
+    );
+
+    assert!(matches!(
+        update.proposal,
+        Some(DockProposal::MovePane {
+            pane: PaneId(3),
+            target: DockTarget::TabInto { group: target, index: None },
+        }) if target == group
+    ));
+}
+
+#[test]
+fn unsupported_tab_group_drag_targets_are_invalid() {
+    let tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
+    let frame = tree.layout(input());
+    let mut drag = DragSession {
+        subject: DragSubject::TabGroup(tree.root()),
+        source: DragSource::TabBar { group: tree.root() },
+        origin: Point::new(10.0, 10.0),
+        current: Point::new(10.0, 10.0),
+        base_revision: frame.revision,
+        proposal: None,
+    };
+
+    let update = update_drag(
+        &tree,
+        &frame,
+        &mut drag,
+        Point::new(5.0, 100.0),
+        &DragOptions::default(),
+    );
+
+    assert!(update.proposal.is_none());
+    assert!(update.overlay.active_target.is_none());
+    assert!(
+        update
+            .overlay
+            .drop_targets
+            .iter()
+            .all(|target| !target.accepts)
+    );
+    assert_eq!(
+        update.overlay.ghost_rects,
+        vec![GhostFrame {
+            rect: Rect::new(0.0, 0.0, 150.0, 200.0),
+            kind: GhostKind::Invalid,
+        }]
+    );
+}
+
+#[test]
 fn tab_insert_threshold_controls_reorder_index() {
     let tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
     let frame = tree.layout(input());
