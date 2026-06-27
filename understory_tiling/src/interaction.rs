@@ -157,7 +157,12 @@ pub struct InteractionFrame {
 #[derive(Clone, Debug, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct OverlayFrame {
-    /// Drop targets.
+    /// Drop targets worth drawing in the overlay.
+    ///
+    /// [`update_drag`] keeps this focused on the active accepted target, or the
+    /// active rejected target when there is no accepted one. Use
+    /// [`DragUpdate::candidates`] or [`drop_targets_for_drag`] when an advanced
+    /// UI needs every generated candidate.
     pub drop_targets: Vec<DropTargetFrame>,
     /// Preview ghost rectangles.
     pub ghost_rects: Vec<GhostFrame>,
@@ -386,6 +391,12 @@ pub struct ResizeProposal {
 pub struct DragUpdate {
     /// Current proposal.
     pub proposal: Option<DockProposal>,
+    /// All generated drop candidates.
+    ///
+    /// Inspect this for custom target visualization or diagnostics. Most UIs
+    /// should render [`DragUpdate::overlay`], which contains only the active
+    /// target and active ghost.
+    pub candidates: Vec<DropTargetFrame>,
     /// Overlay geometry.
     pub overlay: OverlayFrame,
     /// Optional full preview.
@@ -463,7 +474,8 @@ pub struct DragOptions {
     /// Whether floating targets should be generated.
     ///
     /// Floating targets are currently marked non-accepting because committed
-    /// floating surfaces are not implemented yet.
+    /// floating surfaces are not implemented yet. The default is `false` so
+    /// unsupported targets do not appear in normal interaction overlays.
     pub allow_float: bool,
     /// Whether tab reordering is allowed.
     pub allow_reorder_tabs: bool,
@@ -478,7 +490,7 @@ impl Default for DragOptions {
         Self {
             edge_zone_fraction: 0.25,
             tab_insert_threshold: 0.5,
-            allow_float: true,
+            allow_float: false,
             allow_reorder_tabs: true,
             allow_split: true,
             allow_tab_into: true,
@@ -487,6 +499,10 @@ impl Default for DragOptions {
 }
 
 /// Starts a drag session from a frame hit.
+///
+/// Call this after the host has decided a pointer gesture is a drag. For tabs,
+/// hosts that support click-to-activate should usually wait until pointer
+/// movement exceeds their drag threshold before calling this function.
 #[must_use]
 pub fn begin_drag(frame: &LayoutFrame, point: Point, intent: DragIntent) -> Option<DragSession> {
     debug_assert!(point.is_finite(), "point must be finite");
@@ -540,10 +556,15 @@ pub fn update_drag(
         None
     };
     let proposal = active_frame.and_then(|target| proposal_for_drag(drag, &target, options));
+    let overlay_targets = active_frame
+        .into_iter()
+        .chain(rejected_frame)
+        .collect::<Vec<_>>();
     drag.proposal = proposal.clone();
 
     DragUpdate {
         proposal,
+        candidates: targets.clone(),
         overlay: OverlayFrame {
             active_target,
             hit_regions: targets
@@ -554,7 +575,7 @@ pub fn update_drag(
                     target: target.id,
                 })
                 .collect(),
-            drop_targets: targets,
+            drop_targets: overlay_targets,
             ghost_rects: ghost_rects_for_drag(drag, active_frame, rejected_frame),
             dragged: Some(DraggedFrame {
                 subject: drag.subject,
@@ -658,6 +679,9 @@ pub fn drop_targets_for_drag(
     options: &DragOptions,
 ) -> Vec<DropTargetFrame> {
     let mut targets = Vec::new();
+    if matches!(drag.subject, DragSubject::TabGroup(_)) {
+        return targets;
+    }
     debug_assert!(
         (0.0..=0.5).contains(&options.edge_zone_fraction),
         "DragOptions::edge_zone_fraction must be finite and in 0.0..=0.5",
@@ -677,7 +701,7 @@ pub fn drop_targets_for_drag(
             root_rect,
             drag.current,
             edge_fraction,
-            25,
+            10,
             |target| target_accepts(tree, frame, drag, target, options),
         );
     }
@@ -690,7 +714,7 @@ pub fn drop_targets_for_drag(
                 pane.rect,
                 drag.current,
                 edge_fraction,
-                20,
+                25,
                 |target| target_accepts(tree, frame, drag, target, options),
             );
         }
