@@ -483,6 +483,12 @@ pub struct DragOptions {
     pub allow_split: bool,
     /// Whether tab-into targets are allowed.
     pub allow_tab_into: bool,
+    /// Layout input used to produce full drag preview frames.
+    ///
+    /// Set this to the same geometry input used to create the current
+    /// [`LayoutFrame`] when the host wants [`DragUpdate::preview`] to contain a
+    /// solved preview layout. Leave it as `None` to use only overlay ghosts.
+    pub preview_layout: Option<LayoutInput>,
 }
 
 impl Default for DragOptions {
@@ -494,6 +500,7 @@ impl Default for DragOptions {
             allow_reorder_tabs: true,
             allow_split: true,
             allow_tab_into: true,
+            preview_layout: None,
         }
     }
 }
@@ -556,6 +563,11 @@ pub fn update_drag(
         None
     };
     let proposal = active_frame.and_then(|target| proposal_for_drag(drag, &target, options));
+    let preview = options.preview_layout.and_then(|input| {
+        proposal
+            .as_ref()
+            .and_then(|proposal| preview_for_dock_proposal(tree, proposal, input))
+    });
     let overlay_targets = active_frame
         .into_iter()
         .chain(rejected_frame)
@@ -582,7 +594,7 @@ pub fn update_drag(
                 rect: Rect::new(point.x - 8.0, point.y - 8.0, point.x + 8.0, point.y + 8.0),
             }),
         },
-        preview: None,
+        preview,
     }
 }
 
@@ -1218,6 +1230,17 @@ fn preview_for_resize(
         generate_drop_targets: false,
     });
     Some(PreviewFrame::from_layout(&preview))
+}
+
+fn preview_for_dock_proposal(
+    tree: &TileTree,
+    proposal: &DockProposal,
+    input: LayoutInput,
+) -> Option<PreviewFrame> {
+    let op = op_for_dock_proposal(proposal.clone()).ok()?;
+    let mut preview_tree = tree.clone();
+    preview_tree.apply(op).ok()?;
+    Some(PreviewFrame::from_layout(&preview_tree.layout(input)))
 }
 
 fn split_child_frames(frame: &LayoutFrame, split: TileId) -> Vec<SplitChildFrame> {
