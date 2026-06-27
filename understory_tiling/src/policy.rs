@@ -2,20 +2,25 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use crate::interaction::op_for_dock_proposal;
-use crate::{Proposal, TileError, TileOp, TileTree};
+use crate::{Axis, DockProposal, DockTarget, Placement, Proposal, TileError, TileOp, TileTree};
 
 /// Pane behavior capabilities.
 ///
-/// Store this in [`DockPolicyData`] when validating proposals. The current MVP
-/// mostly exposes the shape; future validation can use these flags to accept or
-/// reject close, move, tab, split, and float requests.
+/// Store this in [`DockPolicyData`] when validating proposals. Current
+/// validation uses the move, tab, split, edge, and zone fields for supported
+/// dock proposals; close, float, and pin capabilities are reserved for
+/// operations that do not yet commit successfully.
 #[derive(Clone, Copy, Debug)]
 pub struct PaneCapabilities {
     /// Whether pane close operations are allowed.
+    ///
+    /// Reserved for close-policy validation.
     pub closable: bool,
     /// Whether pane move operations are allowed.
     pub movable: bool,
     /// Whether pane float operations are allowed.
+    ///
+    /// Reserved until floating surfaces can be committed.
     pub floatable: bool,
     /// Whether pane pinning is allowed by future APIs.
     pub pinnable: bool,
@@ -56,7 +61,10 @@ pub struct ZoneSet(
 /// callbacks so validation remains deterministic and testable.
 #[derive(Clone, Debug, Default)]
 pub struct DockPolicyData {
-    /// Default capabilities used for panes without per-pane data.
+    /// Default capabilities used by proposal validation.
+    ///
+    /// Per-pane policy data is not modeled yet, so these capabilities apply to
+    /// every validated proposal.
     pub default_pane_capabilities: PaneCapabilities,
     /// Whether the layout is locked against mutation.
     pub locked_layout: bool,
@@ -100,6 +108,15 @@ impl EdgeSet {
     pub const BOTTOM: Self = Self(0b1000);
     /// All edges.
     pub const ALL: Self = Self(0b1111);
+
+    /// Returns whether every edge in `other` is present.
+    ///
+    /// Use this when validating generated [`DockTarget::Split`] targets against
+    /// [`PaneCapabilities::allowed_edges`].
+    #[must_use]
+    pub const fn contains(self, other: Self) -> bool {
+        self.0 & other.0 == other.0
+    }
 }
 
 impl ZoneSet {
@@ -111,11 +128,27 @@ impl ZoneSet {
     pub const FLOAT: Self = Self(0b0100);
     /// All zones.
     pub const ALL: Self = Self(0b0111);
+
+    /// Returns whether every zone in `other` is present.
+    ///
+    /// Use this when validating a proposal against
+    /// [`PaneCapabilities::allowed_zones`].
+    #[must_use]
+    pub const fn contains(self, other: Self) -> bool {
+        self.0 & other.0 == other.0
+    }
 }
 
 /// Validates a proposal and lowers it to a semantic operation.
+///
+/// Pass proposals from [`update_drag`](crate::update_drag) or
+/// [`update_resize`](crate::update_resize) here before committing them when the
+/// host wants data-driven policy checks. This function rejects locked layouts,
+/// capability-disallowed targets, and structurally invalid operations by
+/// applying the lowered operation to a clone of the tree. The live tree is not
+/// mutated.
 pub fn validate_proposal(
-    _tree: &TileTree,
+    tree: &TileTree,
     proposal: Proposal,
     policy: &DockPolicyData,
 ) -> Result<ValidatedProposal, TileError> {
@@ -129,14 +162,93 @@ pub fn validate_proposal(
             shares: resize.new_shares,
         },
     };
+    let mut probe = tree.clone();
+    probe.apply(op.clone())?;
+    validate_policy(&proposal, policy)?;
     Ok(ValidatedProposal { proposal, op })
 }
 
 /// Commits a validated proposal.
+///
+/// Pass the value returned by [`validate_proposal`] here when the tree is still
+/// expected to accept the operation. Policy is not re-run; the tree may still
+/// reject the operation if the caller changed it after validation.
 pub fn commit_proposal(
     tree: &mut TileTree,
     proposal: ValidatedProposal,
 ) -> Result<TileOp, TileError> {
     tree.apply(proposal.op.clone())?;
     Ok(proposal.op)
+}
+
+fn validate_policy(proposal: &Proposal, policy: &DockPolicyData) -> Result<(), TileError> {
+    match proposal {
+        Proposal::Dock(dock) => validate_dock_policy(dock, &policy.default_pane_capabilities),
+        Proposal::Resize(_) => Ok(()),
+    }
+}
+
+fn validate_dock_policy(
+    proposal: &DockProposal,
+    capabilities: &PaneCapabilities,
+) -> Result<(), TileError> {
+    match proposal {
+        DockProposal::MovePane { target, .. } => {
+            require(capabilities.movable)?;
+            validate_target_policy(*target, capabilities)
+        }
+        DockProposal::MoveTabGroup { target, .. } => validate_target_policy(*target, capabilities),
+        DockProposal::ReorderTab { .. } => require(capabilities.movable && capabilities.tabbable),
+        DockProposal::FloatPane { .. } => {
+            require(capabilities.floatable && capabilities.allowed_zones.contains(ZoneSet::FLOAT))
+        }
+    }
+}
+
+fn validate_target_policy(
+    target: DockTarget,
+    capabilities: &PaneCapabilities,
+) -> Result<(), TileError> {
+    match target {
+        DockTarget::Root | DockTarget::Replace { .. } => {
+            require(capabilities.movable && capabilities.allowed_zones.contains(ZoneSet::SPLIT))
+        }
+        DockTarget::Split {
+            axis, placement, ..
+        } => require(
+            capabilities.movable
+                && capabilities.split_target
+                && capabilities.allowed_zones.contains(ZoneSet::SPLIT)
+                && capabilities
+                    .allowed_edges
+                    .contains(edge_for_split(axis, placement)),
+        ),
+        DockTarget::TabInto { .. } => require(
+            capabilities.movable
+                && capabilities.tabbable
+                && capabilities.allowed_zones.contains(ZoneSet::TAB),
+        ),
+        DockTarget::Float { .. } => require(
+            capabilities.movable
+                && capabilities.floatable
+                && capabilities.allowed_zones.contains(ZoneSet::FLOAT),
+        ),
+    }
+}
+
+fn edge_for_split(axis: Axis, placement: Placement) -> EdgeSet {
+    match (axis, placement) {
+        (Axis::Horizontal, Placement::Before) => EdgeSet::LEFT,
+        (Axis::Horizontal, Placement::After) => EdgeSet::RIGHT,
+        (Axis::Vertical, Placement::Before) => EdgeSet::TOP,
+        (Axis::Vertical, Placement::After) => EdgeSet::BOTTOM,
+    }
+}
+
+fn require(allowed: bool) -> Result<(), TileError> {
+    if allowed {
+        Ok(())
+    } else {
+        Err(TileError::PolicyRejected)
+    }
 }
