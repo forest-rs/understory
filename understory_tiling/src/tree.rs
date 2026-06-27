@@ -4,6 +4,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
+use crate::RepairAction;
 use crate::util::{
     is_valid_split_fraction, repaired_shares, solve_lengths, split_tab_bar, tab_rects,
 };
@@ -32,10 +33,34 @@ struct NodeSlot {
     node: Option<TileNode>,
 }
 
+struct RepairSink<'a> {
+    actions: Option<&'a mut Vec<RepairAction>>,
+}
+
 #[derive(Clone, Copy, Debug)]
 enum PaneLocation {
     Tile { tile: TileId },
     InTabs { group: TileId, index: usize },
+}
+
+impl<'a> RepairSink<'a> {
+    fn silent() -> Self {
+        Self { actions: None }
+    }
+
+    fn recording(actions: &'a mut Vec<RepairAction>) -> Self {
+        Self {
+            actions: Some(actions),
+        }
+    }
+
+    fn record(&mut self, action: RepairAction) {
+        if let Some(actions) = &mut self.actions
+            && !actions.contains(&action)
+        {
+            actions.push(action);
+        }
+    }
 }
 
 impl TileTree {
@@ -90,7 +115,13 @@ impl TileTree {
 
     /// Normalizes the tree in place.
     pub fn normalize(&mut self) {
+        let mut sink = RepairSink::silent();
+        self.normalize_with_report(&mut sink);
+    }
+
+    fn normalize_with_report(&mut self, sink: &mut RepairSink<'_>) {
         if self.nodes.is_empty() {
+            sink.record(RepairAction::RemovedInvalidNode(self.root));
             self.root = self.push_node(TileNode::Tabs(TabNode {
                 panes: Vec::new(),
                 active: 0,
@@ -100,7 +131,7 @@ impl TileTree {
         }
 
         let mut visiting = vec![false; self.nodes.len()];
-        let root = self.normalize_node(self.root, &mut visiting);
+        let root = self.normalize_node(self.root, &mut visiting, sink);
         self.root = root.unwrap_or_else(|| {
             self.push_node(TileNode::Tabs(TabNode {
                 panes: Vec::new(),
@@ -113,6 +144,11 @@ impl TileTree {
         self.mark_reachable(self.root, &mut reachable);
         for (index, slot) in self.nodes.iter_mut().enumerate() {
             if !reachable.get(index).copied().unwrap_or(false) {
+                if slot.node.is_some() {
+                    sink.record(RepairAction::RemovedInvalidNode(TileId(
+                        u32::try_from(index).expect("tile arena exhausted"),
+                    )));
+                }
                 slot.node = None;
             }
         }
@@ -120,10 +156,10 @@ impl TileTree {
 
     /// Repairs a tree and reports high-level repair actions.
     pub fn repair(&mut self) -> RepairReport {
-        self.normalize();
-        RepairReport {
-            actions: Vec::new(),
-        }
+        let mut actions = Vec::new();
+        let mut sink = RepairSink::recording(&mut actions);
+        self.normalize_with_report(&mut sink);
+        RepairReport { actions }
     }
 
     /// Solves layout and returns a flattened frame.
@@ -219,6 +255,20 @@ impl TileTree {
     fn clear_node(&mut self, id: TileId) {
         if let Some(slot) = self.nodes.get_mut(id.0 as usize) {
             slot.node = None;
+        }
+    }
+
+    /// Creates a tree from raw arena parts for malformed-layout tests.
+    #[cfg(test)]
+    pub(crate) fn from_raw_parts_for_test(
+        root: TileId,
+        revision: Revision,
+        nodes: Vec<Option<TileNode>>,
+    ) -> Self {
+        Self {
+            root,
+            revision,
+            nodes: nodes.into_iter().map(|node| NodeSlot { node }).collect(),
         }
     }
 
@@ -489,13 +539,22 @@ impl TileTree {
         Ok(())
     }
 
-    fn normalize_node(&mut self, id: TileId, visiting: &mut [bool]) -> Option<TileId> {
+    fn normalize_node(
+        &mut self,
+        id: TileId,
+        visiting: &mut [bool],
+        sink: &mut RepairSink<'_>,
+    ) -> Option<TileId> {
         let index = id.0 as usize;
         if index >= self.nodes.len() || visiting.get(index).copied().unwrap_or(false) {
+            sink.record(RepairAction::RemovedInvalidNode(id));
             self.clear_node(id);
             return None;
         }
-        self.get_node(id)?;
+        if self.get_node(id).is_none() {
+            sink.record(RepairAction::RemovedInvalidNode(id));
+            return None;
+        }
 
         visiting[index] = true;
         let node = self.get_node(id).cloned()?;
@@ -503,17 +562,19 @@ impl TileTree {
             TileNode::Pane(_) => Some(id),
             TileNode::Tabs(mut tabs) => {
                 if tabs.panes.is_empty() {
+                    sink.record(RepairAction::RemovedInvalidNode(id));
                     self.clear_node(id);
                     None
                 } else {
                     if tabs.active >= tabs.panes.len() {
                         tabs.active = 0;
+                        sink.record(RepairAction::RepairedActiveTab(id));
                     }
                     let _ = self.set_node(id, TileNode::Tabs(tabs));
                     Some(id)
                 }
             }
-            TileNode::Split(split) => self.normalize_split(id, split, visiting),
+            TileNode::Split(split) => self.normalize_split(id, split, visiting, sink),
         };
         visiting[index] = false;
         result
@@ -524,13 +585,19 @@ impl TileTree {
         id: TileId,
         split: SplitNode,
         visiting: &mut [bool],
+        sink: &mut RepairSink<'_>,
     ) -> Option<TileId> {
         let old_shares = repaired_shares(split.children.len(), &split.shares);
+        if old_shares != split.shares {
+            sink.record(RepairAction::RepairedShares(id));
+        }
         let mut children = Vec::new();
         let mut shares = Vec::new();
+        let mut structure_changed = false;
 
         for (child_index, child) in split.children.iter().copied().enumerate() {
-            let Some(child) = self.normalize_node(child, visiting) else {
+            let Some(child) = self.normalize_node(child, visiting, sink) else {
+                structure_changed = true;
                 continue;
             };
             let share = old_shares.get(child_index).copied().unwrap_or(1.0);
@@ -542,6 +609,8 @@ impl TileTree {
                     children.push(grandchild);
                     shares.push(share * child_shares.get(grand_index).copied().unwrap_or(1.0));
                 }
+                structure_changed = true;
+                sink.record(RepairAction::CollapsedSplit(child));
                 self.clear_node(child);
                 continue;
             }
@@ -551,15 +620,20 @@ impl TileTree {
 
         match children.len() {
             0 => {
+                sink.record(RepairAction::RemovedInvalidNode(id));
                 self.clear_node(id);
                 None
             }
             1 => {
+                sink.record(RepairAction::CollapsedSplit(id));
                 self.clear_node(id);
                 children.first().copied()
             }
             _ => {
                 let shares = repaired_shares(children.len(), &shares);
+                if structure_changed || shares != split.shares {
+                    sink.record(RepairAction::RepairedShares(id));
+                }
                 let _ = self.set_node(
                     id,
                     TileNode::Split(SplitNode {

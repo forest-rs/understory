@@ -27,14 +27,19 @@ pub struct LayoutSnapshot {
 /// Restore behavior for saved snapshots.
 ///
 /// Construct this and pass it to [`restore_snapshot`] to choose how aggressively
-/// persisted data should be normalized or repaired before it becomes a live
-/// [`TileTree`].
+/// persisted data should be normalized before it becomes a live [`TileTree`].
 #[derive(Clone, Copy, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RestoreOptions {
-    /// Repair references to missing panes when possible.
+    /// Request repair of references to missing panes.
+    ///
+    /// The current API does not yet accept a known-pane inventory, so this
+    /// option currently triggers structural repair only.
     pub repair_missing_panes: bool,
-    /// Drop unknown panes when the embedding layer reports them.
+    /// Request removal of panes unknown to the embedding layer.
+    ///
+    /// The current API does not yet accept a known-pane inventory, so this
+    /// option currently triggers structural repair only.
     pub drop_unknown_panes: bool,
     /// Normalize the restored tree.
     pub normalize: bool,
@@ -42,8 +47,9 @@ pub struct RestoreOptions {
 
 /// Report returned by repair operations.
 ///
-/// Returned by [`TileTree::repair`]. The MVP currently normalizes the tree and
-/// leaves detailed actions mostly reserved for future repair reporting.
+/// Returned by [`TileTree::repair`]. Use this after loading host-edited or
+/// persisted layout data when callers need to know which nodes, tab indices, or
+/// split shares were repaired.
 #[derive(Clone, Debug, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RepairReport {
@@ -61,6 +67,9 @@ pub enum RepairAction {
     /// Removed an invalid node.
     RemovedInvalidNode(TileId),
     /// Removed a missing pane.
+    ///
+    /// Reserved for restore paths that can compare snapshots against a
+    /// caller-provided pane inventory.
     RemovedMissingPane(PaneId),
     /// Repaired a tab group's active index.
     RepairedActiveTab(TileId),
@@ -71,13 +80,20 @@ pub enum RepairAction {
 }
 
 /// Restores a layout snapshot.
+///
+/// Pass saved data here to recover a live [`TileTree`]. When any
+/// [`RestoreOptions`] repair or normalization flag is enabled, restore uses the
+/// same structural repair path as [`TileTree::repair`]. This function returns
+/// only the repaired tree, so call [`TileTree::repair`] on
+/// [`LayoutSnapshot::tree`] before restore if the caller also needs a
+/// [`RepairReport`].
 pub fn restore_snapshot(
     snapshot: LayoutSnapshot,
     options: RestoreOptions,
 ) -> Result<TileTree, TileError> {
     let mut tree = snapshot.tree;
     if options.normalize || options.repair_missing_panes || options.drop_unknown_panes {
-        tree.normalize();
+        let _ = tree.repair();
     }
     Ok(tree)
 }

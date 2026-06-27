@@ -408,6 +408,141 @@ fn commit_proposal_applies_validated_operation() {
     assert_eq!(tabs.panes, vec![PaneId(2), PaneId(1)]);
 }
 
+#[test]
+fn repair_reports_and_applies_persisted_layout_fixes() {
+    let mut tree = TileTree::from_raw_parts_for_test(
+        TileId(0),
+        Revision(7),
+        vec![
+            Some(TileNode::Split(SplitNode {
+                axis: Axis::Horizontal,
+                children: vec![TileId(1), TileId(2), TileId(99)],
+                shares: vec![f64::NAN],
+                constraints: SplitConstraints::default(),
+            })),
+            Some(TileNode::Tabs(TabNode {
+                panes: vec![PaneId(1), PaneId(2)],
+                active: 99,
+                placement: TabBarPlacement::Top,
+            })),
+            Some(TileNode::Split(SplitNode {
+                axis: Axis::Vertical,
+                children: vec![TileId(3)],
+                shares: vec![1.0],
+                constraints: SplitConstraints::default(),
+            })),
+            Some(TileNode::pane(PaneId(3))),
+            Some(TileNode::pane(PaneId(4))),
+        ],
+    );
+
+    let report = tree.repair();
+    let actions = &report.actions;
+
+    assert!(actions.contains(&RepairAction::RepairedShares(TileId(0))));
+    assert!(actions.contains(&RepairAction::RepairedActiveTab(TileId(1))));
+    assert!(actions.contains(&RepairAction::CollapsedSplit(TileId(2))));
+    assert!(actions.contains(&RepairAction::RemovedInvalidNode(TileId(99))));
+    assert!(actions.contains(&RepairAction::RemovedInvalidNode(TileId(4))));
+
+    let Some(TileNode::Split(root)) = tree.node(TileId(0)) else {
+        panic!("root should remain a split");
+    };
+    assert_eq!(root.children, vec![TileId(1), TileId(3)]);
+    assert_eq!(root.shares, vec![1.0, 1.0]);
+
+    let Some(TileNode::Tabs(tabs)) = tree.node(TileId(1)) else {
+        panic!("first child should remain tabs");
+    };
+    assert_eq!(tabs.active, 0);
+    assert!(tree.node(TileId(2)).is_none());
+    assert!(tree.node(TileId(4)).is_none());
+}
+
+#[test]
+fn repair_reports_same_axis_split_merges() {
+    let mut tree = TileTree::from_raw_parts_for_test(
+        TileId(0),
+        Revision(0),
+        vec![
+            Some(TileNode::Split(SplitNode {
+                axis: Axis::Horizontal,
+                children: vec![TileId(1), TileId(4)],
+                shares: vec![1.0, 1.0],
+                constraints: SplitConstraints::default(),
+            })),
+            Some(TileNode::Split(SplitNode {
+                axis: Axis::Horizontal,
+                children: vec![TileId(2), TileId(3)],
+                shares: vec![2.0, 1.0],
+                constraints: SplitConstraints::default(),
+            })),
+            Some(TileNode::pane(PaneId(1))),
+            Some(TileNode::pane(PaneId(2))),
+            Some(TileNode::pane(PaneId(3))),
+        ],
+    );
+
+    let report = tree.repair();
+    let actions = &report.actions;
+
+    assert!(actions.contains(&RepairAction::CollapsedSplit(TileId(1))));
+    assert!(actions.contains(&RepairAction::RepairedShares(TileId(0))));
+
+    let Some(TileNode::Split(root)) = tree.node(TileId(0)) else {
+        panic!("root should remain a split");
+    };
+    assert_eq!(root.children, vec![TileId(2), TileId(3), TileId(4)]);
+    assert_eq!(root.shares, vec![2.0, 1.0, 1.0]);
+    assert!(tree.node(TileId(1)).is_none());
+}
+
+#[test]
+fn restore_snapshot_repairs_only_when_requested() {
+    let snapshot = LayoutSnapshot {
+        schema_version: 1,
+        tree: TileTree::from_raw_parts_for_test(
+            TileId(0),
+            Revision(0),
+            vec![Some(TileNode::Tabs(TabNode {
+                panes: vec![PaneId(1)],
+                active: 99,
+                placement: TabBarPlacement::Top,
+            }))],
+        ),
+        active_pane: Some(PaneId(1)),
+        closed_panes: Vec::new(),
+    };
+
+    let restored = restore_snapshot(
+        snapshot.clone(),
+        RestoreOptions {
+            repair_missing_panes: false,
+            drop_unknown_panes: false,
+            normalize: false,
+        },
+    )
+    .unwrap();
+    let Some(TileNode::Tabs(tabs)) = restored.node(TileId(0)) else {
+        panic!("root should remain tabs");
+    };
+    assert_eq!(tabs.active, 99);
+
+    let restored = restore_snapshot(
+        snapshot,
+        RestoreOptions {
+            repair_missing_panes: false,
+            drop_unknown_panes: false,
+            normalize: true,
+        },
+    )
+    .unwrap();
+    let Some(TileNode::Tabs(tabs)) = restored.node(TileId(0)) else {
+        panic!("root should remain tabs");
+    };
+    assert_eq!(tabs.active, 0);
+}
+
 #[cfg(feature = "serde")]
 #[test]
 fn serde_covers_public_data_types() {
