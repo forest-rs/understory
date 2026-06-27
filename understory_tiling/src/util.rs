@@ -92,7 +92,7 @@ pub(crate) fn tab_rects(rect: Rect, placement: TabBarPlacement, count: usize) ->
     rects
 }
 
-pub(crate) fn solve_lengths(total: f64, shares: &[f64], min_major: f64) -> Vec<f64> {
+pub(crate) fn solve_lengths_with_min(total: f64, shares: &[f64], min_major: &[f64]) -> Vec<f64> {
     let count = shares.len();
     if count == 0 {
         return Vec::new();
@@ -102,15 +102,24 @@ pub(crate) fn solve_lengths(total: f64, shares: &[f64], min_major: f64) -> Vec<f
         "split solver total length must be finite and non-negative",
     );
     debug_assert!(
-        min_major.is_finite() && min_major >= 0.0,
-        "split solver minimum length must be finite and non-negative",
+        min_major.len() == count
+            && min_major
+                .iter()
+                .all(|minimum| minimum.is_finite() && *minimum >= 0.0),
+        "split solver minimum lengths must be finite, non-negative, and match shares",
     );
     if total == 0.0 {
         return vec![0.0; count];
     }
 
-    let min_total = min_major * count as f64;
-    if min_major > 0.0 && min_total >= total {
+    let min_total = min_major.iter().copied().sum::<f64>();
+    if min_total >= total {
+        if min_total > 0.0 {
+            return min_major
+                .iter()
+                .map(|minimum| total * (*minimum / min_total))
+                .collect();
+        }
         return vec![total / count as f64; count];
     }
 
@@ -124,7 +133,7 @@ pub(crate) fn solve_lengths(total: f64, shares: &[f64], min_major: f64) -> Vec<f
         .map(|share| total * (*share / share_sum))
         .collect();
 
-    if min_major <= 0.0 {
+    if min_total <= 0.0 {
         return lengths;
     }
 
@@ -136,10 +145,10 @@ pub(crate) fn solve_lengths(total: f64, shares: &[f64], min_major: f64) -> Vec<f
         for (index, length) in lengths.iter_mut().enumerate() {
             if fixed[index] {
                 fixed_total += *length;
-            } else if *length < min_major {
-                *length = min_major;
+            } else if *length < min_major[index] {
+                *length = min_major[index];
                 fixed[index] = true;
-                fixed_total += min_major;
+                fixed_total += min_major[index];
                 changed = true;
             } else {
                 flexible_share_total += shares[index];

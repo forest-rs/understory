@@ -7,10 +7,11 @@ use core::cmp::Ordering;
 
 use crate::Placement;
 use crate::frame::hit_test;
-use crate::util::{rect_distance, repaired_shares};
+use crate::util::rect_distance;
 use crate::{
-    Axis, DockTarget, HitKind, LayoutFrame, PaneFrame, PaneId, Point, Rect, Revision, Size,
-    SplitHandleFrame, TabBarFrame, TabFrame, TileError, TileId, TileNode, TileOp, TileTree,
+    Axis, DockTarget, HitKind, LayoutFrame, LayoutInput, PaneFrame, PaneId, Point, Rect, Revision,
+    Size, SplitChildFrame, SplitHandleFrame, TabBarFrame, TabFrame, TileError, TileId, TileNode,
+    TileOp, TileTree,
 };
 
 /// High-level drag intent.
@@ -284,6 +285,22 @@ pub struct PreviewFrame {
     pub split_handles: Vec<SplitHandleFrame>,
 }
 
+impl PreviewFrame {
+    /// Copies renderable geometry from a solved layout frame.
+    ///
+    /// Use this when an interaction wants to return a complete preview layout
+    /// without exposing hit regions, focus order, or paint-order details.
+    #[must_use]
+    pub fn from_layout(frame: &LayoutFrame) -> Self {
+        Self {
+            panes: frame.panes.clone(),
+            tab_bars: frame.tab_bars.clone(),
+            tabs: frame.tabs.clone(),
+            split_handles: frame.split_handles.clone(),
+        }
+    }
+}
+
 /// Uncommitted layout proposal.
 ///
 /// Returned by interaction updates and passed to
@@ -340,8 +357,11 @@ pub enum DockProposal {
 
 /// Uncommitted resize proposal.
 ///
-/// Returned from [`update_resize`] and stored in [`ResizeSession`]. Commit it
-/// with [`commit_resize`] to apply the proposed split shares.
+/// Returned from [`update_resize`] and stored in [`ResizeSession`]. The proposed
+/// shares are computed from the solved split child geometry in the current
+/// [`LayoutFrame`], then clamped against [`ResizeOptions::min_pane_size`] and
+/// per-split minimum constraints. Commit it with [`commit_resize`] to apply the
+/// proposed split shares.
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ResizeProposal {
@@ -349,7 +369,7 @@ pub struct ResizeProposal {
     pub split: TileId,
     /// Handle index.
     pub handle: usize,
-    /// Pointer delta along the split axis.
+    /// Effective pointer delta along the split axis after clamping.
     ///
     /// Expected to be finite.
     pub delta: f64,
@@ -414,6 +434,15 @@ pub struct ResizeOptions {
     pub min_pane_size: Size,
     /// Commit behavior preferred by the embedding layer.
     pub commit_mode: CommitMode,
+}
+
+impl Default for ResizeOptions {
+    fn default() -> Self {
+        Self {
+            min_pane_size: Size::new(20.0, 20.0),
+            commit_mode: CommitMode::OnPointerUp,
+        }
+    }
 }
 
 /// Drag/drop options.
@@ -575,40 +604,28 @@ pub fn begin_resize(frame: &LayoutFrame, point: Point) -> Option<ResizeSession> 
 #[must_use]
 pub fn update_resize(
     tree: &TileTree,
-    _frame: &LayoutFrame,
+    frame: &LayoutFrame,
     resize: &mut ResizeSession,
     point: Point,
-    _options: &ResizeOptions,
+    options: &ResizeOptions,
 ) -> ResizeUpdate {
     debug_assert!(point.is_finite(), "point must be finite");
+    debug_assert!(
+        options.min_pane_size.is_finite()
+            && options.min_pane_size.width >= 0.0
+            && options.min_pane_size.height >= 0.0,
+        "ResizeOptions::min_pane_size must be finite and non-negative",
+    );
     resize.current = point;
-    let delta = match resize.axis {
-        Axis::Horizontal => point.x - resize.origin.x,
-        Axis::Vertical => point.y - resize.origin.y,
-    };
-    let new_shares = match tree.node(resize.split) {
-        Some(TileNode::Split(split)) => {
-            let mut shares = repaired_shares(split.children.len(), &split.shares);
-            if resize.handle + 1 < shares.len() {
-                let delta_share = delta / 100.0;
-                shares[resize.handle] = (shares[resize.handle] + delta_share).max(0.01);
-                shares[resize.handle + 1] = (shares[resize.handle + 1] - delta_share).max(0.01);
-            }
-            shares
-        }
-        _ => Vec::new(),
-    };
-    let proposal = (!new_shares.is_empty()).then_some(ResizeProposal {
-        split: resize.split,
-        handle: resize.handle,
-        delta,
-        new_shares,
-    });
+    let proposal = resize_proposal_from_frame(tree, frame, resize, point, options);
+    let preview = proposal
+        .as_ref()
+        .and_then(|proposal| preview_for_resize(tree, frame, proposal, options));
     resize.proposal = proposal.clone();
     ResizeUpdate {
         proposal,
         overlay: OverlayFrame::default(),
-        preview: None,
+        preview,
     }
 }
 
@@ -1075,4 +1092,159 @@ fn tab_insert_index(
         }
     }
     Some(tabs.len())
+}
+
+fn resize_proposal_from_frame(
+    tree: &TileTree,
+    frame: &LayoutFrame,
+    resize: &ResizeSession,
+    point: Point,
+    options: &ResizeOptions,
+) -> Option<ResizeProposal> {
+    let TileNode::Split(split) = tree.node(resize.split)? else {
+        return None;
+    };
+    if resize.handle + 1 >= split.children.len() {
+        return None;
+    }
+
+    let children = split_child_frames(frame, resize.split);
+    if children.len() != split.children.len() {
+        return None;
+    }
+    for child in &children {
+        if split.children.get(child.index).copied() != Some(child.child) {
+            return None;
+        }
+    }
+
+    let left = children.get(resize.handle)?;
+    let right = children.get(resize.handle + 1)?;
+    let left_length = major_length(left.rect, resize.axis);
+    let right_length = major_length(right.rect, resize.axis);
+    if left_length <= 0.0 || right_length <= 0.0 {
+        return None;
+    }
+
+    let min_major = resize_min_major(split.children.len(), split, resize.axis, options);
+    let min_left = min_major[resize.handle];
+    let min_right = min_major[resize.handle + 1];
+    let lower = min_left - left_length;
+    let upper = right_length - min_right;
+    if lower > upper {
+        return None;
+    }
+
+    let requested_delta = match resize.axis {
+        Axis::Horizontal => point.x - resize.origin.x,
+        Axis::Vertical => point.y - resize.origin.y,
+    };
+    let delta = requested_delta.clamp(lower, upper);
+    if delta == 0.0 {
+        return None;
+    }
+
+    let mut new_shares = Vec::with_capacity(children.len());
+    for child in &children {
+        let mut length = major_length(child.rect, resize.axis);
+        if child.index == resize.handle {
+            length += delta;
+        } else if child.index == resize.handle + 1 {
+            length -= delta;
+        }
+        if length <= 0.0 {
+            return None;
+        }
+        new_shares.push(length);
+    }
+
+    Some(ResizeProposal {
+        split: resize.split,
+        handle: resize.handle,
+        delta,
+        new_shares,
+    })
+}
+
+fn preview_for_resize(
+    tree: &TileTree,
+    frame: &LayoutFrame,
+    proposal: &ResizeProposal,
+    options: &ResizeOptions,
+) -> Option<PreviewFrame> {
+    let bounds = frame_bounds(frame)?;
+    let split_handle_thickness = frame
+        .split_handles
+        .iter()
+        .find(|handle| handle.split == proposal.split && handle.handle == proposal.handle)
+        .map(|handle| handle_thickness(handle.rect, handle.axis))?;
+    let mut preview_tree = tree.clone();
+    preview_tree
+        .apply(TileOp::SetSplitShares {
+            split: proposal.split,
+            shares: proposal.new_shares.clone(),
+        })
+        .ok()?;
+    let preview = preview_tree.layout(LayoutInput {
+        bounds,
+        tab_bar_thickness: tab_bar_thickness(frame),
+        split_handle_thickness,
+        min_pane_size: options.min_pane_size,
+        generate_drop_targets: false,
+    });
+    Some(PreviewFrame::from_layout(&preview))
+}
+
+fn split_child_frames(frame: &LayoutFrame, split: TileId) -> Vec<SplitChildFrame> {
+    let mut children = frame
+        .split_children
+        .iter()
+        .filter(|child| child.split == split)
+        .copied()
+        .collect::<Vec<_>>();
+    children.sort_by_key(|child| child.index);
+    children
+}
+
+fn resize_min_major(
+    count: usize,
+    split: &crate::SplitNode,
+    axis: Axis,
+    options: &ResizeOptions,
+) -> Vec<f64> {
+    let fallback = match axis {
+        Axis::Horizontal => options.min_pane_size.width,
+        Axis::Vertical => options.min_pane_size.height,
+    };
+    (0..count)
+        .map(
+            |index| match split.constraints.min_major.get(index).copied() {
+                Some(minimum) if minimum.is_finite() && minimum >= 0.0 => fallback.max(minimum),
+                _ => fallback,
+            },
+        )
+        .collect()
+}
+
+fn major_length(rect: Rect, axis: Axis) -> f64 {
+    match axis {
+        Axis::Horizontal => rect.width(),
+        Axis::Vertical => rect.height(),
+    }
+}
+
+fn handle_thickness(rect: Rect, axis: Axis) -> f64 {
+    major_length(rect, axis)
+}
+
+fn tab_bar_thickness(frame: &LayoutFrame) -> f64 {
+    frame
+        .tab_bars
+        .iter()
+        .map(|bar| match bar.placement {
+            crate::TabBarPlacement::Top | crate::TabBarPlacement::Bottom => bar.rect.height(),
+            crate::TabBarPlacement::Left | crate::TabBarPlacement::Right => bar.rect.width(),
+            crate::TabBarPlacement::Hidden => 0.0,
+        })
+        .fold(0.0, f64::max)
 }
