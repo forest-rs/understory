@@ -255,6 +255,21 @@ fn drag_update_returns_preview_when_layout_input_is_provided() {
 }
 
 #[test]
+fn pending_drag_waits_until_threshold_is_crossed() {
+    let tree = TileTree::single_pane(PaneId(1));
+    let frame = tree.layout(input());
+    let pending =
+        begin_pending_drag(&frame, Point::new(20.0, 20.0), DragIntent::Move, 5.0).unwrap();
+
+    assert!(pending.update(Point::new(23.0, 23.0)).is_none());
+
+    let drag = pending.update(Point::new(26.0, 20.0)).unwrap();
+    assert_eq!(drag.origin, Point::new(20.0, 20.0));
+    assert_eq!(drag.current, Point::new(26.0, 20.0));
+    assert_eq!(drag.subject, DragSubject::Pane(PaneId(1)));
+}
+
+#[test]
 fn drag_local_pane_edge_target_wins_over_root_target() {
     let mut tree = TileTree::single_pane(PaneId(1));
     tree.apply(TileOp::SplitPane {
@@ -943,6 +958,7 @@ fn serde_covers_public_data_types() {
     assert_serde::<DragIntent>();
     assert_serde::<InteractionState>();
     assert_serde::<DragSession>();
+    assert_serde::<PendingDrag>();
     assert_serde::<DragSubject>();
     assert_serde::<DragSource>();
     assert_serde::<ResizeSession>();
