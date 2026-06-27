@@ -227,6 +227,34 @@ fn drag_update_proposes_move() {
 }
 
 #[test]
+fn tab_insert_threshold_controls_reorder_index() {
+    let tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
+    let frame = tree.layout(input());
+    let mut drag = begin_drag(&frame, Point::new(225.0, 10.0), DragIntent::Move).unwrap();
+    let options = DragOptions {
+        allow_split: false,
+        tab_insert_threshold: 0.75,
+        ..DragOptions::default()
+    };
+
+    let update = update_drag(&tree, &frame, &mut drag, Point::new(100.0, 10.0), &options);
+    assert!(matches!(
+        update.proposal,
+        Some(DockProposal::ReorderTab { index: 0, .. })
+    ));
+
+    let options = DragOptions {
+        tab_insert_threshold: 0.25,
+        ..options
+    };
+    let update = update_drag(&tree, &frame, &mut drag, Point::new(100.0, 10.0), &options);
+    assert!(matches!(
+        update.proposal,
+        Some(DockProposal::ReorderTab { index: 1, .. })
+    ));
+}
+
+#[test]
 fn stale_drag_commit_is_rejected() {
     let mut tree = TileTree::single_pane(PaneId(1));
     let frame = tree.layout(input());
