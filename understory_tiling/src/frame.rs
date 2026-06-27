@@ -21,6 +21,8 @@ pub struct LayoutFrame {
     pub tab_bars: Vec<TabBarFrame>,
     /// Individual tab rectangles.
     pub tabs: Vec<TabFrame>,
+    /// Solved split child rectangles.
+    pub split_children: Vec<SplitChildFrame>,
     /// Split handle rectangles.
     pub split_handles: Vec<SplitHandleFrame>,
     /// Hit-test regions in frame coordinates.
@@ -85,6 +87,24 @@ pub struct TabFrame {
     pub index: usize,
     /// Whether this tab is active.
     pub active: bool,
+}
+
+/// Solved geometry for one split child.
+///
+/// Produced in [`LayoutFrame::split_children`] for every child of every solved
+/// split. Interaction code uses these records to compute resize proposals from
+/// the same geometry that renderers see.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct SplitChildFrame {
+    /// Split tile id.
+    pub split: TileId,
+    /// Child tile id.
+    pub child: TileId,
+    /// Child index in the split.
+    pub index: usize,
+    /// Solved child rectangle.
+    pub rect: Rect,
 }
 
 /// Flattened split handle geometry.

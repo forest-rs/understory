@@ -37,8 +37,11 @@ fn split_pane_creates_two_panes_and_handle() {
 
     let frame = tree.layout(input());
     assert_eq!(frame.panes.len(), 2);
+    assert_eq!(frame.split_children.len(), 2);
     assert_eq!(frame.split_handles.len(), 1);
     assert_eq!(frame.panes[0].rect.width(), 145.0);
+    assert_eq!(frame.split_children[0].rect, frame.panes[0].rect);
+    assert_eq!(frame.split_children[1].rect, frame.panes[1].rect);
     assert_eq!(frame.split_handles[0].rect.width(), 10.0);
     assert_eq!(frame.panes[1].rect.width(), 145.0);
 }
@@ -383,6 +386,69 @@ fn unsupported_tab_group_drag_targets_are_invalid() {
             kind: GhostKind::Invalid,
         }]
     );
+}
+
+#[test]
+fn resize_update_uses_solved_geometry_and_returns_preview() {
+    let mut tree = TileTree::single_pane(PaneId(1));
+    tree.apply(TileOp::SplitPane {
+        pane: PaneId(1),
+        axis: Axis::Horizontal,
+        new_pane: PaneId(2),
+        placement: Placement::After,
+        share: 0.5,
+    })
+    .unwrap();
+    let frame = tree.layout(input());
+    let mut resize = begin_resize(&frame, Point::new(150.0, 100.0)).unwrap();
+
+    let update = update_resize(
+        &tree,
+        &frame,
+        &mut resize,
+        Point::new(200.0, 100.0),
+        &ResizeOptions::default(),
+    );
+
+    let proposal = update.proposal.unwrap();
+    assert_eq!(proposal.delta, 50.0);
+    assert_eq!(proposal.new_shares, vec![195.0, 95.0]);
+
+    let preview = update.preview.unwrap();
+    assert_eq!(preview.panes[0].rect.width(), 195.0);
+    assert_eq!(preview.split_handles[0].rect.x0, 195.0);
+    assert_eq!(preview.panes[1].rect.width(), 95.0);
+}
+
+#[test]
+fn resize_update_clamps_to_min_pane_size() {
+    let mut tree = TileTree::single_pane(PaneId(1));
+    tree.apply(TileOp::SplitPane {
+        pane: PaneId(1),
+        axis: Axis::Horizontal,
+        new_pane: PaneId(2),
+        placement: Placement::After,
+        share: 0.5,
+    })
+    .unwrap();
+    let frame = tree.layout(input());
+    let mut resize = begin_resize(&frame, Point::new(150.0, 100.0)).unwrap();
+
+    let update = update_resize(
+        &tree,
+        &frame,
+        &mut resize,
+        Point::new(500.0, 100.0),
+        &ResizeOptions::default(),
+    );
+
+    let proposal = update.proposal.unwrap();
+    assert_eq!(proposal.delta, 125.0);
+    assert_eq!(proposal.new_shares, vec![270.0, 20.0]);
+
+    let preview = update.preview.unwrap();
+    assert_eq!(preview.panes[0].rect.width(), 270.0);
+    assert_eq!(preview.panes[1].rect.width(), 20.0);
 }
 
 #[test]
@@ -734,6 +800,7 @@ fn serde_covers_public_data_types() {
     assert_serde::<PaneFrame>();
     assert_serde::<TabBarFrame>();
     assert_serde::<TabFrame>();
+    assert_serde::<SplitChildFrame>();
     assert_serde::<SplitHandleFrame>();
     assert_serde::<FrameItemId>();
     assert_serde::<HitRegion>();

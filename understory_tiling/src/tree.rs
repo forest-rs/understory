@@ -6,12 +6,13 @@ use alloc::vec::Vec;
 
 use crate::RepairAction;
 use crate::util::{
-    is_valid_split_fraction, repaired_shares, solve_lengths, split_tab_bar, tab_rects,
+    is_valid_split_fraction, repaired_shares, solve_lengths_with_min, split_tab_bar, tab_rects,
 };
 use crate::{
     Axis, DockTarget, FrameItemId, HitKind, HitRegion, LayoutFrame, LayoutInput, PaneFrame, PaneId,
-    Placement, Rect, RepairReport, Revision, SplitConstraints, SplitHandleFrame, SplitNode,
-    TabBarFrame, TabBarPlacement, TabFrame, TabNode, TileError, TileId, TileNode, TileOp,
+    Placement, Rect, RepairReport, Revision, SplitChildFrame, SplitConstraints, SplitHandleFrame,
+    SplitNode, TabBarFrame, TabBarPlacement, TabFrame, TabNode, TileError, TileId, TileNode,
+    TileOp,
 };
 
 /// Persistent semantic tree of splits, tab groups, and pane leaves.
@@ -798,11 +799,12 @@ impl TileTree {
         let handle_total = handle * (children.len() - 1) as f64;
         let child_total = (major - handle_total).max(0.0);
         let shares = repaired_shares(children.len(), &split.shares);
-        let min_major = match split.axis {
+        let default_min_major = match split.axis {
             Axis::Horizontal => input.min_pane_size.width,
             Axis::Vertical => input.min_pane_size.height,
         };
-        let lengths = solve_lengths(child_total, &shares, min_major);
+        let min_major = split_min_major(children.len(), &split.constraints, default_min_major);
+        let lengths = solve_lengths_with_min(child_total, &shares, &min_major);
         let mut cursor = match split.axis {
             Axis::Horizontal => rect.x0,
             Axis::Vertical => rect.y0,
@@ -814,6 +816,12 @@ impl TileTree {
                 Axis::Horizontal => Rect::new(cursor, rect.y0, cursor + length, rect.y1),
                 Axis::Vertical => Rect::new(rect.x0, cursor, rect.x1, cursor + length),
             };
+            frame.split_children.push(SplitChildFrame {
+                split: id,
+                child,
+                index,
+                rect: child_rect,
+            });
             self.layout_tile(child, child_rect, input, frame, visiting);
             cursor += length;
             if index + 1 < children.len() {
@@ -902,4 +910,13 @@ impl TileTree {
             None => 0,
         }
     }
+}
+
+fn split_min_major(count: usize, constraints: &SplitConstraints, fallback: f64) -> Vec<f64> {
+    (0..count)
+        .map(|index| match constraints.min_major.get(index).copied() {
+            Some(minimum) if minimum.is_finite() && minimum >= 0.0 => fallback.max(minimum),
+            _ => fallback,
+        })
+        .collect()
 }
