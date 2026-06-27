@@ -22,6 +22,7 @@ members = [
   "understory_selection",
   "understory_style",
   "understory_timing",
+  "understory_tiling",
   "understory_transcript",
   "understory_view2d",
   "understory_virtual_list",
@@ -77,6 +78,7 @@ understory_responder = { version = "0.1.0", path = "understory_responder", defau
 understory_selection = { version = "0.1.0", path = "understory_selection", default-features = false }
 understory_style = { version = "0.1.0", path = "understory_style", default-features = false }
 understory_timing = { version = "0.1.2", path = "understory_timing", default-features = false }
+understory_tiling = { version = "0.1.0", path = "understory_tiling", default-features = false }
 understory_timeline_model = { version = "0.1.0", path = "understory_timeline_model", default-features = false }
 understory_transcript = { version = "0.1.0", path = "understory_transcript", default-features = false }
 understory_view2d = { version = "0.1.0", path = "understory_view2d", default-features = false }

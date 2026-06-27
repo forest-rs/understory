@@ -27,6 +27,7 @@ env:
     -p understory_responder
     -p understory_selection
     -p understory_style
+    -p understory_tiling
     -p understory_timing
     -p understory_transcript
     -p understory_view2d

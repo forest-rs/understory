@@ -773,6 +773,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "understory_tiling"
+version = "0.1.0"
+dependencies = [
+ "kurbo",
+]
+
+[[package]]
 name = "understory_timeline_model"
 version = "0.1.0"
 
