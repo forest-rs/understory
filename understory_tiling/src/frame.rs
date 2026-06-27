@@ -152,6 +152,54 @@ pub enum FrameItemId {
     },
 }
 
+/// Layout difference between two frames.
+///
+/// Returned by [`diff_frames`]. Renderers can use this to decide which stable
+/// frame items were added, removed, moved, or resized between two layout solves.
+/// Animation timing and interpolation remain the host's responsibility.
+#[derive(Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct FrameDiff {
+    /// Changed items in deterministic order.
+    pub items: Vec<FrameItemDiff>,
+}
+
+/// Difference for one stable frame item.
+///
+/// Produced inside [`FrameDiff::items`]. `before` is `None` for added items;
+/// `after` is `None` for removed items.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct FrameItemDiff {
+    /// Stable frame item id.
+    pub item: FrameItemId,
+    /// Previous rectangle, if the item existed before.
+    pub before: Option<Rect>,
+    /// New rectangle, if the item exists after.
+    pub after: Option<Rect>,
+    /// Geometry change classification.
+    pub change: FrameChange,
+}
+
+/// Geometry change classification for one frame item.
+///
+/// Returned in [`FrameItemDiff::change`] so hosts can choose animation behavior
+/// without re-deriving whether an item was added, removed, moved, or resized.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum FrameChange {
+    /// Item appears in the new frame only.
+    Added,
+    /// Item appears in the old frame only.
+    Removed,
+    /// Item keeps its size but changes origin.
+    Moved,
+    /// Item keeps its origin but changes size.
+    Resized,
+    /// Item changes both origin and size.
+    MovedAndResized,
+}
+
 /// Hit-test region.
 ///
 /// Produced in [`LayoutFrame::hit_regions`] and consumed by [`hit_test`]. Most
@@ -220,4 +268,100 @@ pub fn hit_test(frame: &LayoutFrame, point: Point) -> Option<HitKind> {
         }
     }
     best.map(|(_, region)| region.kind)
+}
+
+/// Computes geometry changes between two layout frames.
+///
+/// The returned diff contains changed items only. Items are matched by stable
+/// [`FrameItemId`], so a pane that changes rectangle is reported as moved or
+/// resized instead of as a remove/add pair.
+#[must_use]
+pub fn diff_frames(before: &LayoutFrame, after: &LayoutFrame) -> FrameDiff {
+    let before_items = frame_item_rects(before);
+    let after_items = frame_item_rects(after);
+    let mut items = Vec::new();
+
+    for (item, after_rect) in &after_items {
+        match find_item_rect(&before_items, *item) {
+            Some(before_rect) => {
+                if let Some(change) = classify_rect_change(before_rect, *after_rect) {
+                    items.push(FrameItemDiff {
+                        item: *item,
+                        before: Some(before_rect),
+                        after: Some(*after_rect),
+                        change,
+                    });
+                }
+            }
+            None => items.push(FrameItemDiff {
+                item: *item,
+                before: None,
+                after: Some(*after_rect),
+                change: FrameChange::Added,
+            }),
+        }
+    }
+
+    for (item, before_rect) in &before_items {
+        if find_item_rect(&after_items, *item).is_none() {
+            items.push(FrameItemDiff {
+                item: *item,
+                before: Some(*before_rect),
+                after: None,
+                change: FrameChange::Removed,
+            });
+        }
+    }
+
+    FrameDiff { items }
+}
+
+fn frame_item_rects(frame: &LayoutFrame) -> Vec<(FrameItemId, Rect)> {
+    let mut items = Vec::new();
+    for pane in &frame.panes {
+        items.push((FrameItemId::Pane(pane.pane), pane.rect));
+    }
+    for bar in &frame.tab_bars {
+        items.push((FrameItemId::TabBar(bar.group), bar.rect));
+    }
+    for tab in &frame.tabs {
+        items.push((
+            FrameItemId::Tab {
+                group: tab.group,
+                pane: tab.pane,
+            },
+            tab.rect,
+        ));
+    }
+    for handle in &frame.split_handles {
+        items.push((
+            FrameItemId::SplitHandle {
+                split: handle.split,
+                handle: handle.handle,
+            },
+            handle.rect,
+        ));
+    }
+    items
+}
+
+fn find_item_rect(items: &[(FrameItemId, Rect)], item: FrameItemId) -> Option<Rect> {
+    items
+        .iter()
+        .find(|(candidate, _)| *candidate == item)
+        .map(|(_, rect)| *rect)
+}
+
+fn classify_rect_change(before: Rect, after: Rect) -> Option<FrameChange> {
+    if before == after {
+        return None;
+    }
+    let moved = before.x0 != after.x0 || before.y0 != after.y0;
+    let resized = before.width() != after.width() || before.height() != after.height();
+    match (moved, resized) {
+        (true, true) => Some(FrameChange::MovedAndResized),
+        (true, false) => Some(FrameChange::Moved),
+        (false, true) => Some(FrameChange::Resized),
+        (false, false) => None,
+    }
 }
