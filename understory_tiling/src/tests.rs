@@ -71,6 +71,26 @@ fn frame_diff_reports_added_and_resized_items() {
     assert!(diff.items.iter().any(|item| matches!(
         item,
         FrameItemDiff {
+            item: FrameItemId::Pane(PaneId(2)),
+            change: FrameChange::Added,
+            transition: Some(FrameTransitionHint::EnteredFrom {
+                item: Some(FrameItemId::Pane(PaneId(1))),
+                rect,
+            }),
+            ..
+        } if *rect == input().bounds
+    )));
+    assert!(diff.items.iter().any(|item| matches!(
+        item,
+        FrameItemDiff {
+            item: FrameItemId::SplitChild { .. },
+            change: FrameChange::Added,
+            ..
+        }
+    )));
+    assert!(diff.items.iter().any(|item| matches!(
+        item,
+        FrameItemDiff {
             item: FrameItemId::SplitHandle { handle: 0, .. },
             change: FrameChange::Added,
             ..
@@ -310,7 +330,45 @@ fn drag_update_returns_preview_when_layout_input_is_provided() {
 
     let preview = update.preview.unwrap();
     assert_eq!(preview.panes.len(), 2);
+    assert_eq!(preview.split_children.len(), 2);
     assert_eq!(preview.split_handles.len(), 1);
+}
+
+#[test]
+fn drag_preview_can_diff_to_committed_frame() {
+    let mut tree = TileTree::single_pane(PaneId(1));
+    tree.apply(TileOp::SplitPane {
+        pane: PaneId(1),
+        axis: Axis::Horizontal,
+        new_pane: PaneId(2),
+        placement: Placement::After,
+        share: 0.5,
+    })
+    .unwrap();
+    let frame = tree.layout(input());
+    let mut drag = begin_drag(&frame, Point::new(20.0, 20.0), DragIntent::Move).unwrap();
+    let options = DragOptions {
+        preview_layout: Some(input()),
+        ..DragOptions::default()
+    };
+    let update = update_drag(&tree, &frame, &mut drag, Point::new(290.0, 50.0), &options);
+    let preview = update.preview.unwrap();
+
+    commit_drag(&mut tree, drag).unwrap();
+    let committed = tree.layout(input());
+
+    assert!(preview.diff_to_layout_frame(&committed).items.is_empty());
+    assert!(
+        preview
+            .diff_from_layout_frame(&frame)
+            .items
+            .iter()
+            .any(|item| matches!(
+                item.transition,
+                Some(FrameTransitionHint::EnteredFrom { .. })
+                    | Some(FrameTransitionHint::SharedOrigin(_))
+            ))
+    );
 }
 
 #[test]
@@ -994,6 +1052,7 @@ fn serde_covers_public_data_types() {
     assert_serde::<FrameDiff>();
     assert_serde::<FrameItemDiff>();
     assert_serde::<FrameChange>();
+    assert_serde::<FrameTransitionHint>();
     assert_serde::<PaneFrame>();
     assert_serde::<TabBarFrame>();
     assert_serde::<TabFrame>();

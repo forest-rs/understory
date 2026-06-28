@@ -91,8 +91,9 @@ mod tree;
 mod util;
 
 pub use frame::{
-    FrameChange, FrameDiff, FrameItemDiff, FrameItemId, HitKind, HitRegion, LayoutFrame, PaneFrame,
-    SplitChildFrame, SplitHandleFrame, TabBarFrame, TabFrame, diff_frames, hit_test,
+    FrameChange, FrameDiff, FrameItemDiff, FrameItemId, FrameTransitionHint, HitKind, HitRegion,
+    LayoutFrame, PaneFrame, SplitChildFrame, SplitHandleFrame, TabBarFrame, TabFrame, diff_frames,
+    hit_test,
 };
 pub use ids::{PaneId, Revision, SurfaceId, TileId};
 pub use interaction::{
