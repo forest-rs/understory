@@ -309,7 +309,7 @@ fn drag_update_proposes_move() {
 }
 
 #[test]
-fn drag_update_returns_preview_when_layout_input_is_provided() {
+fn drag_update_returns_preview_layout_when_layout_input_is_provided() {
     let mut tree = TileTree::single_pane(PaneId(1));
     tree.apply(TileOp::SplitPane {
         pane: PaneId(1),
@@ -332,6 +332,9 @@ fn drag_update_returns_preview_when_layout_input_is_provided() {
     assert_eq!(preview.panes.len(), 2);
     assert_eq!(preview.split_children.len(), 2);
     assert_eq!(preview.split_handles.len(), 1);
+    assert!(!preview.hit_regions.is_empty());
+    assert!(!preview.focus_order.is_empty());
+    assert!(!preview.paint_order.is_empty());
 }
 
 #[test]
@@ -357,10 +360,9 @@ fn drag_preview_can_diff_to_committed_frame() {
     commit_drag(&mut tree, drag).unwrap();
     let committed = tree.layout(input());
 
-    assert!(preview.diff_to_layout_frame(&committed).items.is_empty());
+    assert!(diff_frames(&preview, &committed).items.is_empty());
     assert!(
-        preview
-            .diff_from_layout_frame(&frame)
+        diff_frames(&frame, &preview)
             .items
             .iter()
             .any(|item| matches!(
@@ -384,6 +386,48 @@ fn pending_drag_waits_until_threshold_is_crossed() {
     assert_eq!(drag.origin, Point::new(20.0, 20.0));
     assert_eq!(drag.current, Point::new(26.0, 20.0));
     assert_eq!(drag.subject, DragSubject::Pane(PaneId(1)));
+}
+
+#[test]
+fn interaction_update_promotes_pending_drag_after_threshold() {
+    let mut tree = TileTree::single_pane(PaneId(1));
+    tree.apply(TileOp::SplitPane {
+        pane: PaneId(1),
+        axis: Axis::Horizontal,
+        new_pane: PaneId(2),
+        placement: Placement::After,
+        share: 0.5,
+    })
+    .unwrap();
+    let frame = tree.layout(input());
+    let pending =
+        begin_pending_drag(&frame, Point::new(20.0, 20.0), DragIntent::Move, 5.0).unwrap();
+    let mut state = InteractionState::PendingDrag(pending);
+    let options = InteractionOptions::from_layout_input(input());
+
+    let before = update_interaction(&tree, &frame, &mut state, Point::new(23.0, 23.0), &options);
+    assert!(before.proposal.is_none());
+    assert!(matches!(state, InteractionState::PendingDrag(_)));
+
+    let after = update_interaction(&tree, &frame, &mut state, Point::new(200.0, 5.0), &options);
+    assert!(matches!(state, InteractionState::Drag(_)));
+    assert!(matches!(after.proposal, Some(Proposal::Dock(_))));
+    assert!(after.base_revision.is_some());
+    assert!(after.preview.is_some());
+}
+
+#[test]
+fn interaction_options_derive_preview_and_resize_inputs_from_layout() {
+    let layout = input();
+    let options = InteractionOptions::from_layout_input(layout);
+    let preview_layout = options.drag.preview_layout.unwrap();
+
+    assert_eq!(preview_layout.bounds, layout.bounds);
+    assert_eq!(
+        preview_layout.split_handle_thickness,
+        layout.split_handle_thickness
+    );
+    assert_eq!(options.resize.min_pane_size, layout.min_pane_size);
 }
 
 #[test]
@@ -926,6 +970,62 @@ fn commit_proposal_applies_validated_operation() {
 }
 
 #[test]
+fn interaction_update_validates_and_commits_resize_proposal() {
+    let mut tree = TileTree::single_pane(PaneId(1));
+    tree.apply(TileOp::SplitPane {
+        pane: PaneId(1),
+        axis: Axis::Horizontal,
+        new_pane: PaneId(2),
+        placement: Placement::After,
+        share: 0.5,
+    })
+    .unwrap();
+    let frame = tree.layout(input());
+    let resize = begin_resize(&frame, Point::new(150.0, 100.0)).unwrap();
+    let mut state = InteractionState::Resize(resize);
+    let options = InteractionOptions::from_layout_input(input());
+
+    let update = update_interaction(
+        &tree,
+        &frame,
+        &mut state,
+        Point::new(200.0, 100.0),
+        &options,
+    );
+    assert!(matches!(update.proposal, Some(Proposal::Resize(_))));
+    assert!(update.preview.is_some());
+
+    let policy = DockPolicyData::default();
+    let validation = ProposalValidationInput::from_interaction_update(&tree, &update, &policy)
+        .unwrap()
+        .with_frame(&frame)
+        .with_interaction_options(&options);
+    let proposal = validate_proposal(validation).unwrap();
+    let op = commit_proposal(&mut tree, proposal).unwrap();
+
+    assert!(matches!(op, TileOp::SetSplitShares { .. }));
+}
+
+#[test]
+fn validate_proposal_rejects_stale_interaction_revision() {
+    let tree = TileTree::single_pane(PaneId(1));
+
+    let result = validate_proposal(
+        ProposalValidationInput::new(
+            &tree,
+            Proposal::Dock(DockProposal::MovePane {
+                pane: PaneId(1),
+                target: DockTarget::Root,
+            }),
+            &DockPolicyData::default(),
+        )
+        .with_base_revision(Revision(99)),
+    );
+
+    assert_eq!(result.unwrap_err(), TileError::StaleInteraction);
+}
+
+#[test]
 fn repair_reports_and_applies_persisted_layout_fixes() {
     let mut tree = TileTree::from_raw_parts_for_test(
         TileId(0),
@@ -1118,6 +1218,7 @@ fn serde_covers_public_data_types() {
 
     assert_serde::<DragIntent>();
     assert_serde::<InteractionState>();
+    assert_serde::<InteractionUpdate>();
     assert_serde::<DragSession>();
     assert_serde::<PendingDrag>();
     assert_serde::<DragSubject>();
@@ -1131,7 +1232,6 @@ fn serde_covers_public_data_types() {
     assert_serde::<GhostFrame>();
     assert_serde::<GhostKind>();
     assert_serde::<DraggedFrame>();
-    assert_serde::<PreviewFrame>();
     assert_serde::<Proposal>();
     assert_serde::<DockProposal>();
     assert_serde::<ResizeProposal>();
@@ -1140,4 +1240,5 @@ fn serde_covers_public_data_types() {
     assert_serde::<CommitMode>();
     assert_serde::<ResizeOptions>();
     assert_serde::<DragOptions>();
+    assert_serde::<InteractionOptions>();
 }

@@ -6,8 +6,8 @@ use alloc::vec::Vec;
 use crate::interaction::op_for_dock_proposal;
 use crate::util::{major_length, major_size, split_min_major};
 use crate::{
-    Axis, DockProposal, DockTarget, LayoutFrame, Placement, Proposal, ResizeOptions,
-    ResizeProposal, TileError, TileNode, TileOp, TileTree,
+    Axis, DockProposal, DockTarget, InteractionOptions, InteractionUpdate, LayoutFrame, Placement,
+    Proposal, ResizeOptions, ResizeProposal, Revision, TileError, TileNode, TileOp, TileTree,
 };
 
 /// Pane behavior capabilities.
@@ -99,7 +99,9 @@ pub struct ValidatedProposal {
 /// [`validate_proposal`]. Dock proposals only need a tree and policy. Resize
 /// proposals should additionally use [`ProposalValidationInput::with_frame`] so
 /// validation can check the proposed shares against the solved split geometry
-/// that produced the active resize interaction.
+/// that produced the active resize interaction. Pointer-generated proposals can
+/// also use [`ProposalValidationInput::with_base_revision`] so validation
+/// rejects stale interactions.
 #[derive(Clone, Debug)]
 pub struct ProposalValidationInput<'a> {
     /// Tree the proposal applies to.
@@ -112,6 +114,8 @@ pub struct ProposalValidationInput<'a> {
     pub frame: Option<&'a LayoutFrame>,
     /// Resize geometry constraints.
     pub resize_options: ResizeOptions,
+    /// Expected tree revision for stale interaction checks.
+    pub base_revision: Option<Revision>,
 }
 
 impl Default for PaneCapabilities {
@@ -142,7 +146,30 @@ impl<'a> ProposalValidationInput<'a> {
             policy,
             frame: None,
             resize_options: ResizeOptions::default(),
+            base_revision: None,
         }
+    }
+
+    /// Creates validation input from a unified interaction update.
+    ///
+    /// Use this when committing proposals returned by
+    /// [`update_interaction`](crate::update_interaction). Add the current
+    /// layout frame with [`ProposalValidationInput::with_frame`] before
+    /// validating resize proposals.
+    #[must_use]
+    pub fn from_interaction_update(
+        tree: &'a TileTree,
+        update: &InteractionUpdate,
+        policy: &'a DockPolicyData,
+    ) -> Option<Self> {
+        Some(Self {
+            tree,
+            proposal: update.proposal.clone()?,
+            policy,
+            frame: None,
+            resize_options: ResizeOptions::default(),
+            base_revision: update.base_revision,
+        })
     }
 
     /// Adds a solved frame for geometry-sensitive validation.
@@ -162,6 +189,27 @@ impl<'a> ProposalValidationInput<'a> {
     #[must_use]
     pub const fn with_resize_options(mut self, options: ResizeOptions) -> Self {
         self.resize_options = options;
+        self
+    }
+
+    /// Adds resize options from unified interaction options.
+    ///
+    /// Use this with values passed to
+    /// [`update_interaction`](crate::update_interaction) so validation applies
+    /// the same resize constraints that produced the proposal.
+    #[must_use]
+    pub const fn with_interaction_options(mut self, options: &InteractionOptions) -> Self {
+        self.resize_options = options.resize;
+        self
+    }
+
+    /// Adds an expected tree revision for stale interaction checks.
+    ///
+    /// Pointer interactions should validate against the revision captured at
+    /// pointer-down. Command-generated proposals can leave this unset.
+    #[must_use]
+    pub const fn with_base_revision(mut self, revision: Revision) -> Self {
+        self.base_revision = Some(revision);
         self
     }
 }
@@ -225,7 +273,13 @@ pub fn validate_proposal(
         policy,
         frame,
         resize_options,
+        base_revision,
     } = input;
+    if let Some(base_revision) = base_revision
+        && base_revision != tree.revision()
+    {
+        return Err(TileError::StaleInteraction);
+    }
     if policy.locked_layout {
         return Err(TileError::PolicyRejected);
     }
