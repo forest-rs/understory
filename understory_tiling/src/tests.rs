@@ -438,6 +438,46 @@ fn drag_local_pane_edge_target_wins_over_root_target() {
 }
 
 #[test]
+fn overlapping_edge_targets_rank_by_nearest_edge() {
+    let mut tree = TileTree::single_pane(PaneId(1));
+    tree.apply(TileOp::SplitPane {
+        pane: PaneId(1),
+        axis: Axis::Horizontal,
+        new_pane: PaneId(2),
+        placement: Placement::After,
+        share: 0.5,
+    })
+    .unwrap();
+    let frame = tree.layout(input());
+    let target_tile = frame
+        .panes
+        .iter()
+        .find(|pane| pane.pane == PaneId(2))
+        .unwrap()
+        .tile;
+    let mut drag = begin_drag(&frame, Point::new(20.0, 100.0), DragIntent::Move).unwrap();
+    let options = DragOptions {
+        edge_zone_fraction: 0.5,
+        ..DragOptions::default()
+    };
+
+    let update = update_drag(&tree, &frame, &mut drag, Point::new(200.0, 5.0), &options);
+
+    assert!(matches!(
+        update.proposal,
+        Some(DockProposal::MovePane {
+            target: DockTarget::Split {
+                tile,
+                axis: Axis::Vertical,
+                placement: Placement::Before,
+                ..
+            },
+            ..
+        }) if tile == target_tile
+    ));
+}
+
+#[test]
 fn dragging_pane_to_its_own_edge_is_invalid() {
     let tree = TileTree::single_pane(PaneId(1));
     let frame = tree.layout(input());

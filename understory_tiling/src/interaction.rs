@@ -276,7 +276,11 @@ pub struct DropTargetFrame {
     pub preview_rect: Rect,
     /// Target priority. Higher values win.
     pub priority: i16,
-    /// Distance from the pointer when generated.
+    /// Ranking distance from the pointer when generated.
+    ///
+    /// Edge targets use distance to the dock edge, which keeps overlapping
+    /// edge zones reachable even when [`DragOptions::edge_zone_fraction`] is
+    /// large. Other targets use distance to their hit rectangle.
     pub distance: f64,
     /// Whether this target accepts the current subject.
     ///
@@ -1011,6 +1015,7 @@ fn push_edge_targets(
     );
     let edge_w = width * edge_fraction;
     let edge_h = height * edge_fraction;
+    let tile_rect = rect;
     let specs = [
         (
             Rect::new(rect.x0, rect.y0, rect.x0 + edge_w, rect.y1),
@@ -1062,9 +1067,23 @@ fn push_edge_targets(
             target,
             preview_rect,
             priority,
-            distance: rect_distance(rect, point),
+            distance: split_edge_distance(tile_rect, point, target),
             accepts: accepts(target),
         });
+    }
+}
+
+fn split_edge_distance(rect: Rect, point: Point, target: DockTarget) -> f64 {
+    match target {
+        DockTarget::Split {
+            axis, placement, ..
+        } => match (axis, placement) {
+            (Axis::Horizontal, Placement::Before) => (point.x - rect.x0).abs(),
+            (Axis::Horizontal, Placement::After) => (rect.x1 - point.x).abs(),
+            (Axis::Vertical, Placement::Before) => (point.y - rect.y0).abs(),
+            (Axis::Vertical, Placement::After) => (rect.y1 - point.y).abs(),
+        },
+        _ => rect_distance(rect, point),
     }
 }
 
