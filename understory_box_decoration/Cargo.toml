@@ -12,10 +12,11 @@ categories = ["graphics", "gui", "no-std"]
 [features]
 default = ["libm"]
 std = ["kurbo/std"]
-libm = ["kurbo/libm"]
+libm = ["dep:libm", "kurbo/libm"]
 
 [dependencies]
 kurbo.workspace = true
+libm = { version = "0.2", optional = true, default-features = false }
 
 [lints]
 workspace = true

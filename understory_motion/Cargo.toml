@@ -12,11 +12,12 @@ categories = ["gui", "no-std"]
 
 [features]
 default = ["libm"]
-libm = ["kurbo/libm", "peniko/libm"]
+libm = ["dep:libm", "kurbo/libm", "peniko/libm"]
 std = ["kurbo/std", "peniko/std"]
 
 [dependencies]
 kurbo.workspace = true
+libm = { version = "0.2", optional = true, default-features = false }
 peniko.workspace = true
 understory_timing.workspace = true
 

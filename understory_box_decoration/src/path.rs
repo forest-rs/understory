@@ -1,10 +1,9 @@
 // Copyright 2026 the Understory Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-#[cfg(all(not(feature = "std"), not(test)))]
-use kurbo::common::FloatFuncs as _;
 use kurbo::{BezPath, Point, Rect, Size};
 
+use crate::math::powf;
 use crate::{BoxContour, CornerRadii, CornerShape, ResolvedCorner, Superellipse};
 
 const ARC_KAPPA: f64 = 0.552_284_749_830_793_6;
@@ -178,7 +177,7 @@ fn append_superellipse_corner(
         return;
     }
 
-    let exponent = 2.0_f64.powf(parameter);
+    let exponent = powf(2.0, parameter);
     if !exponent.is_finite() || exponent <= 0.0 {
         path.line_to(end);
         return;
@@ -205,11 +204,14 @@ fn superellipse_point(placement: CornerPlacement, progress: f64, exponent: f64) 
 
 fn forward_superellipse(progress: f64, exponent: f64) -> f64 {
     let q = 1.0 - progress;
-    positive_unit(1.0 - q.powf(exponent)).powf(1.0 / exponent)
+    powf(positive_unit(1.0 - powf(q, exponent)), 1.0 / exponent)
 }
 
 fn reverse_superellipse(progress: f64, exponent: f64) -> f64 {
-    positive_unit(1.0 - progress.powf(exponent)).powf(1.0 / exponent)
+    powf(
+        positive_unit(1.0 - powf(progress, exponent)),
+        1.0 / exponent,
+    )
 }
 
 fn point_in_corner(rect: Rect, placement: CornerPlacement, radii: Size, u: f64, v: f64) -> Point {

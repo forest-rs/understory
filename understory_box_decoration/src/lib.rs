@@ -82,10 +82,10 @@
 //! - padding and content edge radii are derived from the previous contour's
 //!   radii and then scaled to fit their own boxes.
 //!
-//! The crate itself is `#![no_std]`. The default `libm` feature forwards to
-//! Kurbo's libm-backed floating point helpers so ordinary builds remain
-//! `no_std`-friendly. Enable the `std` feature when an application wants
-//! Kurbo's standard-library support.
+//! The crate itself is `#![no_std]`. The default `libm` feature enables local
+//! libm-backed floating point helpers and forwards to Kurbo's `libm` support so
+//! ordinary builds remain `no_std`-friendly. Enable the `std` feature when an
+//! application wants standard-library support.
 //!
 //! ## Roadmap
 //!
@@ -104,6 +104,7 @@
 mod contour;
 mod edges;
 mod geometry;
+mod math;
 mod path;
 mod radii;
 mod shape;

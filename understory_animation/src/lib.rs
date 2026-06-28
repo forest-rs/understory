@@ -45,9 +45,10 @@
 //! scheduling, target lookup, or renderer command emission.
 //!
 //! This crate is `no_std` by default and uses `alloc` for effect storage.
-//! The default `libm` feature forwards to dependent math crates so ordinary
-//! builds work without `std`. Enable the `std` feature when an application
-//! wants standard-library support instead.
+//! The default `libm` feature enables local libm-backed floating point helpers
+//! and forwards to dependent math crates so ordinary builds work without
+//! `std`. Enable the `std` feature when an application wants standard-library
+//! support instead.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -55,6 +56,7 @@ extern crate alloc;
 
 mod effect;
 mod instance;
+mod math;
 mod playback;
 mod stack;
 mod timing;
