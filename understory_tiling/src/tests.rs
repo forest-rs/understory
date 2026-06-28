@@ -54,6 +54,13 @@ fn resize_proposal(update: &InteractionUpdate) -> Option<&ResizeProposal> {
     }
 }
 
+fn diff_item(diff: &FrameDiff, item: FrameItemId) -> &FrameItemDiff {
+    diff.items
+        .iter()
+        .find(|candidate| candidate.item == item)
+        .unwrap_or_else(|| panic!("missing diff item {item:?}"))
+}
+
 #[test]
 fn single_pane_fills_bounds() {
     let tree = TileTree::single_pane(PaneId(1));
@@ -101,16 +108,13 @@ fn frame_diff_reports_added_and_resized_items() {
 
     let diff = diff_frames(&before, &after);
 
-    assert!(diff.items.iter().any(|item| {
-        item.item == FrameItemId::Pane(PaneId(1)) && item.change == FrameChange::Resized
-    }));
-    assert!(diff.items.iter().any(|item| {
-        item.item == FrameItemId::Pane(PaneId(2)) && item.change == FrameChange::Added
-    }));
-    assert!(diff.items.iter().any(|item| matches!(
-        item,
+    assert_eq!(
+        diff_item(&diff, FrameItemId::Pane(PaneId(1))).change,
+        FrameChange::Resized
+    );
+    assert!(matches!(
+        diff_item(&diff, FrameItemId::Pane(PaneId(2))),
         FrameItemDiff {
-            item: FrameItemId::Pane(PaneId(2)),
             change: FrameChange::Added,
             transition: Some(FrameTransitionHint::EnteredFrom {
                 item: Some(FrameItemId::Pane(PaneId(1))),
@@ -118,7 +122,7 @@ fn frame_diff_reports_added_and_resized_items() {
             }),
             ..
         } if *rect == input().bounds
-    )));
+    ));
     assert!(diff.items.iter().any(|item| matches!(
         item,
         FrameItemDiff {
@@ -138,7 +142,7 @@ fn frame_diff_reports_added_and_resized_items() {
 }
 
 #[test]
-fn frame_diff_reports_moved_and_resized_items() {
+fn frame_diff_reports_resized_split_handles_and_children() {
     let mut tree = TileTree::single_pane(PaneId(1));
     tree.apply(TileOp::SplitPane {
         pane: PaneId(1),
@@ -159,9 +163,149 @@ fn frame_diff_reports_moved_and_resized_items() {
 
     let diff = diff_frames(&before, &after);
 
-    assert!(diff.items.iter().any(|item| {
-        item.item == FrameItemId::Pane(PaneId(2)) && item.change == FrameChange::MovedAndResized
-    }));
+    assert_eq!(
+        diff_item(&diff, FrameItemId::Pane(PaneId(2))).change,
+        FrameChange::MovedAndResized
+    );
+    assert_eq!(
+        diff_item(
+            &diff,
+            FrameItemId::SplitHandle {
+                split: tree.root(),
+                handle: 0,
+            },
+        )
+        .change,
+        FrameChange::Moved
+    );
+    assert_eq!(
+        diff_item(
+            &diff,
+            FrameItemId::SplitChild {
+                split: tree.root(),
+                child: before.split_children[1].child,
+            },
+        )
+        .change,
+        FrameChange::MovedAndResized
+    );
+}
+
+#[test]
+fn frame_diff_reports_removed_items_with_exit_hints() {
+    let mut tree = TileTree::single_pane(PaneId(1));
+    tree.apply(TileOp::SplitPane {
+        pane: PaneId(1),
+        axis: Axis::Horizontal,
+        new_pane: PaneId(2),
+        placement: Placement::After,
+        share: 0.5,
+    })
+    .unwrap();
+    let before = tree.layout(input());
+
+    tree.apply(TileOp::ClosePane { pane: PaneId(2) }).unwrap();
+    let after = tree.layout(input());
+
+    let diff = diff_frames(&before, &after);
+
+    assert!(matches!(
+        diff_item(&diff, FrameItemId::Pane(PaneId(2))),
+        FrameItemDiff {
+            change: FrameChange::Removed,
+            before: Some(_),
+            after: None,
+            transition: Some(FrameTransitionHint::ExitedTo {
+                item: Some(FrameItemId::Pane(PaneId(1))),
+                rect,
+            }),
+            ..
+        } if *rect == after.panes[0].rect
+    ));
+    assert!(diff.items.iter().any(|item| matches!(
+        item,
+        FrameItemDiff {
+            item: FrameItemId::SplitHandle { handle: 0, .. },
+            change: FrameChange::Removed,
+            ..
+        }
+    )));
+}
+
+#[test]
+fn frame_diff_tracks_tab_reorder_by_stable_tab_identity() {
+    let mut tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2), PaneId(3)]));
+    let group = tree.root();
+    let before = tree.layout(input());
+
+    tree.apply(TileOp::ReorderTab {
+        group,
+        pane: PaneId(3),
+        index: 0,
+    })
+    .unwrap();
+    let after = tree.layout(input());
+
+    let diff = diff_frames(&before, &after);
+    let tab = FrameItemId::Tab {
+        group,
+        pane: PaneId(3),
+    };
+
+    assert_eq!(diff_item(&diff, tab).change, FrameChange::Moved);
+    assert_eq!(diff_item(&diff, tab).before, Some(before.tabs[2].rect));
+    assert_eq!(diff_item(&diff, tab).after, Some(after.tabs[0].rect));
+}
+
+#[test]
+fn frame_diff_tracks_pane_moved_into_tab_group() {
+    let mut tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
+    let group = tree.root();
+    tree.apply(TileOp::SplitPane {
+        pane: PaneId(1),
+        axis: Axis::Horizontal,
+        new_pane: PaneId(3),
+        placement: Placement::After,
+        share: 0.5,
+    })
+    .unwrap();
+    let before = tree.layout(input());
+
+    tree.apply(TileOp::MovePane {
+        pane: PaneId(3),
+        target: DockTarget::TabInto {
+            group,
+            index: Some(1),
+        },
+    })
+    .unwrap();
+    let after = tree.layout(input());
+
+    let diff = diff_frames(&before, &after);
+
+    assert_eq!(
+        diff_item(&diff, FrameItemId::Pane(PaneId(3))).change,
+        FrameChange::MovedAndResized
+    );
+    assert_eq!(
+        diff_item(
+            &diff,
+            FrameItemId::Tab {
+                group,
+                pane: PaneId(3),
+            },
+        )
+        .change,
+        FrameChange::Added
+    );
+    assert!(diff.items.iter().any(|item| matches!(
+        item,
+        FrameItemDiff {
+            item: FrameItemId::SplitHandle { handle: 0, .. },
+            change: FrameChange::Removed,
+            ..
+        }
+    )));
 }
 
 #[test]
