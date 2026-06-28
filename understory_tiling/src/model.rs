@@ -6,6 +6,8 @@ use alloc::vec::Vec;
 
 use crate::{PaneId, Rect, Size, SurfaceId, TileId};
 
+// TODO: Re-export `kurbo::Axis` instead once it supports serde under
+// `kurbo/serde`.
 /// Major axis for split layout.
 ///
 /// Pass this to [`TileOp::SplitPane`](crate::TileOp::SplitPane) or
