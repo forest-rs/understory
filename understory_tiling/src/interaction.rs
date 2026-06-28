@@ -15,8 +15,8 @@ use crate::{
 
 /// High-level drag intent.
 ///
-/// Pass this to [`begin_drag`] with a pointer position in a [`LayoutFrame`] to
-/// choose what kind of drag session may start from the hit region.
+/// Store this in [`InteractionOptions`] to choose what kind of drag may start
+/// from a pointer-down hit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum DragIntent {
@@ -26,9 +26,9 @@ pub enum DragIntent {
 
 /// Current interaction state.
 ///
-/// Host applications may store this between pointer events if they want one
-/// enum for drag and resize state. The free functions also work if the host
-/// stores [`DragSession`] and [`ResizeSession`] separately.
+/// Returned by [`begin_interaction`] and passed back to [`update_interaction`]
+/// while the pointer moves. Hosts can inspect the variants for diagnostics, but
+/// ordinary interaction code should not need to construct sessions directly.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum InteractionState {
@@ -45,9 +45,9 @@ pub enum InteractionState {
 
 /// Active drag session.
 ///
-/// Returned by [`begin_drag`]. Pass it mutably to [`update_drag`] as the pointer
-/// moves, then pass it to [`commit_drag`] on pointer-up to apply the current
-/// proposal.
+/// Stored in [`InteractionState::Drag`] after a pending drag crosses its
+/// threshold. [`update_interaction`] refreshes `current` and `proposal` as the
+/// pointer moves.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DragSession {
@@ -67,10 +67,10 @@ pub struct DragSession {
 
 /// Pending drag gesture before the movement threshold is crossed.
 ///
-/// Returned by [`begin_pending_drag`] on pointer-down. Pass it to
-/// [`PendingDrag::update`] on pointer movement; it returns a [`DragSession`]
-/// only after the pointer has moved at least `threshold` from the origin. If the
-/// pointer is released first, the host can treat the gesture as a click.
+/// Stored in [`InteractionState::PendingDrag`] by [`begin_interaction`].
+/// [`update_interaction`] promotes it to [`InteractionState::Drag`] only after
+/// the pointer has moved at least `threshold` from the origin. If the pointer is
+/// released first, the host can treat the gesture as a click.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PendingDrag {
@@ -167,9 +167,9 @@ pub enum DragSource {
 
 /// Active resize session.
 ///
-/// Returned by [`begin_resize`]. Pass it mutably to [`update_resize`] as the
-/// pointer moves, then pass it to [`commit_resize`] to apply the proposed split
-/// shares.
+/// Stored in [`InteractionState::Resize`] by [`begin_interaction`] when the
+/// pointer starts on a split handle. [`update_interaction`] refreshes `current`
+/// and `proposal` as the pointer moves.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ResizeSession {
@@ -189,36 +189,19 @@ pub struct ResizeSession {
     pub proposal: Option<ResizeProposal>,
 }
 
-/// Flattened interaction output.
-///
-/// Container for combined interaction rendering output. Current update
-/// functions return [`DragUpdate`] and [`ResizeUpdate`], whose fields map to
-/// this shape.
-#[derive(Clone, Debug, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct InteractionFrame {
-    /// Overlay geometry.
-    pub overlay: OverlayFrame,
-    /// Optional render-ready preview layout.
-    pub preview: Option<LayoutFrame>,
-    /// Current proposal.
-    pub proposal: Option<Proposal>,
-}
-
 /// Overlay geometry produced during interactions.
 ///
-/// Returned from [`update_drag`] and [`update_resize`] for rendering drop
-/// targets, ghosts, and active interaction affordances without mutating the
-/// committed [`TileTree`].
+/// Returned from [`update_interaction`] for rendering drop targets, ghosts, and
+/// active interaction affordances without mutating the committed [`TileTree`].
 #[derive(Clone, Debug, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct OverlayFrame {
     /// Drop targets worth drawing in the overlay.
     ///
-    /// [`update_drag`] keeps this focused on the active accepted target, or the
-    /// active rejected target when there is no accepted one. Use
-    /// [`DragUpdate::candidates`] or [`drop_targets_for_drag`] when an advanced
-    /// UI needs every generated candidate.
+    /// [`update_interaction`] keeps this focused on the active accepted target,
+    /// or the active rejected target when there is no accepted one. Use
+    /// [`InteractionUpdate::candidates`] or [`drop_targets_for_drag`] when an
+    /// advanced UI needs every generated candidate.
     pub drop_targets: Vec<DropTargetFrame>,
     /// Preview ghost rectangles.
     pub ghost_rects: Vec<GhostFrame>,
@@ -258,7 +241,7 @@ pub struct DropTargetId(
 
 /// Candidate drop target.
 ///
-/// Returned by [`drop_targets_for_drag`] and [`update_drag`]. Renderers draw the
+/// Returned by [`drop_targets_for_drag`] and drag updates. Renderers draw the
 /// `rect` or `preview_rect`; commit code lowers the selected `target` into a
 /// [`TileOp`]. Non-accepting targets are still useful for overlays because they
 /// can show why a hovered destination is unavailable.
@@ -322,8 +305,8 @@ pub enum GhostKind {
 
 /// Geometry for the dragged subject.
 ///
-/// Returned in [`OverlayFrame::dragged`] from [`update_drag`] so renderers can
-/// draw the item following the pointer.
+/// Returned in [`OverlayFrame::dragged`] from [`update_interaction`] so
+/// renderers can draw the item following the pointer.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DraggedFrame {
@@ -349,9 +332,9 @@ pub enum Proposal {
 
 /// Uncommitted docking proposal.
 ///
-/// Returned from [`update_drag`] and stored in [`DragSession`]. It does not
-/// mutate the tree until [`commit_drag`] or
-/// [`validate_proposal`](crate::validate_proposal) lowers it to a [`TileOp`].
+/// Stored in [`DragSession`] by [`update_interaction`]. It does not mutate the
+/// tree until [`validate_interaction_update`](crate::validate_interaction_update)
+/// or [`validate_proposal`](crate::validate_proposal) lowers it to a [`TileOp`].
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum DockProposal {
@@ -389,11 +372,12 @@ pub enum DockProposal {
 
 /// Uncommitted resize proposal.
 ///
-/// Returned from [`update_resize`] and stored in [`ResizeSession`]. The proposed
-/// shares are computed from the solved split child geometry in the current
+/// Stored in [`ResizeSession`] by [`update_interaction`]. The proposed shares
+/// are computed from the solved split child geometry in the current
 /// [`LayoutFrame`], then clamped against [`ResizeOptions::min_pane_size`] and
-/// per-split minimum constraints. Commit it with [`commit_resize`] to apply the
-/// proposed split shares.
+/// per-split minimum constraints. Commit it through
+/// [`validate_interaction_update`](crate::validate_interaction_update) and
+/// [`commit_proposal`](crate::commit_proposal).
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ResizeProposal {
@@ -407,47 +391,6 @@ pub struct ResizeProposal {
     pub delta: f64,
     /// Proposed replacement shares.
     pub new_shares: Vec<f64>,
-}
-
-/// Result of updating a drag session.
-///
-/// Returned by [`update_drag`] on every pointer move. Render `overlay`, inspect
-/// `proposal`, and leave the committed tree untouched until commit.
-#[derive(Clone, Debug)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct DragUpdate {
-    /// Current proposal.
-    pub proposal: Option<DockProposal>,
-    /// Tree revision captured when the drag began.
-    pub base_revision: Revision,
-    /// All generated drop candidates.
-    ///
-    /// Inspect this for custom target visualization or diagnostics. Most UIs
-    /// should render [`DragUpdate::overlay`], which contains only the active
-    /// target and active ghost.
-    pub candidates: Vec<DropTargetFrame>,
-    /// Overlay geometry.
-    pub overlay: OverlayFrame,
-    /// Optional render-ready preview layout.
-    pub preview: Option<LayoutFrame>,
-}
-
-/// Result of updating a resize session.
-///
-/// Returned by [`update_resize`] on pointer movement. Hosts may render the
-/// overlay immediately and choose whether to commit the proposal live or on
-/// pointer-up.
-#[derive(Clone, Debug)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct ResizeUpdate {
-    /// Current proposal.
-    pub proposal: Option<ResizeProposal>,
-    /// Tree revision captured when the resize began.
-    pub base_revision: Revision,
-    /// Overlay geometry.
-    pub overlay: OverlayFrame,
-    /// Optional render-ready preview layout.
-    pub preview: Option<LayoutFrame>,
 }
 
 /// Result of updating any interaction state.
@@ -476,23 +419,10 @@ pub struct InteractionUpdate {
     pub preview: Option<LayoutFrame>,
 }
 
-/// Interaction commit behavior.
-///
-/// Store this in [`ResizeOptions`] to describe how the embedding layer plans to
-/// commit proposals. The core still returns proposals either way.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum CommitMode {
-    /// Commit on every pointer move.
-    OnEveryMove,
-    /// Commit only when the pointer is released.
-    OnPointerUp,
-}
-
 /// Resize options.
 ///
-/// Construct this and pass it to [`update_resize`] to describe host resize
-/// policy and geometry constraints.
+/// Store this in [`InteractionOptions`] to describe host resize geometry
+/// constraints.
 #[derive(Clone, Copy, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ResizeOptions {
@@ -500,29 +430,29 @@ pub struct ResizeOptions {
     ///
     /// Expected to be finite and non-negative.
     pub min_pane_size: Size,
-    /// Commit behavior preferred by the embedding layer.
-    pub commit_mode: CommitMode,
 }
 
 impl Default for ResizeOptions {
     fn default() -> Self {
         Self {
             min_pane_size: Size::new(20.0, 20.0),
-            commit_mode: CommitMode::OnPointerUp,
         }
     }
 }
 
 /// Drag/drop options.
 ///
-/// Construct this and pass it to [`update_drag`] or [`drop_targets_for_drag`] to
-/// control which targets are generated for a drag session.
+/// Store this in [`InteractionOptions`] or pass it to [`drop_targets_for_drag`]
+/// to control which targets are generated for a drag session.
 #[derive(Clone, Copy, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DragOptions {
     /// Fraction of a tile edge used for split targets.
     ///
-    /// Expected to be finite and in the range `0.0..=0.5`.
+    /// Expected to be finite and in the range `0.0..=0.5`. Values above the
+    /// default `0.25` intentionally create overlapping edge zones. The picker
+    /// resolves those overlaps by normalized depth into each edge zone, then by
+    /// priority and stable target order.
     pub edge_zone_fraction: f64,
     /// Fraction used for tab insertion decisions.
     ///
@@ -543,8 +473,9 @@ pub struct DragOptions {
     /// Layout input used to produce full drag preview frames.
     ///
     /// Set this to the same geometry input used to create the current
-    /// [`LayoutFrame`] when the host wants [`DragUpdate::preview`] to contain a
-    /// solved preview layout. Leave it as `None` to use only overlay ghosts.
+    /// [`LayoutFrame`] when the host wants [`InteractionUpdate::preview`] to
+    /// contain a solved preview layout. Leave it as `None` to use only overlay
+    /// ghosts.
     pub preview_layout: Option<LayoutInput>,
 }
 
@@ -568,13 +499,30 @@ impl Default for DragOptions {
 /// interaction should use the same geometry constraints as layout solving.
 /// Pass it to [`update_interaction`] so drag and resize updates can be handled
 /// through one host code path.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct InteractionOptions {
     /// Drag/drop options.
     pub drag: DragOptions,
     /// Resize options.
     pub resize: ResizeOptions,
+    /// Drag intent used by [`begin_interaction`].
+    pub drag_intent: DragIntent,
+    /// Pointer movement required before a pending drag becomes active.
+    ///
+    /// Expected to be finite and non-negative.
+    pub drag_threshold: f64,
+}
+
+impl Default for InteractionOptions {
+    fn default() -> Self {
+        Self {
+            drag: DragOptions::default(),
+            resize: ResizeOptions::default(),
+            drag_intent: DragIntent::Move,
+            drag_threshold: 5.0,
+        }
+    }
 }
 
 impl InteractionOptions {
@@ -592,33 +540,12 @@ impl InteractionOptions {
 
         let resize = ResizeOptions {
             min_pane_size: input.min_pane_size,
-            ..ResizeOptions::default()
         };
 
-        Self { drag, resize }
-    }
-}
-
-impl From<DragUpdate> for InteractionUpdate {
-    fn from(update: DragUpdate) -> Self {
         Self {
-            proposal: update.proposal.map(Proposal::Dock),
-            base_revision: Some(update.base_revision),
-            candidates: update.candidates,
-            overlay: update.overlay,
-            preview: update.preview,
-        }
-    }
-}
-
-impl From<ResizeUpdate> for InteractionUpdate {
-    fn from(update: ResizeUpdate) -> Self {
-        Self {
-            proposal: update.proposal.map(Proposal::Resize),
-            base_revision: Some(update.base_revision),
-            candidates: Vec::new(),
-            overlay: update.overlay,
-            preview: update.preview,
+            drag,
+            resize,
+            ..Self::default()
         }
     }
 }
@@ -629,7 +556,7 @@ impl From<ResizeUpdate> for InteractionUpdate {
 /// hosts that support click-to-activate should usually wait until pointer
 /// movement exceeds their drag threshold before calling this function.
 #[must_use]
-pub fn begin_drag(frame: &LayoutFrame, point: Point, intent: DragIntent) -> Option<DragSession> {
+fn begin_drag(frame: &LayoutFrame, point: Point, intent: DragIntent) -> Option<DragSession> {
     debug_assert!(point.is_finite(), "point must be finite");
     let hit = hit_test(frame, point)?;
     match (intent, hit) {
@@ -667,7 +594,7 @@ pub fn begin_drag(frame: &LayoutFrame, point: Point, intent: DragIntent) -> Opti
 /// If [`PendingDrag::update`] never returns a [`DragSession`] before pointer-up,
 /// the host can run its click behavior instead.
 #[must_use]
-pub fn begin_pending_drag(
+fn begin_pending_drag(
     frame: &LayoutFrame,
     point: Point,
     intent: DragIntent,
@@ -684,13 +611,35 @@ pub fn begin_pending_drag(
     })
 }
 
+/// Starts an interaction from a frame hit.
+///
+/// Call this on pointer-down when the host wants the high-level interaction
+/// path. Split-handle resize wins over pending drag because both are derived
+/// from the same [`LayoutFrame`] hit regions. Store the returned state and pass
+/// it to [`update_interaction`] as the pointer moves.
+#[must_use]
+pub fn begin_interaction(
+    frame: &LayoutFrame,
+    point: Point,
+    options: &InteractionOptions,
+) -> InteractionState {
+    if let Some(resize) = begin_resize(frame, point) {
+        return InteractionState::Resize(resize);
+    }
+    if let Some(pending) =
+        begin_pending_drag(frame, point, options.drag_intent, options.drag_threshold)
+    {
+        return InteractionState::PendingDrag(pending);
+    }
+    InteractionState::None
+}
+
 /// Updates the current interaction state.
 ///
 /// Call this on pointer movement when the host stores one [`InteractionState`].
 /// Pending drags become real drag sessions only after their movement threshold
-/// is crossed. Active drags and resizes delegate to [`update_drag`] and
-/// [`update_resize`] and return a unified [`InteractionUpdate`] that can be
-/// rendered and validated without matching on interaction kind.
+/// is crossed. The returned [`InteractionUpdate`] can be rendered and validated
+/// without matching on interaction kind.
 #[must_use]
 pub fn update_interaction(
     tree: &TileTree,
@@ -707,24 +656,23 @@ pub fn update_interaction(
             };
             let update = update_drag(tree, frame, &mut drag, point, &options.drag);
             *state = InteractionState::Drag(drag);
-            update.into()
+            update
         }
-        InteractionState::Drag(drag) => update_drag(tree, frame, drag, point, &options.drag).into(),
+        InteractionState::Drag(drag) => update_drag(tree, frame, drag, point, &options.drag),
         InteractionState::Resize(resize) => {
-            update_resize(tree, frame, resize, point, &options.resize).into()
+            update_resize(tree, frame, resize, point, &options.resize)
         }
     }
 }
 
-/// Updates a drag session.
 #[must_use]
-pub fn update_drag(
+fn update_drag(
     tree: &TileTree,
     frame: &LayoutFrame,
     drag: &mut DragSession,
     point: Point,
     options: &DragOptions,
-) -> DragUpdate {
+) -> InteractionUpdate {
     debug_assert!(point.is_finite(), "point must be finite");
     drag.current = point;
     let targets = drop_targets_for_drag(tree, frame, drag, options);
@@ -747,9 +695,9 @@ pub fn update_drag(
         .collect::<Vec<_>>();
     drag.proposal = proposal.clone();
 
-    DragUpdate {
-        proposal,
-        base_revision: drag.base_revision,
+    InteractionUpdate {
+        proposal: proposal.map(Proposal::Dock),
+        base_revision: Some(drag.base_revision),
         candidates: targets.clone(),
         overlay: OverlayFrame {
             active_target,
@@ -772,20 +720,9 @@ pub fn update_drag(
     }
 }
 
-/// Commits a drag session.
-pub fn commit_drag(tree: &mut TileTree, drag: DragSession) -> Result<TileOp, TileError> {
-    if drag.base_revision != tree.revision() {
-        return Err(TileError::StaleInteraction);
-    }
-    let proposal = drag.proposal.ok_or(TileError::InvalidOperation)?;
-    let op = op_for_dock_proposal(proposal)?;
-    tree.apply(op.clone())?;
-    Ok(op)
-}
-
 /// Starts a resize session from a split handle hit.
 #[must_use]
-pub fn begin_resize(frame: &LayoutFrame, point: Point) -> Option<ResizeSession> {
+fn begin_resize(frame: &LayoutFrame, point: Point) -> Option<ResizeSession> {
     debug_assert!(point.is_finite(), "point must be finite");
     match hit_test(frame, point)? {
         HitKind::SplitHandle { split, handle } => {
@@ -807,15 +744,14 @@ pub fn begin_resize(frame: &LayoutFrame, point: Point) -> Option<ResizeSession> 
     }
 }
 
-/// Updates a resize session.
 #[must_use]
-pub fn update_resize(
+fn update_resize(
     tree: &TileTree,
     frame: &LayoutFrame,
     resize: &mut ResizeSession,
     point: Point,
     options: &ResizeOptions,
-) -> ResizeUpdate {
+) -> InteractionUpdate {
     debug_assert!(point.is_finite(), "point must be finite");
     debug_assert!(
         options.min_pane_size.is_finite()
@@ -829,35 +765,22 @@ pub fn update_resize(
         .as_ref()
         .and_then(|proposal| preview_for_resize(tree, frame, proposal, options));
     resize.proposal = proposal.clone();
-    ResizeUpdate {
-        proposal,
-        base_revision: resize.base_revision,
+    InteractionUpdate {
+        proposal: proposal.map(Proposal::Resize),
+        base_revision: Some(resize.base_revision),
+        candidates: Vec::new(),
         overlay: OverlayFrame::default(),
         preview,
     }
 }
 
-/// Commits a resize session.
-pub fn commit_resize(tree: &mut TileTree, resize: ResizeSession) -> Result<TileOp, TileError> {
-    if resize.base_revision != tree.revision() {
-        return Err(TileError::StaleInteraction);
-    }
-    let proposal = resize.proposal.ok_or(TileError::InvalidOperation)?;
-    let op = TileOp::SetSplitShares {
-        split: proposal.split,
-        shares: proposal.new_shares,
-    };
-    tree.apply(op.clone())?;
-    Ok(op)
-}
-
 /// Generates candidate drop targets for a drag session.
 ///
-/// Call this after [`begin_drag`] or from [`update_drag`] when the pointer
-/// moves. The returned targets are ranked and stable for deterministic
-/// selection. Some candidates may have [`DropTargetFrame::accepts`] set to
-/// `false`; renderers can still draw these as invalid destinations, but
-/// [`pick_drop_target`] ignores them when choosing the commit-ready target.
+/// Advanced hosts can call this while inspecting an [`InteractionState::Drag`].
+/// The returned targets are ranked and stable for deterministic selection. Some
+/// candidates may have [`DropTargetFrame::accepts`] set to `false`; renderers
+/// can still draw these as invalid destinations, but [`pick_drop_target`]
+/// ignores them when choosing the commit-ready target.
 #[must_use]
 pub fn drop_targets_for_drag(
     tree: &TileTree,
@@ -1122,21 +1045,39 @@ fn push_edge_targets(
             target,
             preview_rect,
             priority,
-            distance: split_edge_distance(tile_rect, point, target),
+            distance: split_edge_depth(tile_rect, point, edge_w, edge_h, target),
             accepts: accepts(target),
         });
     }
 }
 
-fn split_edge_distance(rect: Rect, point: Point, target: DockTarget) -> f64 {
+fn split_edge_depth(
+    rect: Rect,
+    point: Point,
+    edge_width: f64,
+    edge_height: f64,
+    target: DockTarget,
+) -> f64 {
+    fn normalized(distance: f64, length: f64) -> f64 {
+        if length > 0.0 { distance / length } else { 0.0 }
+    }
+
     match target {
         DockTarget::Split {
             axis, placement, ..
         } => match (axis, placement) {
-            (Axis::Horizontal, Placement::Before) => (point.x - rect.x0).abs(),
-            (Axis::Horizontal, Placement::After) => (rect.x1 - point.x).abs(),
-            (Axis::Vertical, Placement::Before) => (point.y - rect.y0).abs(),
-            (Axis::Vertical, Placement::After) => (rect.y1 - point.y).abs(),
+            (Axis::Horizontal, Placement::Before) => {
+                normalized((point.x - rect.x0).abs(), edge_width)
+            }
+            (Axis::Horizontal, Placement::After) => {
+                normalized((rect.x1 - point.x).abs(), edge_width)
+            }
+            (Axis::Vertical, Placement::Before) => {
+                normalized((point.y - rect.y0).abs(), edge_height)
+            }
+            (Axis::Vertical, Placement::After) => {
+                normalized((rect.y1 - point.y).abs(), edge_height)
+            }
         },
         _ => rect_distance(rect, point),
     }

@@ -109,9 +109,9 @@ pub struct SplitChildFrame {
 
 /// Flattened split handle geometry.
 ///
-/// Produced in [`LayoutFrame::split_handles`] between split children. Pass the
-/// hit result from these rectangles to [`begin_resize`](crate::begin_resize) to
-/// start a resize interaction.
+/// Produced in [`LayoutFrame::split_handles`] between split children.
+/// [`begin_interaction`](crate::begin_interaction) uses these rectangles to
+/// start resize interactions before considering drag gestures.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SplitHandleFrame {
@@ -258,9 +258,9 @@ pub struct HitRegion {
 
 /// Semantic hit-test result.
 ///
-/// Returned by [`hit_test`] and used by interaction helpers such as
-/// [`begin_drag`](crate::begin_drag) and [`begin_resize`](crate::begin_resize)
-/// to decide which session to create.
+/// Returned by [`hit_test`] and used by
+/// [`begin_interaction`](crate::begin_interaction) to decide which interaction
+/// state to create.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum HitKind {

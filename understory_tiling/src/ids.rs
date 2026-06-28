@@ -1,6 +1,8 @@
 // Copyright 2026 the Understory Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+use core::fmt;
+
 /// Opaque identity for a tile node inside a [`TileTree`](crate::TileTree).
 ///
 /// You usually get one from [`TileTree::root`](crate::TileTree::root),
@@ -16,6 +18,12 @@ pub struct TileId(
     pub u32,
 );
 
+impl fmt::Display for TileId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "tile {}", self.0)
+    }
+}
+
 /// Opaque identity for an application-owned pane.
 ///
 /// The embedding application creates these ids and passes them into
@@ -29,6 +37,12 @@ pub struct PaneId(
     /// Numeric pane id assigned by the embedding application.
     pub u32,
 );
+
+impl fmt::Display for PaneId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "pane {}", self.0)
+    }
+}
 
 /// Opaque identity for an abstract layout surface.
 ///
@@ -45,8 +59,9 @@ pub struct SurfaceId(
 /// Monotonic revision token for layout tree changes.
 ///
 /// Read it with [`TileTree::revision`](crate::TileTree::revision). Layout
-/// frames and interaction sessions copy the revision so commits such as
-/// [`commit_drag`](crate::commit_drag) can reject stale input.
+/// frames and interaction sessions copy the revision so
+/// [`validate_interaction_update`](crate::validate_interaction_update) can
+/// reject stale input.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Revision(

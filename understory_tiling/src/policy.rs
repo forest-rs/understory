@@ -258,12 +258,13 @@ impl ZoneSet {
 
 /// Validates a proposal and lowers it to a semantic operation.
 ///
-/// Pass proposals from [`update_drag`](crate::update_drag) or
-/// [`update_resize`](crate::update_resize) here before committing them when the
-/// host wants data-driven policy checks. This function rejects locked layouts,
-/// capability-disallowed targets, and structurally invalid operations by
-/// applying the lowered operation to a clone of the tree. The live tree is not
-/// mutated.
+/// Pass command-generated proposals here before committing them when the host
+/// wants data-driven policy checks. For pointer interaction, prefer
+/// [`validate_interaction_update`], which fills in the solved frame,
+/// interaction options, and stale-revision guard. This function rejects locked
+/// layouts, capability-disallowed targets, and structurally invalid operations
+/// by applying the lowered operation to a clone of the tree. The live tree is
+/// not mutated.
 pub fn validate_proposal(
     input: ProposalValidationInput<'_>,
 ) -> Result<ValidatedProposal, TileError> {
@@ -298,6 +299,26 @@ pub fn validate_proposal(
     probe.apply(op.clone())?;
     validate_policy(&proposal, policy)?;
     Ok(ValidatedProposal { proposal, op })
+}
+
+/// Validates a unified interaction update.
+///
+/// Use this with updates returned by [`update_interaction`](crate::update_interaction)
+/// on pointer-up. It validates the update's proposal against `frame`,
+/// `options`, `policy`, and the interaction revision captured at pointer-down,
+/// then lowers it to a [`ValidatedProposal`] for [`commit_proposal`].
+pub fn validate_interaction_update(
+    tree: &TileTree,
+    frame: &LayoutFrame,
+    update: &InteractionUpdate,
+    policy: &DockPolicyData,
+    options: &InteractionOptions,
+) -> Result<ValidatedProposal, TileError> {
+    let input = ProposalValidationInput::from_interaction_update(tree, update, policy)
+        .ok_or(TileError::InvalidOperation)?
+        .with_frame(frame)
+        .with_interaction_options(options);
+    validate_proposal(input)
 }
 
 /// Commits a validated proposal.
