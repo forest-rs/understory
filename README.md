@@ -13,6 +13,11 @@ The focus is on clean separation of concerns, pluggable performance trade‑offs
   - Point and rectangle queries.
   - Batched updates via `commit()` with coarse damage (added, removed, moved).
 
+- `understory_anchor`
+  - Headless anchored overlay geometry resolution for popovers, menus, tooltips, combobox popups, hover cards, and selection/caret anchored surfaces.
+  - Takes scene facts, preferred/fallback position options, collision constraints, and an optional previous frame, then emits stable geometry, arrows, transform origins, candidate metrics, and collision diagnostics.
+  - Pure, renderer-agnostic, widget-agnostic, and built on `kurbo` geometry types.
+
 - `understory_property_binding`
   - Small one-way property binding primitives for dependency-property endpoints.
   - Tracks source/target endpoint indexes, dirty binding selection, dependency ordering, and deterministic drain reports.
@@ -147,6 +152,7 @@ For example, a canvas or DWG or DXF viewer can reuse the box and index layers wi
 - Read the crate READMEs.
   - `understory_index/README.md` has the API and a “Choosing a backend” guide.
   - `understory_box_decoration/README.md` documents box decoration contours, shaped corners, fitted radii, and border/padding/content edge derivation.
+  - `understory_anchor/README.md` documents anchored placement, multi-rect anchors, constraints, arrows, diagnostics, and hysteresis.
   - `understory_box_tree/README.md` has usage, hit‑testing, and visible‑set examples.
   - `understory_responder/README.md` explains routing, capture, and how to integrate with a picker.
   - `understory_focus/README.md` covers focus navigation policies and adapters.

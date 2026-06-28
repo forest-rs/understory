@@ -559,6 +559,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "understory_anchor"
+version = "0.1.0"
+dependencies = [
+ "kurbo",
+ "serde",
+]
+
+[[package]]
 name = "understory_animation"
 version = "0.1.0"
 dependencies = [
