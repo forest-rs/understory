@@ -15,6 +15,45 @@ fn input() -> LayoutInput {
     }
 }
 
+fn interaction_options() -> InteractionOptions {
+    InteractionOptions {
+        drag_threshold: 0.0,
+        ..InteractionOptions::from_layout_input(input())
+    }
+}
+
+fn interaction_options_with_drag(drag: DragOptions) -> InteractionOptions {
+    InteractionOptions {
+        drag,
+        ..interaction_options()
+    }
+}
+
+fn pointer_update(
+    tree: &TileTree,
+    frame: &LayoutFrame,
+    origin: Point,
+    point: Point,
+    options: &InteractionOptions,
+) -> InteractionUpdate {
+    let mut state = begin_interaction(frame, origin, options);
+    update_interaction(tree, frame, &mut state, point, options)
+}
+
+fn dock_proposal(update: &InteractionUpdate) -> Option<&DockProposal> {
+    match &update.proposal {
+        Some(Proposal::Dock(proposal)) => Some(proposal),
+        _ => None,
+    }
+}
+
+fn resize_proposal(update: &InteractionUpdate) -> Option<&ResizeProposal> {
+    match &update.proposal {
+        Some(Proposal::Resize(proposal)) => Some(proposal),
+        _ => None,
+    }
+}
+
 #[test]
 fn single_pane_fills_bounds() {
     let tree = TileTree::single_pane(PaneId(1));
@@ -123,6 +162,13 @@ fn frame_diff_reports_moved_and_resized_items() {
     assert!(diff.items.iter().any(|item| {
         item.item == FrameItemId::Pane(PaneId(2)) && item.change == FrameChange::MovedAndResized
     }));
+}
+
+#[test]
+fn ids_and_errors_display_human_readable_labels() {
+    assert_eq!(TileId(7).to_string(), "tile 7");
+    assert_eq!(PaneId(9).to_string(), "pane 9");
+    assert_eq!(TileError::StaleInteraction.to_string(), "stale interaction");
 }
 
 #[test]
@@ -294,16 +340,15 @@ fn drag_update_proposes_move() {
     })
     .unwrap();
     let frame = tree.layout(input());
-    let mut drag = begin_drag(&frame, Point::new(20.0, 20.0), DragIntent::Move).unwrap();
-    let update = update_drag(
+    let update = pointer_update(
         &tree,
         &frame,
-        &mut drag,
+        Point::new(20.0, 20.0),
         Point::new(290.0, 50.0),
-        &DragOptions::default(),
+        &interaction_options(),
     );
     assert!(matches!(
-        update.proposal,
+        dock_proposal(&update),
         Some(DockProposal::MovePane { .. })
     ));
 }
@@ -320,15 +365,20 @@ fn drag_update_returns_preview_layout_when_layout_input_is_provided() {
     })
     .unwrap();
     let frame = tree.layout(input());
-    let mut drag = begin_drag(&frame, Point::new(20.0, 20.0), DragIntent::Move).unwrap();
-    let options = DragOptions {
+    let options = interaction_options_with_drag(DragOptions {
         preview_layout: Some(input()),
         ..DragOptions::default()
-    };
+    });
 
-    let update = update_drag(&tree, &frame, &mut drag, Point::new(290.0, 50.0), &options);
+    let update = pointer_update(
+        &tree,
+        &frame,
+        Point::new(20.0, 20.0),
+        Point::new(290.0, 50.0),
+        &options,
+    );
 
-    let preview = update.preview.unwrap();
+    let preview = update.preview.as_ref().unwrap();
     assert_eq!(preview.panes.len(), 2);
     assert_eq!(preview.split_children.len(), 2);
     assert_eq!(preview.split_handles.len(), 1);
@@ -349,20 +399,27 @@ fn drag_preview_can_diff_to_committed_frame() {
     })
     .unwrap();
     let frame = tree.layout(input());
-    let mut drag = begin_drag(&frame, Point::new(20.0, 20.0), DragIntent::Move).unwrap();
-    let options = DragOptions {
+    let options = interaction_options_with_drag(DragOptions {
         preview_layout: Some(input()),
         ..DragOptions::default()
-    };
-    let update = update_drag(&tree, &frame, &mut drag, Point::new(290.0, 50.0), &options);
-    let preview = update.preview.unwrap();
+    });
+    let update = pointer_update(
+        &tree,
+        &frame,
+        Point::new(20.0, 20.0),
+        Point::new(290.0, 50.0),
+        &options,
+    );
+    let preview = update.preview.as_ref().unwrap();
 
-    commit_drag(&mut tree, drag).unwrap();
+    let policy = DockPolicyData::default();
+    let validated = validate_interaction_update(&tree, &frame, &update, &policy, &options).unwrap();
+    commit_proposal(&mut tree, validated).unwrap();
     let committed = tree.layout(input());
 
-    assert!(diff_frames(&preview, &committed).items.is_empty());
+    assert!(diff_frames(preview, &committed).items.is_empty());
     assert!(
-        diff_frames(&frame, &preview)
+        diff_frames(&frame, preview)
             .items
             .iter()
             .any(|item| matches!(
@@ -377,8 +434,15 @@ fn drag_preview_can_diff_to_committed_frame() {
 fn pending_drag_waits_until_threshold_is_crossed() {
     let tree = TileTree::single_pane(PaneId(1));
     let frame = tree.layout(input());
-    let pending =
-        begin_pending_drag(&frame, Point::new(20.0, 20.0), DragIntent::Move, 5.0).unwrap();
+    let options = InteractionOptions {
+        drag_threshold: 5.0,
+        ..InteractionOptions::from_layout_input(input())
+    };
+    let InteractionState::PendingDrag(pending) =
+        begin_interaction(&frame, Point::new(20.0, 20.0), &options)
+    else {
+        panic!("pane hit should start a pending drag");
+    };
 
     assert!(pending.update(Point::new(23.0, 23.0)).is_none());
 
@@ -386,6 +450,24 @@ fn pending_drag_waits_until_threshold_is_crossed() {
     assert_eq!(drag.origin, Point::new(20.0, 20.0));
     assert_eq!(drag.current, Point::new(26.0, 20.0));
     assert_eq!(drag.subject, DragSubject::Pane(PaneId(1)));
+}
+
+#[test]
+fn begin_interaction_starts_resize_before_drag() {
+    let mut tree = TileTree::single_pane(PaneId(1));
+    tree.apply(TileOp::SplitPane {
+        pane: PaneId(1),
+        axis: Axis::Horizontal,
+        new_pane: PaneId(2),
+        placement: Placement::After,
+        share: 0.5,
+    })
+    .unwrap();
+    let frame = tree.layout(input());
+
+    let state = begin_interaction(&frame, Point::new(150.0, 100.0), &interaction_options());
+
+    assert!(matches!(state, InteractionState::Resize(_)));
 }
 
 #[test]
@@ -400,10 +482,11 @@ fn interaction_update_promotes_pending_drag_after_threshold() {
     })
     .unwrap();
     let frame = tree.layout(input());
-    let pending =
-        begin_pending_drag(&frame, Point::new(20.0, 20.0), DragIntent::Move, 5.0).unwrap();
-    let mut state = InteractionState::PendingDrag(pending);
-    let options = InteractionOptions::from_layout_input(input());
+    let options = InteractionOptions {
+        drag_threshold: 5.0,
+        ..InteractionOptions::from_layout_input(input())
+    };
+    let mut state = begin_interaction(&frame, Point::new(20.0, 20.0), &options);
 
     let before = update_interaction(&tree, &frame, &mut state, Point::new(23.0, 23.0), &options);
     assert!(before.proposal.is_none());
@@ -428,6 +511,8 @@ fn interaction_options_derive_preview_and_resize_inputs_from_layout() {
         layout.split_handle_thickness
     );
     assert_eq!(options.resize.min_pane_size, layout.min_pane_size);
+    assert_eq!(options.drag_intent, DragIntent::Move);
+    assert_eq!(options.drag_threshold, 5.0);
 }
 
 #[test]
@@ -448,18 +533,17 @@ fn drag_local_pane_edge_target_wins_over_root_target() {
         .find(|pane| pane.pane == PaneId(2))
         .unwrap()
         .tile;
-    let mut drag = begin_drag(&frame, Point::new(20.0, 100.0), DragIntent::Move).unwrap();
 
-    let update = update_drag(
+    let update = pointer_update(
         &tree,
         &frame,
-        &mut drag,
+        Point::new(20.0, 100.0),
         Point::new(200.0, 5.0),
-        &DragOptions::default(),
+        &interaction_options(),
     );
 
     assert!(matches!(
-        update.proposal,
+        dock_proposal(&update),
         Some(DockProposal::MovePane {
             target: DockTarget::Split {
                 tile,
@@ -468,7 +552,7 @@ fn drag_local_pane_edge_target_wins_over_root_target() {
                 ..
             },
             ..
-        }) if tile == target_tile
+        }) if *tile == target_tile
     ));
     assert!(update.candidates.len() > update.overlay.drop_targets.len());
     assert_eq!(update.overlay.drop_targets.len(), 1);
@@ -499,40 +583,50 @@ fn overlapping_edge_targets_rank_by_nearest_edge() {
         .find(|pane| pane.pane == PaneId(2))
         .unwrap()
         .tile;
-    let mut drag = begin_drag(&frame, Point::new(20.0, 100.0), DragIntent::Move).unwrap();
-    let options = DragOptions {
+    let options = interaction_options_with_drag(DragOptions {
         edge_zone_fraction: 0.5,
         ..DragOptions::default()
-    };
+    });
+    let cases = [
+        (Point::new(228.0, 20.0), Axis::Vertical, Placement::Before),
+        (Point::new(228.0, 180.0), Axis::Vertical, Placement::After),
+        (
+            Point::new(184.0, 100.0),
+            Axis::Horizontal,
+            Placement::Before,
+        ),
+        (Point::new(271.0, 100.0), Axis::Horizontal, Placement::After),
+    ];
 
-    let update = update_drag(&tree, &frame, &mut drag, Point::new(200.0, 5.0), &options);
+    for (point, expected_axis, expected_placement) in cases {
+        let update = pointer_update(&tree, &frame, Point::new(20.0, 100.0), point, &options);
 
-    assert!(matches!(
-        update.proposal,
-        Some(DockProposal::MovePane {
-            target: DockTarget::Split {
-                tile,
-                axis: Axis::Vertical,
-                placement: Placement::Before,
+        assert!(matches!(
+            dock_proposal(&update),
+            Some(DockProposal::MovePane {
+                target: DockTarget::Split {
+                    tile,
+                    axis,
+                    placement,
+                    ..
+                },
                 ..
-            },
-            ..
-        }) if tile == target_tile
-    ));
+            }) if *tile == target_tile && *axis == expected_axis && *placement == expected_placement
+        ));
+    }
 }
 
 #[test]
 fn dragging_pane_to_its_own_edge_is_invalid() {
     let tree = TileTree::single_pane(PaneId(1));
     let frame = tree.layout(input());
-    let mut drag = begin_drag(&frame, Point::new(20.0, 20.0), DragIntent::Move).unwrap();
 
-    let update = update_drag(
+    let update = pointer_update(
         &tree,
         &frame,
-        &mut drag,
+        Point::new(20.0, 20.0),
         Point::new(5.0, 100.0),
-        &DragOptions::default(),
+        &interaction_options(),
     );
 
     assert!(update.proposal.is_none());
@@ -550,18 +644,17 @@ fn dragging_pane_to_its_own_edge_is_invalid() {
 fn dragging_active_pane_from_tab_group_can_split_group() {
     let tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
     let frame = tree.layout(input());
-    let mut drag = begin_drag(&frame, Point::new(20.0, 50.0), DragIntent::Move).unwrap();
 
-    let update = update_drag(
+    let update = pointer_update(
         &tree,
         &frame,
-        &mut drag,
+        Point::new(20.0, 50.0),
         Point::new(5.0, 100.0),
-        &DragOptions::default(),
+        &interaction_options(),
     );
 
     assert!(matches!(
-        update.proposal,
+        dock_proposal(&update),
         Some(DockProposal::MovePane {
             pane: PaneId(1),
             target: DockTarget::Split {
@@ -570,7 +663,7 @@ fn dragging_active_pane_from_tab_group_can_split_group() {
                 placement: Placement::Before,
                 ..
             },
-        }) if tile == tree.root()
+        }) if *tile == tree.root()
     ));
 }
 
@@ -587,22 +680,21 @@ fn drag_over_tab_group_body_proposes_tab_into_group() {
     })
     .unwrap();
     let frame = tree.layout(input());
-    let mut drag = begin_drag(&frame, Point::new(250.0, 100.0), DragIntent::Move).unwrap();
 
-    let update = update_drag(
+    let update = pointer_update(
         &tree,
         &frame,
-        &mut drag,
+        Point::new(250.0, 100.0),
         Point::new(80.0, 100.0),
-        &DragOptions::default(),
+        &interaction_options(),
     );
 
     assert!(matches!(
-        update.proposal,
+        dock_proposal(&update),
         Some(DockProposal::MovePane {
             pane: PaneId(3),
             target: DockTarget::TabInto { group: target, index: None },
-        }) if target == group
+        }) if *target == group
     ));
 }
 
@@ -610,7 +702,7 @@ fn drag_over_tab_group_body_proposes_tab_into_group() {
 fn unsupported_tab_group_drag_targets_are_invalid() {
     let tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
     let frame = tree.layout(input());
-    let mut drag = DragSession {
+    let drag = DragSession {
         subject: DragSubject::TabGroup(tree.root()),
         source: DragSource::TabBar { group: tree.root() },
         origin: Point::new(10.0, 10.0),
@@ -618,13 +710,14 @@ fn unsupported_tab_group_drag_targets_are_invalid() {
         base_revision: frame.revision,
         proposal: None,
     };
+    let mut state = InteractionState::Drag(drag);
 
-    let update = update_drag(
+    let update = update_interaction(
         &tree,
         &frame,
-        &mut drag,
+        &mut state,
         Point::new(5.0, 100.0),
-        &DragOptions::default(),
+        &interaction_options(),
     );
 
     assert!(update.proposal.is_none());
@@ -646,17 +739,17 @@ fn resize_update_uses_solved_geometry_and_returns_preview() {
     })
     .unwrap();
     let frame = tree.layout(input());
-    let mut resize = begin_resize(&frame, Point::new(150.0, 100.0)).unwrap();
+    let mut state = begin_interaction(&frame, Point::new(150.0, 100.0), &interaction_options());
 
-    let update = update_resize(
+    let update = update_interaction(
         &tree,
         &frame,
-        &mut resize,
+        &mut state,
         Point::new(200.0, 100.0),
-        &ResizeOptions::default(),
+        &interaction_options(),
     );
 
-    let proposal = update.proposal.unwrap();
+    let proposal = resize_proposal(&update).unwrap();
     assert_eq!(proposal.delta, 50.0);
     assert_eq!(proposal.new_shares, vec![195.0, 95.0]);
 
@@ -678,17 +771,17 @@ fn resize_update_clamps_to_min_pane_size() {
     })
     .unwrap();
     let frame = tree.layout(input());
-    let mut resize = begin_resize(&frame, Point::new(150.0, 100.0)).unwrap();
+    let mut state = begin_interaction(&frame, Point::new(150.0, 100.0), &interaction_options());
 
-    let update = update_resize(
+    let update = update_interaction(
         &tree,
         &frame,
-        &mut resize,
+        &mut state,
         Point::new(500.0, 100.0),
-        &ResizeOptions::default(),
+        &interaction_options(),
     );
 
-    let proposal = update.proposal.unwrap();
+    let proposal = resize_proposal(&update).unwrap();
     assert_eq!(proposal.delta, 125.0);
     assert_eq!(proposal.new_shares, vec![270.0, 20.0]);
 
@@ -765,19 +858,19 @@ fn validate_resize_accepts_frame_checked_proposal() {
     })
     .unwrap();
     let frame = tree.layout(input());
-    let mut resize = begin_resize(&frame, Point::new(150.0, 100.0)).unwrap();
-    let update = update_resize(
+    let mut state = begin_interaction(&frame, Point::new(150.0, 100.0), &interaction_options());
+    let update = update_interaction(
         &tree,
         &frame,
-        &mut resize,
+        &mut state,
         Point::new(200.0, 100.0),
-        &ResizeOptions::default(),
+        &interaction_options(),
     );
 
     let validated = validate_proposal(
         ProposalValidationInput::new(
             &tree,
-            Proposal::Resize(update.proposal.unwrap()),
+            update.proposal.clone().unwrap(),
             &DockPolicyData::default(),
         )
         .with_frame(&frame),
@@ -791,39 +884,45 @@ fn validate_resize_accepts_frame_checked_proposal() {
 fn tab_insert_threshold_controls_reorder_index() {
     let tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
     let frame = tree.layout(input());
-    let mut drag = begin_drag(&frame, Point::new(225.0, 10.0), DragIntent::Move).unwrap();
-    let options = DragOptions {
+    let options = interaction_options_with_drag(DragOptions {
         allow_split: false,
         tab_insert_threshold: 0.75,
         ..DragOptions::default()
-    };
+    });
 
-    let update = update_drag(&tree, &frame, &mut drag, Point::new(100.0, 10.0), &options);
+    let update = pointer_update(
+        &tree,
+        &frame,
+        Point::new(225.0, 10.0),
+        Point::new(100.0, 10.0),
+        &options,
+    );
     assert!(matches!(
-        update.proposal,
+        dock_proposal(&update),
         Some(DockProposal::ReorderTab { index: 0, .. })
     ));
 
-    let options = DragOptions {
+    let options = interaction_options_with_drag(DragOptions {
+        allow_split: false,
         tab_insert_threshold: 0.25,
-        ..options
-    };
-    let update = update_drag(&tree, &frame, &mut drag, Point::new(100.0, 10.0), &options);
+        ..DragOptions::default()
+    });
+    let update = pointer_update(
+        &tree,
+        &frame,
+        Point::new(225.0, 10.0),
+        Point::new(100.0, 10.0),
+        &options,
+    );
     assert!(matches!(
-        update.proposal,
+        dock_proposal(&update),
         Some(DockProposal::ReorderTab { index: 1, .. })
     ));
 }
 
 #[test]
-fn stale_drag_commit_is_rejected() {
+fn stale_interaction_validation_is_rejected() {
     let mut tree = TileTree::single_pane(PaneId(1));
-    let frame = tree.layout(input());
-    let mut drag = begin_drag(&frame, Point::new(20.0, 20.0), DragIntent::Move).unwrap();
-    drag.proposal = Some(DockProposal::MovePane {
-        pane: PaneId(1),
-        target: DockTarget::Root,
-    });
     tree.apply(TileOp::SplitPane {
         pane: PaneId(1),
         axis: Axis::Horizontal,
@@ -832,8 +931,26 @@ fn stale_drag_commit_is_rejected() {
         share: 0.5,
     })
     .unwrap();
+    let frame = tree.layout(input());
+    let options = interaction_options();
+    let update = pointer_update(
+        &tree,
+        &frame,
+        Point::new(20.0, 20.0),
+        Point::new(290.0, 50.0),
+        &options,
+    );
+    assert!(update.proposal.is_some());
+    tree.apply(TileOp::SplitPane {
+        pane: PaneId(2),
+        axis: Axis::Horizontal,
+        new_pane: PaneId(3),
+        placement: Placement::After,
+        share: 0.5,
+    })
+    .unwrap();
     assert!(matches!(
-        commit_drag(&mut tree, drag),
+        validate_interaction_update(&tree, &frame, &update, &DockPolicyData::default(), &options),
         Err(TileError::StaleInteraction)
     ));
 }
@@ -981,9 +1098,8 @@ fn interaction_update_validates_and_commits_resize_proposal() {
     })
     .unwrap();
     let frame = tree.layout(input());
-    let resize = begin_resize(&frame, Point::new(150.0, 100.0)).unwrap();
-    let mut state = InteractionState::Resize(resize);
     let options = InteractionOptions::from_layout_input(input());
+    let mut state = begin_interaction(&frame, Point::new(150.0, 100.0), &options);
 
     let update = update_interaction(
         &tree,
@@ -996,11 +1112,7 @@ fn interaction_update_validates_and_commits_resize_proposal() {
     assert!(update.preview.is_some());
 
     let policy = DockPolicyData::default();
-    let validation = ProposalValidationInput::from_interaction_update(&tree, &update, &policy)
-        .unwrap()
-        .with_frame(&frame)
-        .with_interaction_options(&options);
-    let proposal = validate_proposal(validation).unwrap();
+    let proposal = validate_interaction_update(&tree, &frame, &update, &policy, &options).unwrap();
     let op = commit_proposal(&mut tree, proposal).unwrap();
 
     assert!(matches!(op, TileOp::SetSplitShares { .. }));
@@ -1224,7 +1336,6 @@ fn serde_covers_public_data_types() {
     assert_serde::<DragSubject>();
     assert_serde::<DragSource>();
     assert_serde::<ResizeSession>();
-    assert_serde::<InteractionFrame>();
     assert_serde::<OverlayFrame>();
     assert_serde::<OverlayHitRegion>();
     assert_serde::<DropTargetId>();
@@ -1235,9 +1346,6 @@ fn serde_covers_public_data_types() {
     assert_serde::<Proposal>();
     assert_serde::<DockProposal>();
     assert_serde::<ResizeProposal>();
-    assert_serde::<DragUpdate>();
-    assert_serde::<ResizeUpdate>();
-    assert_serde::<CommitMode>();
     assert_serde::<ResizeOptions>();
     assert_serde::<DragOptions>();
     assert_serde::<InteractionOptions>();

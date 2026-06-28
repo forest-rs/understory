@@ -71,6 +71,56 @@
 //! # Ok::<(), understory_tiling::TileError>(())
 //! ```
 //!
+//! ## Interaction Path
+//!
+//! ```rust
+//! use kurbo::{Point, Rect, Size};
+//! use understory_tiling::{
+//!     Axis, DockPolicyData, InteractionOptions, LayoutInput, PaneId, Placement,
+//!     TileOp, TileTree, begin_interaction, commit_proposal,
+//!     update_interaction, validate_interaction_update,
+//! };
+//!
+//! let mut tree = TileTree::single_pane(PaneId(1));
+//! tree.apply(TileOp::SplitPane {
+//!     pane: PaneId(1),
+//!     axis: Axis::Horizontal,
+//!     new_pane: PaneId(2),
+//!     placement: Placement::After,
+//!     share: 0.5,
+//! })?;
+//!
+//! let layout_input = LayoutInput {
+//!     bounds: Rect::new(0.0, 0.0, 800.0, 600.0),
+//!     tab_bar_thickness: 28.0,
+//!     split_handle_thickness: 6.0,
+//!     min_pane_size: Size::new(80.0, 80.0),
+//!     generate_drop_targets: false,
+//! };
+//! let frame = tree.layout(layout_input);
+//! let options = InteractionOptions::from_layout_input(layout_input);
+//! let policy = DockPolicyData::default();
+//!
+//! let mut state = begin_interaction(&frame, Point::new(20.0, 20.0), &options);
+//! let update = update_interaction(
+//!     &tree,
+//!     &frame,
+//!     &mut state,
+//!     Point::new(760.0, 20.0),
+//!     &options,
+//! );
+//!
+//! let _overlay = &update.overlay;
+//! let _preview = &update.preview;
+//!
+//! if update.proposal.is_some() {
+//!     let validated =
+//!         validate_interaction_update(&tree, &frame, &update, &policy, &options)?;
+//!     commit_proposal(&mut tree, validated)?;
+//! }
+//! # Ok::<(), understory_tiling::TileError>(())
+//! ```
+//!
 //! This crate is `no_std` and uses `alloc` when built without default features.
 //! Enable the `libm` feature for no-std targets that need Kurbo geometry math.
 //! Enable the `serde` feature to serialize layout trees, snapshots, frames,
@@ -97,12 +147,11 @@ pub use frame::{
 };
 pub use ids::{PaneId, Revision, SurfaceId, TileId};
 pub use interaction::{
-    CommitMode, DockProposal, DragIntent, DragOptions, DragSession, DragSource, DragSubject,
-    DragUpdate, DraggedFrame, DropTargetFrame, DropTargetId, GhostFrame, GhostKind,
-    InteractionFrame, InteractionOptions, InteractionState, InteractionUpdate, OverlayFrame,
-    OverlayHitRegion, PendingDrag, Proposal, ResizeOptions, ResizeProposal, ResizeSession,
-    ResizeUpdate, begin_drag, begin_pending_drag, begin_resize, commit_drag, commit_resize,
-    drop_targets_for_drag, pick_drop_target, update_drag, update_interaction, update_resize,
+    DockProposal, DragIntent, DragOptions, DragSession, DragSource, DragSubject, DraggedFrame,
+    DropTargetFrame, DropTargetId, GhostFrame, GhostKind, InteractionOptions, InteractionState,
+    InteractionUpdate, OverlayFrame, OverlayHitRegion, PendingDrag, Proposal, ResizeOptions,
+    ResizeProposal, ResizeSession, begin_interaction, drop_targets_for_drag, pick_drop_target,
+    update_interaction,
 };
 pub use kurbo::{Point, Rect, Size};
 pub use model::{
@@ -112,7 +161,7 @@ pub use model::{
 pub use ops::{DockTarget, TileError, TileOp};
 pub use policy::{
     DockPolicyData, EdgeSet, PaneCapabilities, ProposalValidationInput, ValidatedProposal, ZoneSet,
-    commit_proposal, validate_proposal,
+    commit_proposal, validate_interaction_update, validate_proposal,
 };
 pub use snapshot::{LayoutSnapshot, RepairAction, RepairReport, RestoreOptions, restore_snapshot};
 pub use tree::TileTree;

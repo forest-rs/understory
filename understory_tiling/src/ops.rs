@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use alloc::vec::Vec;
+use core::fmt;
 
 use crate::{Axis, LayoutSnapshot, PaneId, Placement, Rect, TileId};
 
@@ -52,10 +53,11 @@ pub enum DockTarget {
 /// Semantic mutation applied to a [`TileTree`](crate::TileTree).
 ///
 /// Construct one and pass it to [`TileTree::apply`](crate::TileTree::apply) for
-/// command-driven changes. Interaction commit helpers such as
-/// [`commit_drag`](crate::commit_drag) and
-/// [`commit_resize`](crate::commit_resize) also return the operation they
-/// applied so callers can log, undo, or mirror the semantic change.
+/// command-driven changes. The interaction path validates proposals with
+/// [`validate_interaction_update`](crate::validate_interaction_update) and
+/// commits them with [`commit_proposal`](crate::commit_proposal), which returns
+/// the operation applied so callers can log, undo, or mirror the semantic
+/// change.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TileOp {
@@ -158,4 +160,20 @@ pub enum TileError {
     CannotCloseLastPane,
     /// The operation is reserved but not implemented in this slice.
     Unsupported,
+}
+
+impl fmt::Display for TileError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::InvalidTileId => "invalid tile id",
+            Self::InvalidPaneId => "invalid pane id",
+            Self::InvalidOperation => "invalid operation",
+            Self::InvalidTarget => "invalid target",
+            Self::StaleInteraction => "stale interaction",
+            Self::PolicyRejected => "policy rejected operation",
+            Self::EmptyTree => "empty tree",
+            Self::CannotCloseLastPane => "cannot close last pane",
+            Self::Unsupported => "unsupported operation",
+        })
+    }
 }

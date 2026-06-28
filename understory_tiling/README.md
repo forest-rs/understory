@@ -85,6 +85,55 @@ assert_eq!(frame.panes.len(), 2);
 assert!(hit_test(&frame, Point::new(10.0, 10.0)).is_some());
 ```
 
+## Interaction Path
+
+```rust
+use kurbo::{Point, Rect, Size};
+use understory_tiling::{
+    Axis, DockPolicyData, InteractionOptions, LayoutInput, PaneId, Placement,
+    TileOp, TileTree, begin_interaction, commit_proposal,
+    update_interaction, validate_interaction_update,
+};
+
+let mut tree = TileTree::single_pane(PaneId(1));
+tree.apply(TileOp::SplitPane {
+    pane: PaneId(1),
+    axis: Axis::Horizontal,
+    new_pane: PaneId(2),
+    placement: Placement::After,
+    share: 0.5,
+})?;
+
+let layout_input = LayoutInput {
+    bounds: Rect::new(0.0, 0.0, 800.0, 600.0),
+    tab_bar_thickness: 28.0,
+    split_handle_thickness: 6.0,
+    min_pane_size: Size::new(80.0, 80.0),
+    generate_drop_targets: false,
+};
+let frame = tree.layout(layout_input);
+let options = InteractionOptions::from_layout_input(layout_input);
+let policy = DockPolicyData::default();
+
+let mut state = begin_interaction(&frame, Point::new(20.0, 20.0), &options);
+let update = update_interaction(
+    &tree,
+    &frame,
+    &mut state,
+    Point::new(760.0, 20.0),
+    &options,
+);
+
+let _overlay = &update.overlay;
+let _preview = &update.preview;
+
+if update.proposal.is_some() {
+    let validated =
+        validate_interaction_update(&tree, &frame, &update, &policy, &options)?;
+    commit_proposal(&mut tree, validated)?;
+}
+```
+
 This crate is `no_std` and uses `alloc` when built without default features.
 Enable the `libm` feature for no-std targets that need Kurbo geometry math.
 Enable the `serde` feature to serialize layout trees, snapshots, frames,
