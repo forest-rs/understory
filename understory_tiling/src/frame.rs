@@ -143,6 +143,17 @@ pub enum FrameItemId {
     },
     /// Tab bar item.
     TabBar(TileId),
+    /// Split child item.
+    ///
+    /// This is non-rendering geometry from [`LayoutFrame::split_children`].
+    /// Hosts can use it for resize previews, transition planning, and debugging
+    /// solved split layout.
+    SplitChild {
+        /// Split tile.
+        split: TileId,
+        /// Child tile.
+        child: TileId,
+    },
     /// Split handle item.
     SplitHandle {
         /// Split tile.
@@ -179,6 +190,8 @@ pub struct FrameItemDiff {
     pub after: Option<Rect>,
     /// Geometry change classification.
     pub change: FrameChange,
+    /// Optional transition hint for animation planning.
+    pub transition: Option<FrameTransitionHint>,
 }
 
 /// Geometry change classification for one frame item.
@@ -198,6 +211,33 @@ pub enum FrameChange {
     Resized,
     /// Item changes both origin and size.
     MovedAndResized,
+}
+
+/// Transition hint for one frame item.
+///
+/// Returned in [`FrameItemDiff::transition`]. These hints are intentionally
+/// descriptive rather than prescriptive: they tell a host where an item appears
+/// to come from or go to, but animation timing and visual interpolation remain
+/// outside this crate.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum FrameTransitionHint {
+    /// Item entered from a previous rectangle.
+    EnteredFrom {
+        /// Related previous item, if one was identified.
+        item: Option<FrameItemId>,
+        /// Previous rectangle to animate from.
+        rect: Rect,
+    },
+    /// Item exited toward a new rectangle.
+    ExitedTo {
+        /// Related new item, if one was identified.
+        item: Option<FrameItemId>,
+        /// New rectangle to animate toward.
+        rect: Rect,
+    },
+    /// Stable item should animate from its own previous rectangle.
+    SharedOrigin(FrameItemId),
 }
 
 /// Hit-test region.
@@ -290,6 +330,7 @@ pub fn diff_frames(before: &LayoutFrame, after: &LayoutFrame) -> FrameDiff {
                         before: Some(before_rect),
                         after: Some(*after_rect),
                         change,
+                        transition: Some(FrameTransitionHint::SharedOrigin(*item)),
                     });
                 }
             }
@@ -298,6 +339,7 @@ pub fn diff_frames(before: &LayoutFrame, after: &LayoutFrame) -> FrameDiff {
                 before: None,
                 after: Some(*after_rect),
                 change: FrameChange::Added,
+                transition: transition_for_added(&before_items, *after_rect),
             }),
         }
     }
@@ -309,6 +351,7 @@ pub fn diff_frames(before: &LayoutFrame, after: &LayoutFrame) -> FrameDiff {
                 before: Some(*before_rect),
                 after: None,
                 change: FrameChange::Removed,
+                transition: transition_for_removed(&after_items, *before_rect),
             });
         }
     }
@@ -331,6 +374,15 @@ fn frame_item_rects(frame: &LayoutFrame) -> Vec<(FrameItemId, Rect)> {
                 pane: tab.pane,
             },
             tab.rect,
+        ));
+    }
+    for child in &frame.split_children {
+        items.push((
+            FrameItemId::SplitChild {
+                split: child.split,
+                child: child.child,
+            },
+            child.rect,
         ));
     }
     for handle in &frame.split_handles {
@@ -364,4 +416,58 @@ fn classify_rect_change(before: Rect, after: Rect) -> Option<FrameChange> {
         (false, true) => Some(FrameChange::Resized),
         (false, false) => None,
     }
+}
+
+fn transition_for_added(
+    before_items: &[(FrameItemId, Rect)],
+    after_rect: Rect,
+) -> Option<FrameTransitionHint> {
+    related_rect(before_items, after_rect).map(|(item, rect)| FrameTransitionHint::EnteredFrom {
+        item: Some(item),
+        rect,
+    })
+}
+
+fn transition_for_removed(
+    after_items: &[(FrameItemId, Rect)],
+    before_rect: Rect,
+) -> Option<FrameTransitionHint> {
+    related_rect(after_items, before_rect).map(|(item, rect)| FrameTransitionHint::ExitedTo {
+        item: Some(item),
+        rect,
+    })
+}
+
+fn related_rect(items: &[(FrameItemId, Rect)], rect: Rect) -> Option<(FrameItemId, Rect)> {
+    let mut best: Option<(usize, FrameItemId, Rect, f64, f64)> = None;
+    for (index, (item, candidate)) in items.iter().copied().enumerate() {
+        let overlap = overlap_area(candidate, rect);
+        let distance = center_distance_squared(candidate, rect);
+        match best {
+            Some((best_index, _, _, best_overlap, best_distance))
+                if overlap < best_overlap
+                    || (overlap == best_overlap && distance > best_distance)
+                    || (overlap == best_overlap
+                        && distance == best_distance
+                        && index >= best_index) => {}
+            _ => best = Some((index, item, candidate, overlap, distance)),
+        }
+    }
+    best.map(|(_, item, rect, _, _)| (item, rect))
+}
+
+fn overlap_area(a: Rect, b: Rect) -> f64 {
+    let width = (a.x1.min(b.x1) - a.x0.max(b.x0)).max(0.0);
+    let height = (a.y1.min(b.y1) - a.y0.max(b.y0)).max(0.0);
+    width * height
+}
+
+fn center_distance_squared(a: Rect, b: Rect) -> f64 {
+    let ax = (a.x0 + a.x1) * 0.5;
+    let ay = (a.y0 + a.y1) * 0.5;
+    let bx = (b.x0 + b.x1) * 0.5;
+    let by = (b.y0 + b.y1) * 0.5;
+    let dx = ax - bx;
+    let dy = ay - by;
+    dx * dx + dy * dy
 }

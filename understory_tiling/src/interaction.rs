@@ -6,12 +6,12 @@ use alloc::vec::Vec;
 use core::cmp::Ordering;
 
 use crate::Placement;
-use crate::frame::hit_test;
+use crate::frame::{diff_frames, hit_test};
 use crate::util::{major_length, major_size, rect_distance, split_min_major};
 use crate::{
-    Axis, DockTarget, HitKind, LayoutFrame, LayoutInput, PaneFrame, PaneId, Point, Rect, Revision,
-    Size, SplitChildFrame, SplitHandleFrame, TabBarFrame, TabFrame, TileError, TileId, TileNode,
-    TileOp, TileTree,
+    Axis, DockTarget, FrameDiff, HitKind, LayoutFrame, LayoutInput, PaneFrame, PaneId, Point, Rect,
+    Revision, Size, SplitChildFrame, SplitHandleFrame, TabBarFrame, TabFrame, TileError, TileId,
+    TileNode, TileOp, TileTree,
 };
 
 /// High-level drag intent.
@@ -340,6 +340,8 @@ pub struct PreviewFrame {
     pub tab_bars: Vec<TabBarFrame>,
     /// Preview tabs.
     pub tabs: Vec<TabFrame>,
+    /// Preview split child rectangles.
+    pub split_children: Vec<SplitChildFrame>,
     /// Preview split handles.
     pub split_handles: Vec<SplitHandleFrame>,
 }
@@ -355,8 +357,45 @@ impl PreviewFrame {
             panes: frame.panes.clone(),
             tab_bars: frame.tab_bars.clone(),
             tabs: frame.tabs.clone(),
+            split_children: frame.split_children.clone(),
             split_handles: frame.split_handles.clone(),
         }
+    }
+
+    /// Converts this preview into a layout-shaped frame.
+    ///
+    /// Use this when a host wants to run frame-level utilities such as
+    /// [`diff_frames`] on a preview. Non-geometry fields such as hit regions and
+    /// focus order are left empty.
+    #[must_use]
+    pub fn to_layout_frame(&self) -> LayoutFrame {
+        LayoutFrame {
+            panes: self.panes.clone(),
+            tab_bars: self.tab_bars.clone(),
+            tabs: self.tabs.clone(),
+            split_children: self.split_children.clone(),
+            split_handles: self.split_handles.clone(),
+            ..LayoutFrame::default()
+        }
+    }
+
+    /// Diffs this preview against a committed layout frame.
+    ///
+    /// This is useful after committing a drag or resize: a host can compare the
+    /// preview it rendered during interaction with the newly solved committed
+    /// frame and decide whether any animation still needs to run.
+    #[must_use]
+    pub fn diff_to_layout_frame(&self, frame: &LayoutFrame) -> FrameDiff {
+        diff_frames(&self.to_layout_frame(), frame)
+    }
+
+    /// Diffs a committed layout frame into this preview.
+    ///
+    /// This is useful while an interaction is still uncommitted and the host
+    /// wants transition hints from the current committed frame into the preview.
+    #[must_use]
+    pub fn diff_from_layout_frame(&self, frame: &LayoutFrame) -> FrameDiff {
+        diff_frames(frame, &self.to_layout_frame())
     }
 }
 
