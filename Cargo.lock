@@ -719,6 +719,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "understory_overlay"
+version = "0.1.0"
+dependencies = [
+ "kurbo",
+ "serde",
+ "understory_anchor",
+]
+
+[[package]]
 name = "understory_precise_hit"
 version = "0.1.0"
 dependencies = [

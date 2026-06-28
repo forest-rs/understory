@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
   "understory_anchor",
+  "understory_overlay",
   "understory_axis",
   "understory_animation",
   "understory_animation_timeline",
@@ -64,6 +65,7 @@ serde = { version = "1.0.217", default-features = false, features = [
 understory_animation = { version = "0.1.0", path = "understory_animation", default-features = false }
 understory_animation_timeline = { version = "0.1.0", path = "understory_animation_timeline", default-features = false }
 understory_anchor = { version = "0.1.0", path = "understory_anchor", default-features = false }
+understory_overlay = { version = "0.1.0", path = "understory_overlay", default-features = false }
 understory_axis = { version = "0.1.0", path = "understory_axis", default-features = false }
 understory_property_binding = { version = "0.1.0", path = "understory_property_binding", default-features = false }
 understory_box_decoration = { version = "0.1.0", path = "understory_box_decoration", default-features = false }
