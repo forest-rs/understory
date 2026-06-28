@@ -12,11 +12,11 @@ categories = ["gui", "no-std"]
 
 [features]
 default = ["libm"]
-libm = ["kurbo/libm", "understory_motion/libm"]
-std = ["kurbo/std", "understory_motion/std"]
+libm = ["dep:libm", "understory_motion/libm"]
+std = ["understory_motion/std"]
 
 [dependencies]
-kurbo.workspace = true
+libm = { version = "0.2", optional = true, default-features = false }
 understory_animation_timeline.workspace = true
 understory_motion.workspace = true
 understory_timing.workspace = true

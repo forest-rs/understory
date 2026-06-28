@@ -1,11 +1,9 @@
 // Copyright 2026 the Understory Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use core::f64::consts::E;
-
-#[cfg(all(not(test), not(feature = "std")))]
-use kurbo::common::FloatFuncs;
 use understory_timing::TimerDuration;
+
+use crate::math::{cos, exp, sin, sqrt};
 
 /// Physical spring parameters for one-dimensional sampling.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -68,8 +66,8 @@ impl Spring {
 
         let seconds = seconds(elapsed);
         let displacement = from - to;
-        let natural = (self.stiffness / self.mass).sqrt();
-        let damping_ratio = self.damping / (2.0 * (self.stiffness * self.mass).sqrt());
+        let natural = sqrt(self.stiffness / self.mass);
+        let damping_ratio = self.damping / (2.0 * sqrt(self.stiffness * self.mass));
         let (offset, velocity) = solve_damped_oscillator(
             displacement,
             initial_velocity,
@@ -199,16 +197,16 @@ fn solve_damped_oscillator(
     const CRITICAL_EPSILON: f64 = 1.0e-6;
 
     if damping_ratio < 1.0 - CRITICAL_EPSILON {
-        let damped = natural * (1.0 - damping_ratio * damping_ratio).sqrt();
+        let damped = natural * sqrt(1.0 - damping_ratio * damping_ratio);
         let envelope = exp(-damping_ratio * natural * seconds);
         let a = displacement;
         let b = (velocity + (damping_ratio * natural * displacement)) / damped;
-        let cos = (damped * seconds).cos();
-        let sin = (damped * seconds).sin();
-        let offset = envelope * ((a * cos) + (b * sin));
+        let cos_value = cos(damped * seconds);
+        let sin_value = sin(damped * seconds);
+        let offset = envelope * ((a * cos_value) + (b * sin_value));
         let velocity = envelope
-            * ((-damping_ratio * natural * ((a * cos) + (b * sin)))
-                + ((-a * damped * sin) + (b * damped * cos)));
+            * ((-damping_ratio * natural * ((a * cos_value) + (b * sin_value)))
+                + ((-a * damped * sin_value) + (b * damped * cos_value)));
         (offset, velocity)
     } else if damping_ratio <= 1.0 + CRITICAL_EPSILON {
         let envelope = exp(-natural * seconds);
@@ -217,7 +215,7 @@ fn solve_damped_oscillator(
         let velocity = envelope * (b - (natural * (displacement + (b * seconds))));
         (offset, velocity)
     } else {
-        let root = (damping_ratio * damping_ratio - 1.0).sqrt();
+        let root = sqrt(damping_ratio * damping_ratio - 1.0);
         let r1 = -natural * (damping_ratio - root);
         let r2 = -natural * (damping_ratio + root);
         let c1 = (velocity - (r2 * displacement)) / (r1 - r2);
@@ -230,10 +228,6 @@ fn solve_damped_oscillator(
 
 fn seconds(duration: TimerDuration) -> f64 {
     duration as f64 / 1_000_000_000.0
-}
-
-fn exp(value: f64) -> f64 {
-    E.powf(value)
 }
 
 #[cfg(test)]

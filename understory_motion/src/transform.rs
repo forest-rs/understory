@@ -3,10 +3,9 @@
 
 use core::f64::consts::PI;
 
-#[cfg(all(not(test), not(feature = "std")))]
-use kurbo::common::FloatFuncs;
 use kurbo::{Affine, Point, Vec2};
 
+use crate::math::rem_euclid;
 use crate::{AnimatableValue, Interpolate};
 
 const TAU: f64 = PI * 2.0;
@@ -121,7 +120,7 @@ impl AnimatableValue for Transform2d {
 }
 
 fn shortest_angle_delta(from: f64, to: f64) -> f64 {
-    (to - from + PI).rem_euclid(TAU) - PI
+    rem_euclid(to - from + PI, TAU) - PI
 }
 
 #[cfg(test)]

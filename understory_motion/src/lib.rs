@@ -34,16 +34,17 @@
 //! style, store properties, drive frame clocks, interpret input events, or
 //! submit renderer commands.
 //!
-//! This crate is `no_std` by default. The default `libm` feature forwards to
-//! dependent math and color crates so ordinary builds work without `std`.
-//! Enable the `std` feature when an application wants standard-library
-//! support instead.
+//! This crate is `no_std` by default. The default `libm` feature enables local
+//! libm-backed floating point helpers and forwards to dependent math and color
+//! crates so ordinary builds work without `std`. Enable the `std` feature when
+//! an application wants standard-library support instead.
 
 #[cfg(test)]
 extern crate std;
 
 mod color;
 mod easing;
+mod math;
 mod physics;
 mod transform;
 mod transition;

@@ -558,7 +558,7 @@ dependencies = [
 name = "understory_animation"
 version = "0.1.0"
 dependencies = [
- "kurbo",
+ "libm",
  "understory_animation_timeline",
  "understory_motion",
  "understory_timing",
@@ -601,6 +601,7 @@ name = "understory_box_decoration"
 version = "0.1.0"
 dependencies = [
  "kurbo",
+ "libm",
 ]
 
 [[package]]
@@ -682,6 +683,7 @@ name = "understory_motion"
 version = "0.1.0"
 dependencies = [
  "kurbo",
+ "libm",
  "peniko",
  "understory_timing",
 ]

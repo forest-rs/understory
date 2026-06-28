@@ -1,12 +1,11 @@
 // Copyright 2026 the Understory Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-#[cfg(all(not(test), not(feature = "std")))]
-use kurbo::common::FloatFuncs;
 use understory_animation_timeline::TimelineTime;
 use understory_motion::TimingFunction;
 use understory_timing::TimerDuration;
 
+use crate::math::{ceil, floor};
 use crate::{FillMode, PlaybackDirection};
 
 /// Complete timing parameters for an animation effect.
@@ -154,9 +153,9 @@ impl AnimationTiming {
             return (0, 0.0);
         }
 
-        let floor = self.iterations.floor();
-        let floor_iteration = f64_floor_to_u64(floor);
-        let fraction = self.iterations - floor;
+        let floor_value = floor(self.iterations);
+        let floor_iteration = f64_floor_to_u64(floor_value);
+        let fraction = self.iterations - floor_value;
         if fraction == 0.0 {
             (floor_iteration.saturating_sub(1), 1.0)
         } else {
@@ -196,7 +195,7 @@ fn f64_floor_to_u64(value: f64) -> u64 {
     } else if value >= u64::MAX as f64 {
         u64::MAX
     } else {
-        value.floor() as u64
+        floor(value) as u64
     }
 }
 
@@ -210,7 +209,7 @@ fn f64_ceil_to_duration(value: f64) -> TimerDuration {
     } else if value >= TimerDuration::MAX as f64 {
         TimerDuration::MAX
     } else {
-        value.ceil() as TimerDuration
+        ceil(value) as TimerDuration
     }
 }
 
