@@ -6,12 +6,11 @@ use alloc::vec::Vec;
 use core::cmp::Ordering;
 
 use crate::Placement;
-use crate::frame::{diff_frames, hit_test};
+use crate::frame::hit_test;
 use crate::util::{major_length, major_size, rect_distance, split_min_major};
 use crate::{
-    Axis, DockTarget, FrameDiff, HitKind, LayoutFrame, LayoutInput, PaneFrame, PaneId, Point, Rect,
-    Revision, Size, SplitChildFrame, SplitHandleFrame, TabBarFrame, TabFrame, TileError, TileId,
-    TileNode, TileOp, TileTree,
+    Axis, DockTarget, HitKind, LayoutFrame, LayoutInput, PaneId, Point, Rect, Revision, Size,
+    SplitChildFrame, TileError, TileId, TileNode, TileOp, TileTree,
 };
 
 /// High-level drag intent.
@@ -35,6 +34,9 @@ pub enum DragIntent {
 pub enum InteractionState {
     /// No active interaction.
     None,
+    /// Pointer-down gesture that may become a drag after movement crosses a
+    /// threshold.
+    PendingDrag(PendingDrag),
     /// Active drag session.
     Drag(DragSession),
     /// Active resize session.
@@ -197,8 +199,8 @@ pub struct ResizeSession {
 pub struct InteractionFrame {
     /// Overlay geometry.
     pub overlay: OverlayFrame,
-    /// Optional full preview frame.
-    pub preview: Option<PreviewFrame>,
+    /// Optional render-ready preview layout.
+    pub preview: Option<LayoutFrame>,
     /// Current proposal.
     pub proposal: Option<Proposal>,
 }
@@ -293,7 +295,7 @@ pub struct DropTargetFrame {
 /// Preview ghost rectangle.
 ///
 /// Produced in [`OverlayFrame::ghost_rects`] when an interaction wants a simple
-/// preview rectangle instead of a full [`PreviewFrame`].
+/// preview rectangle instead of a full [`LayoutFrame`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GhostFrame {
@@ -329,78 +331,6 @@ pub struct DraggedFrame {
     pub subject: DragSubject,
     /// Subject rectangle.
     pub rect: Rect,
-}
-
-/// Optional full preview layout.
-///
-/// Reserved for interactions that want to preview a complete solved layout.
-/// Current MVP updates usually return simple overlay targets instead.
-#[derive(Clone, Debug, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct PreviewFrame {
-    /// Preview panes.
-    pub panes: Vec<PaneFrame>,
-    /// Preview tab bars.
-    pub tab_bars: Vec<TabBarFrame>,
-    /// Preview tabs.
-    pub tabs: Vec<TabFrame>,
-    /// Preview split child rectangles.
-    pub split_children: Vec<SplitChildFrame>,
-    /// Preview split handles.
-    pub split_handles: Vec<SplitHandleFrame>,
-}
-
-impl PreviewFrame {
-    /// Copies renderable geometry from a solved layout frame.
-    ///
-    /// Use this when an interaction wants to return a complete preview layout
-    /// without exposing hit regions, focus order, or paint-order details.
-    #[must_use]
-    pub fn from_layout(frame: &LayoutFrame) -> Self {
-        Self {
-            panes: frame.panes.clone(),
-            tab_bars: frame.tab_bars.clone(),
-            tabs: frame.tabs.clone(),
-            split_children: frame.split_children.clone(),
-            split_handles: frame.split_handles.clone(),
-        }
-    }
-
-    /// Converts this preview into a layout-shaped frame.
-    ///
-    /// Use this when a host wants to run frame-level utilities such as
-    /// [`diff_frames`] on a preview. Non-geometry fields such as hit regions and
-    /// focus order are left empty.
-    #[must_use]
-    pub fn to_layout_frame(&self) -> LayoutFrame {
-        LayoutFrame {
-            panes: self.panes.clone(),
-            tab_bars: self.tab_bars.clone(),
-            tabs: self.tabs.clone(),
-            split_children: self.split_children.clone(),
-            split_handles: self.split_handles.clone(),
-            ..LayoutFrame::default()
-        }
-    }
-
-    /// Diffs this preview against a committed layout frame.
-    ///
-    /// This is useful after committing a drag or resize: a host can compare the
-    /// preview it rendered during interaction with the newly solved committed
-    /// frame and decide whether any animation still needs to run.
-    #[must_use]
-    pub fn diff_to_layout_frame(&self, frame: &LayoutFrame) -> FrameDiff {
-        diff_frames(&self.to_layout_frame(), frame)
-    }
-
-    /// Diffs a committed layout frame into this preview.
-    ///
-    /// This is useful while an interaction is still uncommitted and the host
-    /// wants transition hints from the current committed frame into the preview.
-    #[must_use]
-    pub fn diff_from_layout_frame(&self, frame: &LayoutFrame) -> FrameDiff {
-        diff_frames(frame, &self.to_layout_frame())
-    }
 }
 
 /// Uncommitted layout proposal.
@@ -488,6 +418,8 @@ pub struct ResizeProposal {
 pub struct DragUpdate {
     /// Current proposal.
     pub proposal: Option<DockProposal>,
+    /// Tree revision captured when the drag began.
+    pub base_revision: Revision,
     /// All generated drop candidates.
     ///
     /// Inspect this for custom target visualization or diagnostics. Most UIs
@@ -496,8 +428,8 @@ pub struct DragUpdate {
     pub candidates: Vec<DropTargetFrame>,
     /// Overlay geometry.
     pub overlay: OverlayFrame,
-    /// Optional full preview.
-    pub preview: Option<PreviewFrame>,
+    /// Optional render-ready preview layout.
+    pub preview: Option<LayoutFrame>,
 }
 
 /// Result of updating a resize session.
@@ -510,10 +442,38 @@ pub struct DragUpdate {
 pub struct ResizeUpdate {
     /// Current proposal.
     pub proposal: Option<ResizeProposal>,
+    /// Tree revision captured when the resize began.
+    pub base_revision: Revision,
     /// Overlay geometry.
     pub overlay: OverlayFrame,
-    /// Optional full preview.
-    pub preview: Option<PreviewFrame>,
+    /// Optional render-ready preview layout.
+    pub preview: Option<LayoutFrame>,
+}
+
+/// Result of updating any interaction state.
+///
+/// Returned by [`update_interaction`]. Store `overlay` and `preview` directly
+/// in the host renderer state, then validate and commit `proposal` on
+/// pointer-up if one is present.
+#[derive(Clone, Debug, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct InteractionUpdate {
+    /// Current proposal.
+    pub proposal: Option<Proposal>,
+    /// Tree revision captured when the interaction began.
+    ///
+    /// Pass this to [`ProposalValidationInput::with_base_revision`](crate::ProposalValidationInput::with_base_revision)
+    /// if the host commits through [`validate_proposal`](crate::validate_proposal).
+    pub base_revision: Option<Revision>,
+    /// All generated drop candidates.
+    ///
+    /// Populated for drag updates. Resize updates leave this empty because
+    /// resize interactions do not generate dock targets.
+    pub candidates: Vec<DropTargetFrame>,
+    /// Overlay geometry.
+    pub overlay: OverlayFrame,
+    /// Optional render-ready preview layout.
+    pub preview: Option<LayoutFrame>,
 }
 
 /// Interaction commit behavior.
@@ -602,6 +562,67 @@ impl Default for DragOptions {
     }
 }
 
+/// Options for updating any interaction state.
+///
+/// Construct this with [`InteractionOptions::from_layout_input`] when pointer
+/// interaction should use the same geometry constraints as layout solving.
+/// Pass it to [`update_interaction`] so drag and resize updates can be handled
+/// through one host code path.
+#[derive(Clone, Copy, Debug, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct InteractionOptions {
+    /// Drag/drop options.
+    pub drag: DragOptions,
+    /// Resize options.
+    pub resize: ResizeOptions,
+}
+
+impl InteractionOptions {
+    /// Creates interaction options from a layout input.
+    ///
+    /// Use this in renderers that keep one layout input per frame. Drag
+    /// previews will relayout with `input`, and resize interactions will use
+    /// `input.min_pane_size` for solved-geometry clamping.
+    #[must_use]
+    pub fn from_layout_input(input: LayoutInput) -> Self {
+        let drag = DragOptions {
+            preview_layout: Some(input),
+            ..DragOptions::default()
+        };
+
+        let resize = ResizeOptions {
+            min_pane_size: input.min_pane_size,
+            ..ResizeOptions::default()
+        };
+
+        Self { drag, resize }
+    }
+}
+
+impl From<DragUpdate> for InteractionUpdate {
+    fn from(update: DragUpdate) -> Self {
+        Self {
+            proposal: update.proposal.map(Proposal::Dock),
+            base_revision: Some(update.base_revision),
+            candidates: update.candidates,
+            overlay: update.overlay,
+            preview: update.preview,
+        }
+    }
+}
+
+impl From<ResizeUpdate> for InteractionUpdate {
+    fn from(update: ResizeUpdate) -> Self {
+        Self {
+            proposal: update.proposal.map(Proposal::Resize),
+            base_revision: Some(update.base_revision),
+            candidates: Vec::new(),
+            overlay: update.overlay,
+            preview: update.preview,
+        }
+    }
+}
+
 /// Starts a drag session from a frame hit.
 ///
 /// Call this after the host has decided a pointer gesture is a drag. For tabs,
@@ -663,6 +684,38 @@ pub fn begin_pending_drag(
     })
 }
 
+/// Updates the current interaction state.
+///
+/// Call this on pointer movement when the host stores one [`InteractionState`].
+/// Pending drags become real drag sessions only after their movement threshold
+/// is crossed. Active drags and resizes delegate to [`update_drag`] and
+/// [`update_resize`] and return a unified [`InteractionUpdate`] that can be
+/// rendered and validated without matching on interaction kind.
+#[must_use]
+pub fn update_interaction(
+    tree: &TileTree,
+    frame: &LayoutFrame,
+    state: &mut InteractionState,
+    point: Point,
+    options: &InteractionOptions,
+) -> InteractionUpdate {
+    match state {
+        InteractionState::None => InteractionUpdate::default(),
+        InteractionState::PendingDrag(pending) => {
+            let Some(mut drag) = pending.update(point) else {
+                return InteractionUpdate::default();
+            };
+            let update = update_drag(tree, frame, &mut drag, point, &options.drag);
+            *state = InteractionState::Drag(drag);
+            update.into()
+        }
+        InteractionState::Drag(drag) => update_drag(tree, frame, drag, point, &options.drag).into(),
+        InteractionState::Resize(resize) => {
+            update_resize(tree, frame, resize, point, &options.resize).into()
+        }
+    }
+}
+
 /// Updates a drag session.
 #[must_use]
 pub fn update_drag(
@@ -696,6 +749,7 @@ pub fn update_drag(
 
     DragUpdate {
         proposal,
+        base_revision: drag.base_revision,
         candidates: targets.clone(),
         overlay: OverlayFrame {
             active_target,
@@ -777,6 +831,7 @@ pub fn update_resize(
     resize.proposal = proposal.clone();
     ResizeUpdate {
         proposal,
+        base_revision: resize.base_revision,
         overlay: OverlayFrame::default(),
         preview,
     }
@@ -1343,7 +1398,7 @@ fn preview_for_resize(
     frame: &LayoutFrame,
     proposal: &ResizeProposal,
     options: &ResizeOptions,
-) -> Option<PreviewFrame> {
+) -> Option<LayoutFrame> {
     let bounds = frame_bounds(frame)?;
     let split_handle_thickness = frame
         .split_handles
@@ -1357,25 +1412,24 @@ fn preview_for_resize(
             shares: proposal.new_shares.clone(),
         })
         .ok()?;
-    let preview = preview_tree.layout(LayoutInput {
+    Some(preview_tree.layout(LayoutInput {
         bounds,
         tab_bar_thickness: tab_bar_thickness(frame),
         split_handle_thickness,
         min_pane_size: options.min_pane_size,
         generate_drop_targets: false,
-    });
-    Some(PreviewFrame::from_layout(&preview))
+    }))
 }
 
 fn preview_for_dock_proposal(
     tree: &TileTree,
     proposal: &DockProposal,
     input: LayoutInput,
-) -> Option<PreviewFrame> {
+) -> Option<LayoutFrame> {
     let op = op_for_dock_proposal(proposal.clone()).ok()?;
     let mut preview_tree = tree.clone();
     preview_tree.apply(op).ok()?;
-    Some(PreviewFrame::from_layout(&preview_tree.layout(input)))
+    Some(preview_tree.layout(input))
 }
 
 fn split_child_frames(frame: &LayoutFrame, split: TileId) -> Vec<SplitChildFrame> {
