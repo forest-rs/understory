@@ -165,9 +165,11 @@ pub enum FrameItemId {
 
 /// Layout difference between two frames.
 ///
-/// Returned by [`diff_frames`]. Renderers can use this to decide which stable
-/// frame items were added, removed, moved, or resized between two layout solves.
-/// Animation timing and interpolation remain the host's responsibility.
+/// Returned by [`diff_frames`] after a host solves an old and new
+/// [`LayoutFrame`]. Renderers can use this to decide which stable pane, tab, tab
+/// bar, split child, and split handle items were added, removed, moved, or
+/// resized. Animation timing and interpolation remain the host's
+/// responsibility.
 #[derive(Clone, Debug, Default, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FrameDiff {
@@ -217,8 +219,8 @@ pub enum FrameChange {
 ///
 /// Returned in [`FrameItemDiff::transition`]. These hints are intentionally
 /// descriptive rather than prescriptive: they tell a host where an item appears
-/// to come from or go to, but animation timing and visual interpolation remain
-/// outside this crate.
+/// to come from or go to. Use them as optional animation origins or exits after
+/// calling [`diff_frames`]; visual interpolation remains outside this crate.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum FrameTransitionHint {
@@ -314,7 +316,9 @@ pub fn hit_test(frame: &LayoutFrame, point: Point) -> Option<HitKind> {
 ///
 /// The returned diff contains changed items only. Items are matched by stable
 /// [`FrameItemId`], so a pane that changes rectangle is reported as moved or
-/// resized instead of as a remove/add pair.
+/// resized instead of as a remove/add pair. Call this after relayout when a
+/// host wants transition metadata for panes, tabs, tab bars, split children, and
+/// split handles.
 #[must_use]
 pub fn diff_frames(before: &LayoutFrame, after: &LayoutFrame) -> FrameDiff {
     let before_items = frame_item_rects(before);
