@@ -1358,6 +1358,7 @@ fn preview_for_resize(
         tab_bar_thickness: tab_bar_thickness(frame),
         split_handle_thickness,
         min_pane_size: options.min_pane_size,
+        zoom: frame.projection.as_ref().map(|projection| projection.focus),
         generate_drop_targets: false,
     }))
 }

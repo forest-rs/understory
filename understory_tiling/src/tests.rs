@@ -11,6 +11,7 @@ fn input() -> LayoutInput {
         tab_bar_thickness: 20.0,
         split_handle_thickness: 10.0,
         min_pane_size: Size::new(20.0, 20.0),
+        zoom: None,
         generate_drop_targets: false,
     }
 }
@@ -116,10 +117,11 @@ fn frame_diff_reports_added_and_resized_items() {
         diff_item(&diff, FrameItemId::Pane(PaneId(2))),
         FrameItemDiff {
             change: FrameChange::Added,
-            transition: Some(FrameTransitionHint::EnteredFrom {
-                item: Some(FrameItemId::Pane(PaneId(1))),
-                rect,
-            }),
+            motion: FrameMotion::Enter {
+                from: Some(rect),
+                anchor: Some(FrameItemId::Pane(PaneId(1))),
+            },
+            cause: FrameCause::Relayout,
             ..
         } if *rect == input().bounds
     ));
@@ -215,10 +217,11 @@ fn frame_diff_reports_removed_items_with_exit_hints() {
             change: FrameChange::Removed,
             before: Some(_),
             after: None,
-            transition: Some(FrameTransitionHint::ExitedTo {
-                item: Some(FrameItemId::Pane(PaneId(1))),
-                rect,
-            }),
+            motion: FrameMotion::Exit {
+                to: Some(rect),
+                anchor: Some(FrameItemId::Pane(PaneId(1))),
+            },
+            cause: FrameCause::Relayout,
             ..
         } if *rect == after.panes[0].rect
     ));
@@ -230,6 +233,329 @@ fn frame_diff_reports_removed_items_with_exit_hints() {
             ..
         }
     )));
+}
+
+#[test]
+fn zoomed_layout_projects_visible_pane_to_bounds() {
+    let mut tree = TileTree::single_pane(PaneId(1));
+    tree.apply(TileOp::SplitPane {
+        pane: PaneId(1),
+        axis: Axis::Horizontal,
+        new_pane: PaneId(2),
+        placement: Placement::After,
+        share: 0.5,
+    })
+    .unwrap();
+
+    let normal = tree.layout(input());
+    let source = normal
+        .panes
+        .iter()
+        .find(|pane| pane.pane == PaneId(2))
+        .copied()
+        .expect("pane 2 should be visible before zoom");
+    let zoomed = tree.layout(LayoutInput {
+        zoom: Some(PaneId(2)),
+        ..input()
+    });
+
+    let projection = zoomed.projection.as_ref().expect("projection metadata");
+    assert_eq!(projection.kind, ProjectionKind::Zoom);
+    assert_eq!(projection.focus, PaneId(2));
+    assert_eq!(projection.focus_tile, source.tile);
+    assert_eq!(projection.source_rect, source.rect);
+    assert_eq!(projection.projected_rect, input().bounds);
+    assert!(
+        projection
+            .hidden_items
+            .iter()
+            .any(|hidden| hidden.item == FrameItemId::Pane(PaneId(1)))
+    );
+    assert!(
+        projection
+            .hidden_items
+            .iter()
+            .any(|hidden| matches!(hidden.item, FrameItemId::SplitHandle { handle: 0, .. }))
+    );
+    assert_eq!(zoomed.panes.len(), 1);
+    assert_eq!(zoomed.panes[0].pane, PaneId(2));
+    assert_eq!(zoomed.panes[0].rect, input().bounds);
+    assert!(zoomed.tab_bars.is_empty());
+    assert!(zoomed.tabs.is_empty());
+    assert!(zoomed.split_children.is_empty());
+    assert!(zoomed.split_handles.is_empty());
+    assert_eq!(zoomed.focus_order, vec![PaneId(2)]);
+    assert_eq!(
+        hit_test(&zoomed, Point::new(10.0, 10.0)),
+        Some(HitKind::Pane { pane: PaneId(2) })
+    );
+}
+
+#[test]
+fn invalid_zoom_request_leaves_layout_unzoomed() {
+    let mut tree = TileTree::single_pane(PaneId(1));
+    tree.apply(TileOp::SplitPane {
+        pane: PaneId(1),
+        axis: Axis::Horizontal,
+        new_pane: PaneId(2),
+        placement: Placement::After,
+        share: 0.5,
+    })
+    .unwrap();
+
+    let frame = tree.layout(LayoutInput {
+        zoom: Some(PaneId(99)),
+        ..input()
+    });
+
+    assert!(frame.projection.is_none());
+    assert_eq!(frame.panes.len(), 2);
+    assert_eq!(frame.split_handles.len(), 1);
+}
+
+#[test]
+fn frame_diff_reports_zoom_and_restore_hints() {
+    let mut tree = TileTree::single_pane(PaneId(1));
+    tree.apply(TileOp::SplitPane {
+        pane: PaneId(1),
+        axis: Axis::Horizontal,
+        new_pane: PaneId(2),
+        placement: Placement::After,
+        share: 0.5,
+    })
+    .unwrap();
+
+    let normal = tree.layout(input());
+    let zoomed = tree.layout(LayoutInput {
+        zoom: Some(PaneId(2)),
+        ..input()
+    });
+    let source = zoomed
+        .projection
+        .as_ref()
+        .expect("projection metadata")
+        .source_rect;
+    let zoom_diff = diff_frames(&normal, &zoomed);
+
+    // The focus pane is a stable item; its own before rect carries the origin.
+    assert!(matches!(
+        diff_item(&zoom_diff, FrameItemId::Pane(PaneId(2))),
+        FrameItemDiff {
+            change: FrameChange::MovedAndResized,
+            before: Some(rect),
+            motion: FrameMotion::Stable,
+            cause: FrameCause::Projection {
+                kind: ProjectionKind::Zoom,
+                focus: PaneId(2),
+                event: ProjectionEvent::Project,
+            },
+            ..
+        } if *rect == source
+    ));
+    assert!(matches!(
+        diff_item(&zoom_diff, FrameItemId::Pane(PaneId(1))),
+        FrameItemDiff {
+            change: FrameChange::Removed,
+            motion: FrameMotion::Exit {
+                to: Some(rect),
+                anchor: Some(FrameItemId::Pane(PaneId(2))),
+            },
+            cause: FrameCause::Projection {
+                kind: ProjectionKind::Zoom,
+                focus: PaneId(2),
+                event: ProjectionEvent::Hide,
+            },
+            ..
+        } if *rect == source
+    ));
+
+    let restore_diff = diff_frames(&zoomed, &normal);
+    assert!(matches!(
+        diff_item(&restore_diff, FrameItemId::Pane(PaneId(2))),
+        FrameItemDiff {
+            change: FrameChange::MovedAndResized,
+            after: Some(rect),
+            motion: FrameMotion::Stable,
+            cause: FrameCause::Projection {
+                kind: ProjectionKind::Zoom,
+                focus: PaneId(2),
+                event: ProjectionEvent::Restore,
+            },
+            ..
+        } if *rect == source
+    ));
+    assert!(matches!(
+        diff_item(&restore_diff, FrameItemId::Pane(PaneId(1))),
+        FrameItemDiff {
+            change: FrameChange::Added,
+            motion: FrameMotion::Enter {
+                from: Some(rect),
+                anchor: Some(FrameItemId::Pane(PaneId(2))),
+            },
+            cause: FrameCause::Projection {
+                kind: ProjectionKind::Zoom,
+                focus: PaneId(2),
+                event: ProjectionEvent::Reveal,
+            },
+            ..
+        } if *rect == source
+    ));
+    assert!(restore_diff.items.iter().any(|item| matches!(
+        item,
+        FrameItemDiff {
+            item: FrameItemId::SplitHandle { handle: 0, .. },
+            change: FrameChange::Added,
+            motion: FrameMotion::Enter {
+                from: Some(rect),
+                anchor: Some(FrameItemId::Pane(PaneId(2))),
+            },
+            cause: FrameCause::Projection {
+                kind: ProjectionKind::Zoom,
+                focus: PaneId(2),
+                event: ProjectionEvent::Reveal,
+            },
+            ..
+        } if *rect == source
+    )));
+}
+
+#[test]
+fn restore_diff_does_not_mark_new_items_as_revealed_by_restore() {
+    let mut tree = TileTree::single_pane(PaneId(1));
+    tree.apply(TileOp::SplitPane {
+        pane: PaneId(1),
+        axis: Axis::Horizontal,
+        new_pane: PaneId(2),
+        placement: Placement::After,
+        share: 0.5,
+    })
+    .unwrap();
+    let zoomed = tree.layout(LayoutInput {
+        zoom: Some(PaneId(2)),
+        ..input()
+    });
+
+    tree.apply(TileOp::SplitPane {
+        pane: PaneId(1),
+        axis: Axis::Vertical,
+        new_pane: PaneId(3),
+        placement: Placement::After,
+        share: 0.5,
+    })
+    .unwrap();
+    let restored_with_new_pane = tree.layout(input());
+    let diff = diff_frames(&zoomed, &restored_with_new_pane);
+
+    assert!(matches!(
+        diff_item(&diff, FrameItemId::Pane(PaneId(3))),
+        FrameItemDiff {
+            change: FrameChange::Added,
+            motion: FrameMotion::Enter { .. },
+            cause: FrameCause::Relayout,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn zoom_diff_does_not_mark_unrelated_removals_as_hidden_by_zoom() {
+    let mut tree = TileTree::single_pane(PaneId(1));
+    tree.apply(TileOp::SplitPane {
+        pane: PaneId(1),
+        axis: Axis::Horizontal,
+        new_pane: PaneId(2),
+        placement: Placement::After,
+        share: 0.5,
+    })
+    .unwrap();
+    tree.apply(TileOp::SplitPane {
+        pane: PaneId(1),
+        axis: Axis::Vertical,
+        new_pane: PaneId(3),
+        placement: Placement::After,
+        share: 0.5,
+    })
+    .unwrap();
+    let normal = tree.layout(input());
+
+    tree.apply(TileOp::ClosePane { pane: PaneId(3) }).unwrap();
+    let zoomed_after_removal = tree.layout(LayoutInput {
+        zoom: Some(PaneId(2)),
+        ..input()
+    });
+    let diff = diff_frames(&normal, &zoomed_after_removal);
+
+    assert!(matches!(
+        diff_item(&diff, FrameItemId::Pane(PaneId(3))),
+        FrameItemDiff {
+            change: FrameChange::Removed,
+            motion: FrameMotion::Exit { .. },
+            cause: FrameCause::Relayout,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn zoom_switch_uses_each_pane_normal_rect() {
+    let mut tree = TileTree::single_pane(PaneId(1));
+    tree.apply(TileOp::SplitPane {
+        pane: PaneId(1),
+        axis: Axis::Horizontal,
+        new_pane: PaneId(2),
+        placement: Placement::After,
+        share: 0.5,
+    })
+    .unwrap();
+
+    let zoomed_one = tree.layout(LayoutInput {
+        zoom: Some(PaneId(1)),
+        ..input()
+    });
+    let zoomed_two = tree.layout(LayoutInput {
+        zoom: Some(PaneId(2)),
+        ..input()
+    });
+    let one_source = zoomed_one
+        .projection
+        .as_ref()
+        .expect("first projection metadata")
+        .source_rect;
+    let two_source = zoomed_two
+        .projection
+        .as_ref()
+        .expect("second projection metadata")
+        .source_rect;
+    let diff = diff_frames(&zoomed_one, &zoomed_two);
+
+    // The outgoing focus pane restores to its own normal rectangle, …
+    assert!(matches!(
+        diff_item(&diff, FrameItemId::Pane(PaneId(1))),
+        FrameItemDiff {
+            change: FrameChange::Removed,
+            motion: FrameMotion::Exit { to: Some(rect), anchor: None },
+            cause: FrameCause::Projection {
+                kind: ProjectionKind::Zoom,
+                focus: PaneId(1),
+                event: ProjectionEvent::Restore,
+            },
+            ..
+        } if *rect == one_source
+    ));
+    // … while the incoming focus pane projects from its own normal rectangle.
+    assert!(matches!(
+        diff_item(&diff, FrameItemId::Pane(PaneId(2))),
+        FrameItemDiff {
+            change: FrameChange::Added,
+            motion: FrameMotion::Enter { from: Some(rect), anchor: None },
+            cause: FrameCause::Projection {
+                kind: ProjectionKind::Zoom,
+                focus: PaneId(2),
+                event: ProjectionEvent::Project,
+            },
+            ..
+        } if *rect == two_source
+    ));
 }
 
 #[test]
@@ -567,9 +893,9 @@ fn drag_preview_can_diff_to_committed_frame() {
             .items
             .iter()
             .any(|item| matches!(
-                item.transition,
-                Some(FrameTransitionHint::EnteredFrom { .. })
-                    | Some(FrameTransitionHint::SharedOrigin(_))
+                (item.motion, item.cause),
+                (FrameMotion::Enter { .. }, FrameCause::Relayout)
+                    | (FrameMotion::Stable, FrameCause::Relayout)
             ))
     );
 }
@@ -1448,8 +1774,13 @@ fn serde_covers_public_data_types() {
     assert_serde::<FrameDiff>();
     assert_serde::<FrameItemDiff>();
     assert_serde::<FrameChange>();
-    assert_serde::<FrameTransitionHint>();
+    assert_serde::<FrameMotion>();
+    assert_serde::<FrameCause>();
+    assert_serde::<ProjectionEvent>();
+    assert_serde::<ProjectionKind>();
     assert_serde::<PaneFrame>();
+    assert_serde::<FrameProjection>();
+    assert_serde::<ProjectionHiddenItem>();
     assert_serde::<TabBarFrame>();
     assert_serde::<TabFrame>();
     assert_serde::<SplitChildFrame>();

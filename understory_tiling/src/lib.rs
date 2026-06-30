@@ -63,6 +63,7 @@
 //!     tab_bar_thickness: 28.0,
 //!     split_handle_thickness: 6.0,
 //!     min_pane_size: Size::new(80.0, 80.0),
+//!     zoom: None,
 //!     generate_drop_targets: false,
 //! });
 //!
@@ -95,6 +96,7 @@
 //!     tab_bar_thickness: 28.0,
 //!     split_handle_thickness: 6.0,
 //!     min_pane_size: Size::new(80.0, 80.0),
+//!     zoom: None,
 //!     generate_drop_targets: false,
 //! };
 //! let frame = tree.layout(layout_input);
@@ -141,8 +143,9 @@ mod tree;
 mod util;
 
 pub use frame::{
-    FrameChange, FrameDiff, FrameItemDiff, FrameItemId, FrameTransitionHint, HitKind, HitRegion,
-    LayoutFrame, PaneFrame, SplitChildFrame, SplitHandleFrame, TabBarFrame, TabFrame, diff_frames,
+    FrameCause, FrameChange, FrameDiff, FrameItemDiff, FrameItemId, FrameMotion, FrameProjection,
+    HitKind, HitRegion, LayoutFrame, PaneFrame, ProjectionEvent, ProjectionHiddenItem,
+    ProjectionKind, SplitChildFrame, SplitHandleFrame, TabBarFrame, TabFrame, diff_frames,
     hit_test,
 };
 pub use ids::{PaneId, Revision, SurfaceId, TileId};

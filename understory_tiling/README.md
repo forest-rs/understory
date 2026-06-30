@@ -78,6 +78,7 @@ let frame = tree.layout(LayoutInput {
     tab_bar_thickness: 28.0,
     split_handle_thickness: 6.0,
     min_pane_size: Size::new(80.0, 80.0),
+    zoom: None,
     generate_drop_targets: false,
 });
 
@@ -109,6 +110,7 @@ let layout_input = LayoutInput {
     tab_bar_thickness: 28.0,
     split_handle_thickness: 6.0,
     min_pane_size: Size::new(80.0, 80.0),
+    zoom: None,
     generate_drop_targets: false,
 };
 let frame = tree.layout(layout_input);

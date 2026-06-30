@@ -25,12 +25,71 @@ pub struct LayoutFrame {
     pub split_children: Vec<SplitChildFrame>,
     /// Split handle rectangles.
     pub split_handles: Vec<SplitHandleFrame>,
+    /// Presentation projection metadata, when this frame has been collapsed onto
+    /// one pane (for example by zoom).
+    pub projection: Option<FrameProjection>,
     /// Hit-test regions in frame coordinates.
     pub hit_regions: Vec<HitRegion>,
     /// Pane focus order in semantic traversal order.
     pub focus_order: Vec<PaneId>,
     /// Paint order hints for renderers.
     pub paint_order: Vec<FrameItemId>,
+}
+
+/// Kind of presentation projection that collapsed a frame onto one pane.
+///
+/// Stored on [`FrameProjection::kind`] and echoed on
+/// [`FrameCause::Projection`] so hosts can pick projection-specific animation
+/// styling. Zoom is the only kind today; future modes (floating, auto-hide,
+/// maximize) add a variant here without changing [`diff_frames`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
+pub enum ProjectionKind {
+    /// The focus pane was expanded to fill the frame, hiding the rest.
+    Zoom,
+}
+
+/// Presentation projection metadata for a solved frame.
+///
+/// Produced in [`LayoutFrame::projection`] when a projection (such as
+/// [`LayoutInput::zoom`](crate::LayoutInput::zoom)) names a visible pane. Hosts
+/// use `source_rect` as the focus pane's normal tiling rectangle and
+/// `projected_rect` as its collapsed rectangle for projection/restore animation
+/// planning.
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct FrameProjection {
+    /// Projection kind that produced this frame.
+    pub kind: ProjectionKind,
+    /// Focus pane the frame collapsed onto.
+    pub focus: PaneId,
+    /// Tile that produced the focus pane.
+    pub focus_tile: TileId,
+    /// Focus pane rectangle before projection.
+    pub source_rect: Rect,
+    /// Focus pane rectangle after projection.
+    pub projected_rect: Rect,
+    /// Normal-frame items hidden by the projection.
+    ///
+    /// Diffing uses these records to distinguish items hidden or revealed by
+    /// the projection from unrelated items added or removed while a frame is
+    /// projected.
+    pub hidden_items: Vec<ProjectionHiddenItem>,
+}
+
+/// Normal-frame item hidden by a projected [`LayoutFrame`].
+///
+/// Produced in [`FrameProjection::hidden_items`]. Hosts usually consume this
+/// indirectly through [`diff_frames`], which uses it to emit precise projection
+/// and restore transitions.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct ProjectionHiddenItem {
+    /// Stable frame item hidden by the projection.
+    pub item: FrameItemId,
+    /// Normal tiling rectangle for the hidden item.
+    pub rect: Rect,
 }
 
 /// Flattened pane geometry.
@@ -192,8 +251,10 @@ pub struct FrameItemDiff {
     pub after: Option<Rect>,
     /// Geometry change classification.
     pub change: FrameChange,
-    /// Optional transition hint for animation planning.
-    pub transition: Option<FrameTransitionHint>,
+    /// Where the item animates from or to (kinematics).
+    pub motion: FrameMotion,
+    /// Why the item changed (provenance).
+    pub cause: FrameCause,
 }
 
 /// Geometry change classification for one frame item.
@@ -215,31 +276,73 @@ pub enum FrameChange {
     MovedAndResized,
 }
 
-/// Transition hint for one frame item.
+/// Kinematics for one frame item: where it animates from or to.
 ///
-/// Returned in [`FrameItemDiff::transition`]. These hints are intentionally
-/// descriptive rather than prescriptive: they tell a host where an item appears
-/// to come from or go to. Use them as optional animation origins or exits after
-/// calling [`diff_frames`]; visual interpolation remains outside this crate.
+/// Returned in [`FrameItemDiff::motion`]. This is purely geometric and
+/// independent of *why* the item changed (see [`FrameCause`]); the same three
+/// shapes describe ordinary relayout and every presentation projection. Hints
+/// are descriptive rather than prescriptive: visual interpolation remains the
+/// host's responsibility.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum FrameTransitionHint {
-    /// Item entered from a previous rectangle.
-    EnteredFrom {
-        /// Related previous item, if one was identified.
-        item: Option<FrameItemId>,
-        /// Previous rectangle to animate from.
-        rect: Rect,
+pub enum FrameMotion {
+    /// Item is present before and after; animate from its own
+    /// [`before`](FrameItemDiff::before) rectangle.
+    Stable,
+    /// Item appears; animate from `from`, if an origin was identified.
+    Enter {
+        /// Rectangle to animate from, when one is known.
+        from: Option<Rect>,
+        /// Related item the origin came from, if any.
+        anchor: Option<FrameItemId>,
     },
-    /// Item exited toward a new rectangle.
-    ExitedTo {
-        /// Related new item, if one was identified.
-        item: Option<FrameItemId>,
-        /// New rectangle to animate toward.
-        rect: Rect,
+    /// Item disappears; animate toward `to`, if a target was identified.
+    Exit {
+        /// Rectangle to animate toward, when one is known.
+        to: Option<Rect>,
+        /// Related item the target came from, if any.
+        anchor: Option<FrameItemId>,
     },
-    /// Stable item should animate from its own previous rectangle.
-    SharedOrigin(FrameItemId),
+}
+
+/// Provenance for one frame item: why it changed.
+///
+/// Returned in [`FrameItemDiff::cause`], orthogonal to [`FrameMotion`]. Ordinary
+/// relayout is [`FrameCause::Relayout`]; a presentation projection (such as
+/// zoom) is [`FrameCause::Projection`], carrying the projection kind so hosts
+/// can pick animation styling without the diff growing a variant per kind.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum FrameCause {
+    /// Ordinary relayout (split resize, tab reorder, bounds change, …).
+    Relayout,
+    /// A presentation projection drove this item's change.
+    Projection {
+        /// Projection kind that drove the change.
+        kind: ProjectionKind,
+        /// Focus pane of the projection event.
+        focus: PaneId,
+        /// Role this item plays in the projection event.
+        event: ProjectionEvent,
+    },
+}
+
+/// Role a frame item plays in a [`FrameCause::Projection`] transition.
+///
+/// `Project`/`Restore` describe the focus pane growing into or shrinking back
+/// from its projected rectangle; `Hide`/`Reveal` describe bystanders collapsing
+/// toward or emerging from the focus pane.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum ProjectionEvent {
+    /// Focus pane is being projected (growing to fill the frame).
+    Project,
+    /// Focus pane is being restored (shrinking back to its normal rectangle).
+    Restore,
+    /// Bystander is hidden because the focus pane was projected.
+    Hide,
+    /// Bystander is revealed because a projection was restored.
+    Reveal,
 }
 
 /// Hit-test region.
@@ -329,33 +432,43 @@ pub fn diff_frames(before: &LayoutFrame, after: &LayoutFrame) -> FrameDiff {
         match find_item_rect(&before_items, *item) {
             Some(before_rect) => {
                 if let Some(change) = classify_rect_change(before_rect, *after_rect) {
+                    let cause = cause_for_changed(*item, before, after);
                     items.push(FrameItemDiff {
                         item: *item,
                         before: Some(before_rect),
                         after: Some(*after_rect),
                         change,
-                        transition: Some(FrameTransitionHint::SharedOrigin(*item)),
+                        motion: FrameMotion::Stable,
+                        cause,
                     });
                 }
             }
-            None => items.push(FrameItemDiff {
-                item: *item,
-                before: None,
-                after: Some(*after_rect),
-                change: FrameChange::Added,
-                transition: transition_for_added(&before_items, *after_rect),
-            }),
+            None => {
+                let (motion, cause) =
+                    transition_for_added(before, after, &before_items, *item, *after_rect);
+                items.push(FrameItemDiff {
+                    item: *item,
+                    before: None,
+                    after: Some(*after_rect),
+                    change: FrameChange::Added,
+                    motion,
+                    cause,
+                });
+            }
         }
     }
 
     for (item, before_rect) in &before_items {
         if find_item_rect(&after_items, *item).is_none() {
+            let (motion, cause) =
+                transition_for_removed(before, after, &after_items, *item, *before_rect);
             items.push(FrameItemDiff {
                 item: *item,
                 before: Some(*before_rect),
                 after: None,
                 change: FrameChange::Removed,
-                transition: transition_for_removed(&after_items, *before_rect),
+                motion,
+                cause,
             });
         }
     }
@@ -363,7 +476,7 @@ pub fn diff_frames(before: &LayoutFrame, after: &LayoutFrame) -> FrameDiff {
     FrameDiff { items }
 }
 
-fn frame_item_rects(frame: &LayoutFrame) -> Vec<(FrameItemId, Rect)> {
+pub(crate) fn frame_item_rects(frame: &LayoutFrame) -> Vec<(FrameItemId, Rect)> {
     let mut items = Vec::new();
     for pane in &frame.panes {
         items.push((FrameItemId::Pane(pane.pane), pane.rect));
@@ -422,24 +535,126 @@ fn classify_rect_change(before: Rect, after: Rect) -> Option<FrameChange> {
     }
 }
 
+/// Provenance for a stable (present-before-and-after) item.
+///
+/// A stable item always animates from its own previous rectangle
+/// ([`FrameMotion::Stable`]); only the cause varies, so this returns the cause
+/// alone. The focus pane growing into or shrinking back from its projected
+/// rectangle is a stable item whose rectangle change carries the kinematics.
+fn cause_for_changed(item: FrameItemId, before: &LayoutFrame, after: &LayoutFrame) -> FrameCause {
+    if let Some(projection) = &after.projection
+        && item == FrameItemId::Pane(projection.focus)
+        && before.projection.is_none()
+    {
+        return projection.cause(ProjectionEvent::Project);
+    }
+    if let Some(projection) = &before.projection
+        && item == FrameItemId::Pane(projection.focus)
+        && after.projection.is_none()
+    {
+        return projection.cause(ProjectionEvent::Restore);
+    }
+    FrameCause::Relayout
+}
+
 fn transition_for_added(
+    before: &LayoutFrame,
+    after: &LayoutFrame,
     before_items: &[(FrameItemId, Rect)],
+    item: FrameItemId,
     after_rect: Rect,
-) -> Option<FrameTransitionHint> {
-    related_rect(before_items, after_rect).map(|(item, rect)| FrameTransitionHint::EnteredFrom {
-        item: Some(item),
-        rect,
-    })
+) -> (FrameMotion, FrameCause) {
+    // Focus pane appearing as the projected pane (e.g. a direct zoom switch):
+    // animate from its own normal rectangle.
+    if let Some(projection) = &after.projection
+        && item == FrameItemId::Pane(projection.focus)
+    {
+        return (
+            FrameMotion::Enter {
+                from: Some(projection.source_rect),
+                anchor: None,
+            },
+            projection.cause(ProjectionEvent::Project),
+        );
+    }
+    // Bystander revealed because a projection was restored: emerge from where
+    // the focus pane sat.
+    if let Some(projection) = &before.projection
+        && after.projection.is_none()
+        && projection.hidden_rect(item).is_some()
+    {
+        return (
+            FrameMotion::Enter {
+                from: Some(projection.source_rect),
+                anchor: Some(FrameItemId::Pane(projection.focus)),
+            },
+            projection.cause(ProjectionEvent::Reveal),
+        );
+    }
+    let (from, anchor) = match related_rect(before_items, after_rect) {
+        Some((anchor, rect)) => (Some(rect), Some(anchor)),
+        None => (None, None),
+    };
+    (FrameMotion::Enter { from, anchor }, FrameCause::Relayout)
 }
 
 fn transition_for_removed(
+    before: &LayoutFrame,
+    after: &LayoutFrame,
     after_items: &[(FrameItemId, Rect)],
+    item: FrameItemId,
     before_rect: Rect,
-) -> Option<FrameTransitionHint> {
-    related_rect(after_items, before_rect).map(|(item, rect)| FrameTransitionHint::ExitedTo {
-        item: Some(item),
-        rect,
-    })
+) -> (FrameMotion, FrameCause) {
+    if let Some(projection) = &after.projection
+        && let Some(hidden_rect) = projection.hidden_rect(item)
+    {
+        // The previously-projected focus pane being replaced by a new one
+        // (direct switch): restore it toward its own normal rectangle.
+        if let Some(before_projection) = &before.projection
+            && item == FrameItemId::Pane(before_projection.focus)
+        {
+            return (
+                FrameMotion::Exit {
+                    to: Some(hidden_rect),
+                    anchor: None,
+                },
+                before_projection.cause(ProjectionEvent::Restore),
+            );
+        }
+        // Ordinary bystander hidden by the projection: collapse toward the
+        // focus pane.
+        return (
+            FrameMotion::Exit {
+                to: Some(projection.source_rect),
+                anchor: Some(FrameItemId::Pane(projection.focus)),
+            },
+            projection.cause(ProjectionEvent::Hide),
+        );
+    }
+    let (to, anchor) = match related_rect(after_items, before_rect) {
+        Some((anchor, rect)) => (Some(rect), Some(anchor)),
+        None => (None, None),
+    };
+    (FrameMotion::Exit { to, anchor }, FrameCause::Relayout)
+}
+
+impl FrameProjection {
+    /// Builds a [`FrameCause::Projection`] for this projection and `event`.
+    fn cause(&self, event: ProjectionEvent) -> FrameCause {
+        FrameCause::Projection {
+            kind: self.kind,
+            focus: self.focus,
+            event,
+        }
+    }
+
+    /// Returns the normal rectangle recorded for a hidden `item`, if any.
+    fn hidden_rect(&self, item: FrameItemId) -> Option<Rect> {
+        self.hidden_items
+            .iter()
+            .find(|hidden| hidden.item == item)
+            .map(|hidden| hidden.rect)
+    }
 }
 
 fn related_rect(items: &[(FrameItemId, Rect)], rect: Rect) -> Option<(FrameItemId, Rect)> {

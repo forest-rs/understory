@@ -194,7 +194,8 @@ pub struct TileSurface {
 /// Construct this at render time and pass it to
 /// [`TileTree::layout`](crate::TileTree::layout). It is not stored in the tree;
 /// changing it produces a new [`LayoutFrame`](crate::LayoutFrame) without
-/// mutating semantic layout.
+/// mutating semantic layout. `zoom` is presentation state: setting it projects
+/// the solved frame to one pane, but does not mutate the tree.
 #[derive(Clone, Copy, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LayoutInput {
@@ -215,6 +216,14 @@ pub struct LayoutInput {
     ///
     /// Expected to be finite and non-negative.
     pub min_pane_size: Size,
+    /// Pane to present as zoomed for this layout pass.
+    ///
+    /// When this names a visible pane, [`TileTree::layout`](crate::TileTree::layout)
+    /// returns a frame containing that pane expanded to `bounds` and records the
+    /// pane's normal rectangle in
+    /// [`LayoutFrame::projection`](crate::LayoutFrame::projection). Missing or
+    /// inactive panes leave the frame unprojected.
+    pub zoom: Option<PaneId>,
     /// Reserved switch for layout-time drop target generation.
     ///
     /// Current drag/drop target generation happens in

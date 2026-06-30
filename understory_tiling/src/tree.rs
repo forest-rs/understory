@@ -5,6 +5,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::RepairAction;
+use crate::frame::frame_item_rects;
 use crate::util::{
     is_valid_split_fraction, repaired_shares, solve_lengths_with_min, split_min_major,
     split_tab_bar, tab_rects,
@@ -15,6 +16,7 @@ use crate::{
     SplitNode, TabBarFrame, TabBarPlacement, TabFrame, TabNode, TileError, TileId, TileNode,
     TileOp,
 };
+use crate::{FrameProjection, ProjectionHiddenItem, ProjectionKind};
 
 /// Persistent semantic tree of splits, tab groups, and pane leaves.
 ///
@@ -200,6 +202,9 @@ impl TileTree {
             &mut frame,
             &mut visiting,
         );
+        if let Some(pane) = input.zoom {
+            project_zoom(&mut frame, pane, input.bounds.abs());
+        }
         frame
     }
 
@@ -911,4 +916,51 @@ impl TileTree {
             None => 0,
         }
     }
+}
+
+fn project_zoom(frame: &mut LayoutFrame, pane: PaneId, zoom_rect: Rect) {
+    let Some(source) = frame
+        .panes
+        .iter()
+        .find(|candidate| candidate.pane == pane)
+        .copied()
+    else {
+        return;
+    };
+    let hidden_items = frame_item_rects(frame)
+        .into_iter()
+        .filter(|(item, _)| *item != FrameItemId::Pane(pane))
+        .map(|(item, rect)| ProjectionHiddenItem { item, rect })
+        .collect();
+
+    frame.projection = Some(FrameProjection {
+        kind: ProjectionKind::Zoom,
+        focus: pane,
+        focus_tile: source.tile,
+        source_rect: source.rect,
+        projected_rect: zoom_rect,
+        hidden_items,
+    });
+    frame.panes.clear();
+    frame.panes.push(PaneFrame {
+        pane,
+        tile: source.tile,
+        rect: zoom_rect,
+        clip: zoom_rect,
+        active: source.active,
+    });
+    frame.tab_bars.clear();
+    frame.tabs.clear();
+    frame.split_children.clear();
+    frame.split_handles.clear();
+    frame.hit_regions.clear();
+    frame.hit_regions.push(HitRegion {
+        rect: zoom_rect,
+        z: 0,
+        kind: HitKind::Pane { pane },
+    });
+    frame.focus_order.clear();
+    frame.focus_order.push(pane);
+    frame.paint_order.clear();
+    frame.paint_order.push(FrameItemId::Pane(pane));
 }
