@@ -4,7 +4,9 @@
 use kurbo::{BezPath, Point, Rect, Size};
 
 use crate::util::{finite_non_negative, normalize_rect};
-use crate::{BoxArea, BoxContour, CornerRadii, CornerShape, CornerShapes, Edges, Side};
+use crate::{
+    BorderStyle, BoxArea, BoxContour, CornerRadii, CornerShape, CornerShapes, Edges, Side,
+};
 
 /// Fully resolved geometry for a single box decoration.
 ///
@@ -23,6 +25,12 @@ pub struct BoxDecorationGeometry {
     pub content_box: Rect,
     /// Non-negative border widths for each side.
     pub border_widths: Edges<f64>,
+    /// Border style for each side.
+    ///
+    /// The style is stored for renderer lowering. This geometry crate treats
+    /// [`BorderStyle::None`] and [`BorderStyle::Hidden`] as non-painting but
+    /// does not implement the paint algorithms for the visible styles.
+    pub border_styles: Edges<BorderStyle>,
     /// Non-negative padding widths for each side.
     pub padding_widths: Edges<f64>,
     /// Resolved contour for the border edge.
@@ -37,10 +45,15 @@ impl BoxDecorationGeometry {
     /// Resolve decoration geometry from a border box, edge widths, corner
     /// radii, and corner shapes.
     ///
-    /// This is the common entry point for UI presentation layers: layout
-    /// supplies a border box, style supplies physical border/padding widths
-    /// plus corner parameters, and this crate derives the contours a renderer
-    /// needs to paint fills, clips, shadows, and borders.
+    /// This convenience constructor records every border side as
+    /// [`BorderStyle::Solid`]. UI presentation layers with resolved
+    /// `border-style` values should use
+    /// [`BoxDecorationGeometry::from_styled_border_box`] instead.
+    ///
+    /// This is the common entry point for geometry-only callers: layout
+    /// supplies a border box, callers supply resolved physical border/padding
+    /// widths plus corner parameters, and this crate derives the contours a
+    /// renderer needs to paint fills, clips, shadows, and borders.
     pub fn from_border_box(
         border_box: Rect,
         border_widths: Edges<f64>,
@@ -48,8 +61,33 @@ impl BoxDecorationGeometry {
         requested_radii: CornerRadii,
         corner_shapes: CornerShapes,
     ) -> Self {
+        Self::from_styled_border_box(
+            border_box,
+            border_widths,
+            Edges::all(BorderStyle::Solid),
+            padding_widths,
+            requested_radii,
+            corner_shapes,
+        )
+    }
+
+    /// Resolve decoration geometry with per-side border styles.
+    ///
+    /// This is the entry point for callers that have resolved CSS
+    /// `border-style` values. The styles are stored with the geometry and
+    /// copied into [`BorderSideGeometry`]; renderer/backend code remains
+    /// responsible for lowering each style into drawing commands.
+    pub fn from_styled_border_box(
+        border_box: Rect,
+        border_widths: Edges<f64>,
+        border_styles: Edges<BorderStyle>,
+        padding_widths: Edges<f64>,
+        requested_radii: CornerRadii,
+        corner_shapes: CornerShapes,
+    ) -> Self {
         let border_box = normalize_rect(border_box);
-        let border_widths = border_widths.clamped_non_negative();
+        let border_widths =
+            visible_border_widths(border_widths.clamped_non_negative(), border_styles);
         let padding_widths = padding_widths.clamped_non_negative();
         let border_radii = requested_radii.scale_to_fit(border_box);
         let padding_box = inset_rect(border_box, border_widths);
@@ -68,6 +106,7 @@ impl BoxDecorationGeometry {
             padding_box,
             content_box,
             border_widths,
+            border_styles,
             padding_widths,
             border_edge,
             padding_edge,
@@ -83,9 +122,10 @@ impl BoxDecorationGeometry {
         padding_widths: Edges<f64>,
         requested_radii: CornerRadii,
     ) -> Self {
-        Self::from_border_box(
+        Self::from_styled_border_box(
             border_box,
             border_widths,
+            Edges::all(BorderStyle::Solid),
             padding_widths,
             requested_radii,
             CornerShapes::ROUND,
@@ -97,7 +137,16 @@ impl BoxDecorationGeometry {
         self.border_widths.any_positive()
     }
 
-    /// Returns the resolved contour for a CSS-style box area.
+    /// Return true when the border has any positive-width side with a painting
+    /// style.
+    pub const fn has_visible_border(self) -> bool {
+        (self.border_styles.top.paints_border() && self.border_widths.top > 0.0)
+            || (self.border_styles.right.paints_border() && self.border_widths.right > 0.0)
+            || (self.border_styles.bottom.paints_border() && self.border_widths.bottom > 0.0)
+            || (self.border_styles.left.paints_border() && self.border_widths.left > 0.0)
+    }
+
+    /// Returns the resolved contour for a CSS box area.
     #[must_use]
     pub const fn contour(self, area: BoxArea) -> BoxContour {
         match area {
@@ -117,6 +166,10 @@ impl BoxDecorationGeometry {
     ///
     /// The method appends to `out` so hot paths can reuse path storage instead
     /// of allocating a new path for every box.
+    ///
+    /// This method does not apply [`BorderStyle`]. Use
+    /// [`BoxDecorationGeometry::border_side_region`] when a lowerer needs
+    /// side-specific style data.
     pub fn write_border_ring_path(self, out: &mut BezPath) {
         self.border_edge.write_path(out);
         self.padding_edge.write_path(out);
@@ -143,8 +196,7 @@ impl BoxDecorationGeometry {
     ///
     /// The returned region spans between the matching straight side spans of
     /// the border and padding contours. It intentionally does not include
-    /// corner transition regions, because CSS leaves rounded-corner
-    /// color/style transitions implementation-defined.
+    /// corner transition regions or border-style paint lowering.
     #[must_use]
     pub fn border_side_region(self, side: Side) -> BorderSideGeometry {
         let outer = self.border_edge.side_span(side);
@@ -155,9 +207,16 @@ impl BoxDecorationGeometry {
             Side::Bottom => self.border_widths.bottom,
             Side::Left => self.border_widths.left,
         };
+        let style = match side {
+            Side::Top => self.border_styles.top,
+            Side::Right => self.border_styles.right,
+            Side::Bottom => self.border_styles.bottom,
+            Side::Left => self.border_styles.left,
+        };
 
         BorderSideGeometry {
             side,
+            style,
             width,
             outer_start: outer.start,
             outer_end: outer.end,
@@ -177,6 +236,8 @@ impl BoxDecorationGeometry {
 pub struct BorderSideGeometry {
     /// Physical side represented by this region.
     pub side: Side,
+    /// Resolved style for this border side.
+    pub style: BorderStyle,
     /// Visible border width for this side.
     pub width: f64,
     /// First point on the outer contour side span.
@@ -195,7 +256,7 @@ impl BorderSideGeometry {
     /// Returns true when this side has no positive border width.
     #[must_use]
     pub fn is_empty(self) -> bool {
-        !self.width.is_finite() || self.width <= 0.0
+        !self.style.paints_border() || !self.width.is_finite() || self.width <= 0.0
     }
 
     /// Appends this side region as a closed quadrilateral.
@@ -286,6 +347,19 @@ fn is_concave_corner(shape: CornerShape) -> bool {
         CornerShape::Superellipse(superellipse) => superellipse.parameter() < 0.0,
         CornerShape::Round | CornerShape::Square | CornerShape::Bevel => false,
     }
+}
+
+const fn visible_border_widths(widths: Edges<f64>, styles: Edges<BorderStyle>) -> Edges<f64> {
+    Edges::new(
+        visible_border_width(widths.top, styles.top),
+        visible_border_width(widths.right, styles.right),
+        visible_border_width(widths.bottom, styles.bottom),
+        visible_border_width(widths.left, styles.left),
+    )
+}
+
+const fn visible_border_width(width: f64, style: BorderStyle) -> f64 {
+    if style.paints_border() { width } else { 0.0 }
 }
 
 #[cfg(test)]
@@ -485,6 +559,7 @@ mod tests {
         let top = geometry.border_side_region(Side::Top);
 
         assert_eq!(top.width, 4.0);
+        assert_eq!(top.style, BorderStyle::Solid);
         assert!(!top.is_empty());
         assert_eq!(top.outer_start, Point::new(12.0, 0.0));
         assert_eq!(top.outer_end, Point::new(88.0, 0.0));
@@ -529,6 +604,7 @@ mod tests {
     fn side_regions_with_non_finite_widths_are_empty() {
         let side = BorderSideGeometry {
             side: Side::Top,
+            style: BorderStyle::Solid,
             width: f64::NAN,
             outer_start: Point::ZERO,
             outer_end: Point::ZERO,
@@ -538,6 +614,34 @@ mod tests {
         };
 
         assert!(side.is_empty());
+    }
+
+    #[test]
+    fn styled_geometry_preserves_per_side_styles() {
+        let geometry = BoxDecorationGeometry::from_styled_border_box(
+            Rect::new(0.0, 0.0, 100.0, 50.0),
+            Edges::all(4.0),
+            Edges::new(
+                BorderStyle::Solid,
+                BorderStyle::Dashed,
+                BorderStyle::None,
+                BorderStyle::Hidden,
+            ),
+            Edges::ZERO,
+            CornerRadii::ZERO,
+            CornerShapes::ROUND,
+        );
+
+        assert!(geometry.has_border_width());
+        assert!(geometry.has_visible_border());
+        assert_eq!(geometry.border_widths, Edges::new(4.0, 4.0, 0.0, 0.0));
+        assert_eq!(geometry.border_styles.right, BorderStyle::Dashed);
+        assert_eq!(
+            geometry.border_side_region(Side::Right).style,
+            BorderStyle::Dashed
+        );
+        assert!(geometry.border_side_region(Side::Bottom).is_empty());
+        assert!(geometry.border_side_region(Side::Left).is_empty());
     }
 
     fn path_is_finite(path: &BezPath) -> bool {

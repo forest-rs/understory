@@ -4,8 +4,8 @@
 use invalidation::ChannelSet;
 use kurbo::Size;
 use understory_presentation::{
-    BackgroundLayer, Border, BorderSide, Brush, CornerRadii, CornerShape, CornerShapes, Corners,
-    Edges, SurfacePrimitive,
+    BackgroundLayer, Border, BorderSide, BorderStyle, Brush, CornerRadii, CornerShape,
+    CornerShapes, Corners, Edges, SurfacePrimitive,
 };
 use understory_property::{DependencyObject, Property, PropertyMetadataBuilder, PropertyRegistry};
 use understory_style::{MatchState, ResolveCx, ResolveParentLookup, StyleCascade};
@@ -59,10 +59,10 @@ impl<'a> From<(&'a StyleCascade, MatchState)> for StyleMatch<'a> {
 
 /// Invalidation channels used by the canonical surface properties.
 ///
-/// Brush-only properties affect paint. Shape properties such as border widths,
-/// padding widths, corner radii, and corner shapes affect both `geometry` and
-/// `paint`, because they can change clipping, hit regions, border paths, and
-/// the pixels that are drawn.
+/// Brush-only properties affect paint. Shape properties such as border styles,
+/// border widths, padding widths, corner radii, and corner shapes affect both
+/// `geometry` and `paint`, because they can change clipping, hit regions,
+/// border paths, and the pixels that are drawn.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct SurfacePropertyChannels {
     /// Channels affected when the surface shape or decoration geometry changes.
@@ -167,6 +167,8 @@ pub struct SurfaceProperties {
     pub background: Property<Option<Brush>>,
     /// Per-side border brush properties.
     pub border_brushes: Edges<Property<Option<Brush>>>,
+    /// Per-side border style properties.
+    pub border_styles: Edges<Property<BorderStyle>>,
     /// Per-side border width properties.
     pub border_widths: Edges<Property<f64>>,
     /// Physical padding width properties.
@@ -201,6 +203,12 @@ impl SurfaceProperties {
                 register_optional_brush(registry, "Surface.BorderRightBrush", paint),
                 register_optional_brush(registry, "Surface.BorderBottomBrush", paint),
                 register_optional_brush(registry, "Surface.BorderLeftBrush", paint),
+            ),
+            border_styles: Edges::new(
+                register_border_style(registry, "Surface.BorderTopStyle", geometry_and_paint),
+                register_border_style(registry, "Surface.BorderRightStyle", geometry_and_paint),
+                register_border_style(registry, "Surface.BorderBottomStyle", geometry_and_paint),
+                register_border_style(registry, "Surface.BorderLeftStyle", geometry_and_paint),
             ),
             border_widths: Edges::new(
                 register_length(registry, "Surface.BorderTopWidth", geometry_and_paint),
@@ -275,6 +283,12 @@ impl SurfaceProperties {
                 bottom: cx.get_value(object, self.border_brushes.bottom, style),
                 left: cx.get_value(object, self.border_brushes.left, style),
             },
+            border_styles: Edges::new(
+                cx.get_value(object, self.border_styles.top, style),
+                cx.get_value(object, self.border_styles.right, style),
+                cx.get_value(object, self.border_styles.bottom, style),
+                cx.get_value(object, self.border_styles.left, style),
+            ),
             border_widths: Edges::new(
                 finite_non_negative(cx.get_value(object, self.border_widths.top, style)),
                 finite_non_negative(cx.get_value(object, self.border_widths.right, style)),
@@ -336,6 +350,8 @@ pub struct SurfacePropertyValues {
     pub background: Option<Brush>,
     /// Resolved per-side border brushes.
     pub border_brushes: Edges<Option<Brush>>,
+    /// Resolved per-side border styles.
+    pub border_styles: Edges<BorderStyle>,
     /// Resolved per-side border widths in logical pixels.
     pub border_widths: Edges<f64>,
     /// Resolved physical padding widths in logical pixels.
@@ -356,21 +372,25 @@ impl SurfacePropertyValues {
                     brush: self.border_brushes.top,
                     brush_transform: None,
                     width: self.border_widths.top,
+                    style: self.border_styles.top,
                 },
                 right: BorderSide {
                     brush: self.border_brushes.right,
                     brush_transform: None,
                     width: self.border_widths.right,
+                    style: self.border_styles.right,
                 },
                 bottom: BorderSide {
                     brush: self.border_brushes.bottom,
                     brush_transform: None,
                     width: self.border_widths.bottom,
+                    style: self.border_styles.bottom,
                 },
                 left: BorderSide {
                     brush: self.border_brushes.left,
                     brush_transform: None,
                     width: self.border_widths.left,
+                    style: self.border_styles.left,
                 },
             },
             padding_widths: self.padding_widths,
@@ -410,6 +430,19 @@ fn register_length(
         PropertyMetadataBuilder::new(0.0_f64)
             .affects_channels(channels)
             .coerce(finite_non_negative)
+            .build(),
+    )
+}
+
+fn register_border_style(
+    registry: &mut PropertyRegistry,
+    name: &'static str,
+    channels: ChannelSet,
+) -> Property<BorderStyle> {
+    registry.register(
+        name,
+        PropertyMetadataBuilder::new(BorderStyle::None)
+            .affects_channels(channels)
             .build(),
     )
 }
@@ -519,6 +552,10 @@ mod tests {
         assert!(!brush_channels.contains(GEOMETRY));
         assert!(brush_channels.contains(PAINT));
 
+        let style_channels = registry.affects_channels(surface.border_styles.top.id());
+        assert!(style_channels.contains(GEOMETRY));
+        assert!(style_channels.contains(PAINT));
+
         let width_channels = registry.affects_channels(surface.border_widths.top.id());
         assert!(width_channels.contains(GEOMETRY));
         assert!(width_channels.contains(PAINT));
@@ -547,6 +584,7 @@ mod tests {
         let primitive = surface.resolve_surface(&cx, &element, None);
 
         assert!(primitive.is_empty());
+        assert_eq!(primitive.border.styles(), Edges::all(BorderStyle::None));
         assert_eq!(primitive.border.visible_widths(), Edges::ZERO);
         assert_eq!(primitive.padding_widths, Edges::ZERO);
         assert_eq!(primitive.corner_radii, CornerRadii::ZERO);
@@ -567,6 +605,8 @@ mod tests {
             .set(surface.border_widths.right, 4.0)
             .set(surface.border_widths.bottom, -8.0)
             .set(surface.border_widths.left, f64::NAN)
+            .set(surface.border_styles.top, BorderStyle::Solid)
+            .set(surface.border_styles.right, BorderStyle::Dashed)
             .set(surface.border_brushes.top, Some(Brush::from(Color::BLACK)))
             .set(
                 surface.border_brushes.right,
@@ -596,6 +636,15 @@ mod tests {
 
         assert_eq!(primitive.backgrounds.len(), 1);
         assert_eq!(primitive.backgrounds[0].brush, Brush::from(Color::WHITE));
+        assert_eq!(
+            primitive.border.styles(),
+            Edges::new(
+                BorderStyle::Solid,
+                BorderStyle::Dashed,
+                BorderStyle::None,
+                BorderStyle::None,
+            )
+        );
         assert_eq!(
             primitive.border.visible_widths(),
             Edges::new(2.0, 4.0, 0.0, 0.0)
