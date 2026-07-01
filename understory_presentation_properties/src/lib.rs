@@ -23,7 +23,8 @@
 //! - property systems need typed longhands with defaults and invalidation
 //!   metadata;
 //! - style systems need independently-overridable values such as one border
-//!   edge, one padding side, one corner radius, or one corner shape;
+//!   side's brush/style/width, one padding side, one corner radius, or one
+//!   corner shape;
 //! - presentation needs a resolved [`understory_presentation::SurfacePrimitive`]
 //!   that can be cached in a paint tree;
 //! - renderers need geometry helpers such as
@@ -61,7 +62,7 @@
 //!
 //! ```rust
 //! use invalidation::Channel;
-//! use understory_presentation::{Brush, Color, CornerShape, Edges};
+//! use understory_presentation::{BorderStyle, Brush, Color, CornerShape, Edges};
 //! use understory_presentation_properties::{
 //!     CornerRadius, StyleMatch, SurfacePropertyChannels, SurfaceProperties,
 //! };
@@ -94,6 +95,7 @@
 //! let element = Element { store: PropertyStore::new(1) };
 //! let style = StyleBuilder::new()
 //!     .set(surface.background, Some(Brush::from(Color::WHITE)))
+//!     .set(surface.border_styles.top, BorderStyle::Solid)
 //!     .set(surface.border_widths.top, 2.0)
 //!     .set(surface.border_brushes.top, Some(Brush::from(Color::BLACK)))
 //!     .set(surface.padding_widths.top, 6.0)
@@ -113,6 +115,7 @@
 //! );
 //!
 //! assert_eq!(primitive.backgrounds.len(), 1);
+//! assert_eq!(primitive.border.styles().top, BorderStyle::Solid);
 //! assert_eq!(primitive.border.visible_widths(), Edges::new(2.0, 0.0, 0.0, 0.0));
 //! assert_eq!(primitive.padding_widths.top, 6.0);
 //! assert_eq!(primitive.corner_radii.top_left.width, 6.0);
@@ -121,9 +124,9 @@
 //!
 //! ## Roadmap
 //!
-//! The first slice covers resolved surface background, per-side border brushes
-//! and widths, physical padding widths, per-corner elliptical radii, and
-//! per-corner shapes. Future work should add length-percentage values,
+//! The first slice covers resolved surface background, per-side border brushes,
+//! styles, and widths, physical padding widths, per-corner elliptical radii,
+//! and per-corner shapes. Future work should add length-percentage values,
 //! `border-shape`, richer background layers, shadow properties, and
 //! shape-related properties once a dedicated shape value crate exists. Those
 //! additions should keep the same pattern: properties are longhand, resolution

@@ -8,7 +8,7 @@ use crate::util::finite_non_negative;
 /// The field names follow CSS and Kurbo's usual y-down coordinate naming:
 /// `top` is the smaller y edge and `bottom` is the larger y edge. `Edges<f64>`
 /// is used for border widths, but the type is generic so callers can use the
-/// same shape for edge-associated metadata.
+/// same shape for edge-associated metadata such as per-side border styles.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Edges<T> {
     /// Value associated with the top edge.

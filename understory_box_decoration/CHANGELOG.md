@@ -17,9 +17,10 @@ Understory Box Decoration has not had a published release yet.
 - Added the initial `understory_box_decoration` crate with `no_std` resolved
   geometry primitives for CSS-style box decorations.
 - Added `Edges`, `Corners`, `CornerRadii`, `CornerShape`, `Superellipse`,
-  `BoxContour`, and `BoxDecorationGeometry` for resolved physical edge widths,
-  fitted elliptical corner radii, shaped corner contours, derived
-  border/padding/content geometry, and on-demand Kurbo path writing.
+  `BorderStyle`, `BoxContour`, and `BoxDecorationGeometry` for resolved
+  physical edge widths, fitted elliptical corner radii, shaped corner contours,
+  per-side border styles, derived border/padding/content geometry, and
+  on-demand Kurbo path writing.
 - Added `Side`, `BoxArea`, and `BorderSideGeometry` for physical box-area
   selection and central border-side regions.
 - Added CSS specification baseline documentation for CSS Backgrounds and

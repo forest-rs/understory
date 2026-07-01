@@ -148,6 +148,6 @@ pub use primitive::{
 };
 pub use store::{PresentationNode, PresentationStore};
 pub use understory_box_decoration::{
-    BorderSideGeometry, BoxArea, BoxContour, BoxDecorationGeometry, ContourSideSpan, CornerRadii,
-    CornerShape, CornerShapes, Corners, Edges, ResolvedCorner, Side, Superellipse,
+    BorderSideGeometry, BorderStyle, BoxArea, BoxContour, BoxDecorationGeometry, ContourSideSpan,
+    CornerRadii, CornerShape, CornerShapes, Corners, Edges, ResolvedCorner, Side, Superellipse,
 };

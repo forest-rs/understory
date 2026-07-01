@@ -9,19 +9,20 @@
 //! `understory_box_decoration` owns resolved geometry for painted boxes:
 //! physical edge widths, box-area contours, corner shapes, side regions, and
 //! on-demand path emission. It deliberately leaves style cascade, CSS parsing,
-//! layout, brushes, images, hit policy, and renderer command emission to
-//! higher-level crates.
+//! layout, brushes, images, border-style paint lowering, hit policy, and
+//! renderer command emission to higher-level crates.
 //!
 //! If those values come from dependency properties, use
 //! `understory_presentation_properties` to register canonical surface
 //! properties and resolve them into `understory_presentation` primitives before
 //! asking this crate for final geometry.
 //!
-//! The first implemented contour family covers CSS-style box contours with
-//! elliptical radii and shaped corners. It supports round, square, bevel, and
-//! superellipse-based corner shapes, scales adjacent radii with the CSS
-//! smallest factor rule when they would overlap a side, and derives padding
-//! and content contours from concrete border and padding widths.
+//! The first implemented contour family covers CSS box contours with
+//! elliptical radii, shaped corners, and per-side border styles. It supports
+//! round, square, bevel, and superellipse-based corner shapes, scales adjacent
+//! radii with the CSS smallest factor rule when they would overlap a side, and
+//! derives padding and content contours from concrete border and padding
+//! widths.
 //!
 //! ## Specification baseline
 //!
@@ -75,6 +76,8 @@
 //!
 //! - rectangles are normalized to non-negative width and height;
 //! - negative or non-finite border widths become zero;
+//! - border widths with [`BorderStyle::None`] or [`BorderStyle::Hidden`]
+//!   become zero;
 //! - negative or non-finite padding widths become zero;
 //! - negative or non-finite radii become zero;
 //! - border-edge radii are scaled so top, right, bottom, and left side pairs
@@ -109,6 +112,7 @@ mod path;
 mod radii;
 mod shape;
 mod side;
+mod style;
 mod util;
 
 pub use contour::{BoxContour, ContourSideSpan, ResolvedCorner};
@@ -117,3 +121,4 @@ pub use geometry::{BorderSideGeometry, BoxDecorationGeometry, inset_rect};
 pub use radii::{CornerRadii, Corners};
 pub use shape::{CornerShape, CornerShapes, Superellipse};
 pub use side::{BoxArea, Side};
+pub use style::BorderStyle;

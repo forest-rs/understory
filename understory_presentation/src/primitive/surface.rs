@@ -3,7 +3,7 @@
 
 use smallvec::SmallVec;
 
-use crate::{BoxDecorationGeometry, Brush, Color, CornerRadii, CornerShapes, Edges};
+use crate::{BorderStyle, BoxDecorationGeometry, Brush, Color, CornerRadii, CornerShapes, Edges};
 use peniko::kurbo::{Affine, Rect};
 
 /// Resolved box-decoration drawing intent.
@@ -64,9 +64,10 @@ impl SurfacePrimitive {
     /// values in sync with any layout padding used for the same box.
     #[must_use]
     pub fn decoration_geometry(&self, border_box: Rect) -> BoxDecorationGeometry {
-        BoxDecorationGeometry::from_border_box(
+        BoxDecorationGeometry::from_styled_border_box(
             border_box,
             self.border.visible_widths(),
+            self.border.styles(),
             self.padding_widths,
             self.corner_radii,
             self.corner_shapes,
@@ -145,9 +146,9 @@ impl Border {
 
     /// Return the widths of visible border sides.
     ///
-    /// A side with no brush is treated as width zero, matching
-    /// [`BorderSide::is_empty`]. The result is suitable for
-    /// [`BoxDecorationGeometry::from_border_box`].
+    /// A side with no brush, no painting style, or no positive width is treated
+    /// as width zero, matching [`BorderSide::is_empty`]. The result is suitable
+    /// for [`BoxDecorationGeometry::from_styled_border_box`].
     #[must_use]
     pub fn visible_widths(&self) -> Edges<f64> {
         Edges::new(
@@ -155,6 +156,17 @@ impl Border {
             self.right.visible_width(),
             self.bottom.visible_width(),
             self.left.visible_width(),
+        )
+    }
+
+    /// Return the style of each border side.
+    #[must_use]
+    pub const fn styles(&self) -> Edges<BorderStyle> {
+        Edges::new(
+            self.top.style,
+            self.right.style,
+            self.bottom.style,
+            self.left.style,
         )
     }
 
@@ -190,6 +202,9 @@ pub struct BorderSide {
 
     /// Border width in logical pixels.
     pub width: f64,
+
+    /// CSS border style for this side.
+    pub style: BorderStyle,
 }
 
 impl BorderSide {
@@ -200,6 +215,7 @@ impl BorderSide {
             brush: Some(brush.into()),
             brush_transform: None,
             width,
+            style: BorderStyle::Solid,
         }
     }
 
@@ -210,12 +226,23 @@ impl BorderSide {
         self
     }
 
+    /// Sets the border style for this side.
+    #[must_use]
+    pub const fn with_style(mut self, style: BorderStyle) -> Self {
+        self.style = style;
+        self
+    }
+
     /// Returns true when the side should not draw.
     ///
-    /// A side is visible only when it has a brush and a positive finite width.
+    /// A side is visible only when it has a painting style, a brush, and a
+    /// positive finite width.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.brush.is_none() || !self.width.is_finite() || self.width <= 0.0
+        !self.style.paints_border()
+            || self.brush.is_none()
+            || !self.width.is_finite()
+            || self.width <= 0.0
     }
 
     /// Return the side width when the side has a brush and positive finite
@@ -335,6 +362,7 @@ mod tests {
                     brush: None,
                     brush_transform: None,
                     width: 6.0,
+                    style: BorderStyle::Solid,
                 },
                 bottom: BorderSide::new(Color::BLACK, -4.0),
                 left: BorderSide::new(Color::BLACK, 4.0),
@@ -348,6 +376,7 @@ mod tests {
         let geometry = surface.decoration_geometry(Rect::new(0.0, 0.0, 100.0, 50.0));
 
         assert_eq!(geometry.border_widths, Edges::new(2.0, 0.0, 0.0, 4.0));
+        assert_eq!(geometry.border_styles, Edges::all(BorderStyle::Solid));
         assert_eq!(geometry.padding_widths, Edges::new(1.0, 2.0, 3.0, 4.0));
         assert_eq!(geometry.padding_box, Rect::new(4.0, 2.0, 100.0, 50.0));
         assert_eq!(geometry.content_box, Rect::new(8.0, 3.0, 98.0, 47.0));
@@ -381,5 +410,20 @@ mod tests {
         let side = BorderSide::new(Color::BLACK, 2.0).with_brush_transform(transform);
 
         assert_eq!(side.brush_transform, Some(transform));
+    }
+
+    #[test]
+    fn border_style_controls_side_visibility() {
+        let solid = BorderSide::new(Color::BLACK, 2.0);
+        let none = BorderSide::new(Color::BLACK, 2.0).with_style(BorderStyle::None);
+        let hidden = BorderSide::new(Color::BLACK, 2.0).with_style(BorderStyle::Hidden);
+        let dashed = BorderSide::new(Color::BLACK, 2.0).with_style(BorderStyle::Dashed);
+
+        assert!(!solid.is_empty());
+        assert!(none.is_empty());
+        assert!(hidden.is_empty());
+        assert!(!dashed.is_empty());
+        assert_eq!(none.visible_width(), 0.0);
+        assert_eq!(dashed.visible_width(), 2.0);
     }
 }

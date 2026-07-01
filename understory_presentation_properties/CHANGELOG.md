@@ -17,8 +17,8 @@ Understory Presentation Properties has not had a published release yet.
 - Added the initial `understory_presentation_properties` crate with `no_std`
   dependency-property integration for resolved presentation surfaces.
 - Added `SurfaceProperties` for registering canonical surface background,
-  border brush, border width, padding width, corner radius, and corner shape
-  properties.
+  border brush, border style, border width, padding width, corner radius, and
+  corner shape properties.
 - Added `SurfacePropertyValues` and `SurfaceProperties::resolve_surface` for
   resolving property/style/theme values into `understory_presentation`
   `SurfacePrimitive` values.

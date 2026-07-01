@@ -125,9 +125,8 @@ impl BoxContour {
     /// Returns the straight span on one side between adjacent corner areas.
     ///
     /// This is useful for side-oriented border lowering. It deliberately names
-    /// only the central side span; corner transition regions are separate
-    /// future geometry, because CSS leaves color/style transitions in rounded
-    /// corners implementation-defined.
+    /// only the central side span; corner transition regions and border-style
+    /// paint lowering are separate future geometry.
     #[must_use]
     pub fn side_span(self, side: Side) -> ContourSideSpan {
         let rect = self.rect;

@@ -23,7 +23,7 @@ impl Side {
     pub const ALL: [Self; 4] = [Self::Top, Self::Right, Self::Bottom, Self::Left];
 }
 
-/// A CSS-style box area that can be clipped or painted.
+/// A CSS box area that can be clipped or painted.
 ///
 /// The geometry kernel resolves these areas only after it has concrete border
 /// and padding widths. Margin geometry is intentionally absent because margin
