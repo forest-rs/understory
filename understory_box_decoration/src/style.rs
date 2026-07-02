@@ -4,10 +4,10 @@
 /// Resolved CSS `border-style` value for one physical border side.
 ///
 /// Stored in [`BoxDecorationGeometry`](crate::BoxDecorationGeometry) and
-/// [`BorderSideGeometry`](crate::BorderSideGeometry) so renderers can choose
-/// side-specific border lowering. This crate records the value and exposes the
-/// associated geometry; it does not implement dashed, dotted, double, groove,
-/// ridge, inset, or outset painting.
+/// exposed through [`BorderSidePaintGeometry`](crate::BorderSidePaintGeometry)
+/// so renderers can choose side-specific border lowering. This crate records
+/// the value and exposes the associated geometry; it does not implement
+/// dashed, dotted, double, groove, ridge, inset, or outset painting.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub enum BorderStyle {
     /// No border is drawn for this side.

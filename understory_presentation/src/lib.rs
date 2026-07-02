@@ -148,6 +148,10 @@ pub use primitive::{
 };
 pub use store::{PresentationNode, PresentationStore};
 pub use understory_box_decoration::{
-    BorderSideGeometry, BorderStyle, BoxArea, BoxContour, BoxDecorationGeometry, ContourSideSpan,
-    CornerRadii, CornerShape, CornerShapes, Corners, Edges, ResolvedCorner, Side, Superellipse,
+    BorderBand, BorderClip, BorderClipStack, BorderDashPattern, BorderFillFragment, BorderFillRule,
+    BorderPaintCommand, BorderPaintFill, BorderPaintGeometry, BorderPaintMode, BorderPaintPlan,
+    BorderPaintRole, BorderPaintSource, BorderPaintStroke, BorderReliefShade,
+    BorderSidePaintGeometry, BorderStrokeCap, BorderStrokeFragment, BorderStrokeSpec, BorderStyle,
+    BoxArea, BoxContour, BoxDecorationGeometry, ContourSideSpan, CornerRadii, CornerShape,
+    CornerShapes, Corners, Edges, ResolvedCorner, Side, Superellipse,
 };
