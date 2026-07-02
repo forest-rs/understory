@@ -7,10 +7,11 @@
 //! Renderer-neutral box decoration geometry primitives.
 //!
 //! `understory_box_decoration` owns resolved geometry for painted boxes:
-//! physical edge widths, box-area contours, corner shapes, side regions, and
-//! on-demand path emission. It deliberately leaves style cascade, CSS parsing,
-//! layout, brushes, images, border-style paint lowering, hit policy, and
-//! renderer command emission to higher-level crates.
+//! physical edge widths, box-area contours, corner shapes, renderer-neutral
+//! border paint fragments, and on-demand path emission. It deliberately
+//! leaves style cascade, CSS parsing, layout, brushes, images, concrete
+//! border-style stroke parameters, hit policy, and renderer command emission
+//! to higher-level crates.
 //!
 //! If those values come from dependency properties, use
 //! `understory_presentation_properties` to register canonical surface
@@ -67,6 +68,10 @@
 //! geometry.write_border_ring_path(&mut border_path);
 //! assert!(!clip_path.is_empty());
 //! assert!(!border_path.is_empty());
+//!
+//! let side = geometry.border_paint().side(understory_box_decoration::Side::Top);
+//! let stroke = side.stroke_contour(0.5);
+//! assert!(!stroke.path.is_empty());
 //! ```
 //!
 //! ## Boundary and invariants
@@ -94,10 +99,10 @@
 //!
 //! Near-term work should add resolved length-percentage radii so CSS parsing
 //! layers can defer percentage resolution until the border box is known. After
-//! that, the natural coverage expansion is corner transition regions,
-//! `box-shadow` spread geometry, and richer background painting areas. Level 4
-//! `border-shape` should probably consume a separate CSS-shapes value crate
-//! rather than making this crate own every shape syntax.
+//! that, the natural coverage expansion is `box-shadow` spread geometry,
+//! richer background painting areas, and path-based `border-shape` reference
+//! geometry. Level 4 `border-shape` should probably consume a separate
+//! CSS-shapes value crate rather than making this crate own every shape syntax.
 //!
 //! [CSS Backgrounds and Borders Module Level 3]: https://www.w3.org/TR/css-backgrounds-3/#border-radius
 //! [CSS Borders and Box Decorations Module Level 4]: https://drafts.csswg.org/css-borders-4/
@@ -108,6 +113,7 @@ mod contour;
 mod edges;
 mod geometry;
 mod math;
+mod paint;
 mod path;
 mod radii;
 mod shape;
@@ -117,7 +123,11 @@ mod util;
 
 pub use contour::{BoxContour, ContourSideSpan, ResolvedCorner};
 pub use edges::Edges;
-pub use geometry::{BorderSideGeometry, BoxDecorationGeometry, inset_rect};
+pub use geometry::{BoxDecorationGeometry, inset_rect};
+pub use paint::{
+    BorderBand, BorderClip, BorderClipStack, BorderFillFragment, BorderFillRule,
+    BorderPaintGeometry, BorderSidePaintGeometry, BorderStrokeFragment,
+};
 pub use radii::{CornerRadii, Corners};
 pub use shape::{CornerShape, CornerShapes, Superellipse};
 pub use side::{BoxArea, Side};
