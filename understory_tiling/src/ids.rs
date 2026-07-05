@@ -44,18 +44,6 @@ impl fmt::Display for PaneId {
     }
 }
 
-/// Opaque identity for an abstract layout surface.
-///
-/// Used by [`TileSurface`](crate::TileSurface) to reserve API space for root,
-/// floating, and external surfaces. The current layout pass only operates on
-/// the tree root.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct SurfaceId(
-    /// Numeric surface id assigned by the tiling core or embedding layer.
-    pub u32,
-);
-
 /// Monotonic revision token for layout tree changes.
 ///
 /// Read it with [`TileTree::revision`](crate::TileTree::revision). Layout

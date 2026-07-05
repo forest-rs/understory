@@ -12,7 +12,6 @@ fn input() -> LayoutInput {
         split_handle_thickness: 10.0,
         min_pane_size: Size::new(20.0, 20.0),
         zoom: None,
-        generate_drop_targets: false,
     }
 }
 
@@ -981,6 +980,7 @@ fn interaction_options_derive_preview_and_resize_inputs_from_layout() {
         layout.split_handle_thickness
     );
     assert_eq!(options.resize.min_pane_size, layout.min_pane_size);
+    assert_eq!(options.resize.preview_layout.unwrap().bounds, layout.bounds);
     assert_eq!(options.drag_intent, DragIntent::Move);
     assert_eq!(options.drag_threshold, 5.0);
 }
@@ -1169,12 +1169,29 @@ fn drag_over_tab_group_body_proposes_tab_into_group() {
 }
 
 #[test]
-fn unsupported_tab_group_drag_targets_are_invalid() {
-    let tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
+fn tab_group_drag_validates_and_commits_split_move() {
+    let mut tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
+    let group = tree.root();
+    tree.apply(TileOp::ActivatePane { pane: PaneId(2) })
+        .unwrap();
+    tree.apply(TileOp::SplitPane {
+        pane: PaneId(1),
+        axis: Axis::Horizontal,
+        new_pane: PaneId(3),
+        placement: Placement::After,
+        share: 0.5,
+    })
+    .unwrap();
     let frame = tree.layout(input());
+    let target_tile = frame
+        .panes
+        .iter()
+        .find(|pane| pane.pane == PaneId(3))
+        .unwrap()
+        .tile;
     let drag = DragSession {
-        subject: DragSubject::TabGroup(tree.root()),
-        source: DragSource::TabBar { group: tree.root() },
+        subject: DragSubject::TabGroup(group),
+        source: DragSource::TabBar { group },
         origin: Point::new(10.0, 10.0),
         current: Point::new(10.0, 10.0),
         base_revision: frame.revision,
@@ -1186,15 +1203,42 @@ fn unsupported_tab_group_drag_targets_are_invalid() {
         &tree,
         &frame,
         &mut state,
-        Point::new(5.0, 100.0),
+        Point::new(200.0, 5.0),
         &interaction_options(),
     );
 
-    assert!(update.proposal.is_none());
-    assert!(update.overlay.active_target.is_none());
-    assert!(update.candidates.is_empty());
-    assert!(update.overlay.drop_targets.is_empty());
-    assert!(update.overlay.ghost_rects.is_empty());
+    assert!(matches!(
+        dock_proposal(&update),
+        Some(DockProposal::MoveTabGroup {
+            group: moved,
+            target: DockTarget::Split {
+                tile,
+                axis: Axis::Vertical,
+                placement: Placement::Before,
+                ..
+            },
+        }) if *moved == group && *tile == target_tile
+    ));
+    assert_eq!(
+        update.overlay.ghost_rects,
+        vec![GhostFrame {
+            rect: Rect::new(155.0, 0.0, 300.0, 100.0),
+            kind: GhostKind::PreviewGroup,
+        }]
+    );
+
+    let policy = DockPolicyData::default();
+    let proposal =
+        validate_interaction_update(&tree, &frame, &update, &policy, &interaction_options())
+            .unwrap();
+    assert!(matches!(proposal.op, TileOp::MoveTabGroup { .. }));
+    commit_proposal(&mut tree, proposal).unwrap();
+
+    let Some(TileNode::Tabs(tabs)) = tree.node(group) else {
+        panic!("moved group should remain a tab group");
+    };
+    assert_eq!(tabs.panes, vec![PaneId(1), PaneId(2)]);
+    assert_eq!(tabs.active, 1);
 }
 
 #[test]
@@ -1258,6 +1302,44 @@ fn resize_update_clamps_to_min_pane_size() {
     let preview = update.preview.unwrap();
     assert_eq!(preview.panes[0].rect.width(), 270.0);
     assert_eq!(preview.panes[1].rect.width(), 20.0);
+}
+
+#[test]
+fn resize_preview_uses_provided_layout_input() {
+    let mut tree = TileTree::single_pane(PaneId(1));
+    tree.apply(TileOp::SplitPane {
+        pane: PaneId(1),
+        axis: Axis::Horizontal,
+        new_pane: PaneId(2),
+        placement: Placement::After,
+        share: 0.5,
+    })
+    .unwrap();
+    let frame = tree.layout(input());
+    let preview_input = LayoutInput {
+        bounds: Rect::new(0.0, 0.0, 600.0, 200.0),
+        ..input()
+    };
+    let options = InteractionOptions {
+        resize: ResizeOptions {
+            min_pane_size: input().min_pane_size,
+            preview_layout: Some(preview_input),
+        },
+        ..interaction_options()
+    };
+    let mut state = begin_interaction(&frame, Point::new(150.0, 100.0), &options);
+
+    let update = update_interaction(
+        &tree,
+        &frame,
+        &mut state,
+        Point::new(200.0, 100.0),
+        &options,
+    );
+
+    let preview = update.preview.unwrap();
+    assert_eq!(preview.panes[1].rect.x1, 600.0);
+    assert!(preview.panes[0].rect.width() > 300.0);
 }
 
 #[test]
@@ -1713,29 +1795,13 @@ fn restore_snapshot_repairs_only_when_requested() {
         closed_panes: Vec::new(),
     };
 
-    let restored = restore_snapshot(
-        snapshot.clone(),
-        RestoreOptions {
-            repair_missing_panes: false,
-            drop_unknown_panes: false,
-            normalize: false,
-        },
-    )
-    .unwrap();
+    let restored = restore_snapshot(snapshot.clone(), RestoreOptions { normalize: false }).unwrap();
     let Some(TileNode::Tabs(tabs)) = restored.node(TileId(0)) else {
         panic!("root should remain tabs");
     };
     assert_eq!(tabs.active, 99);
 
-    let restored = restore_snapshot(
-        snapshot,
-        RestoreOptions {
-            repair_missing_panes: false,
-            drop_unknown_panes: false,
-            normalize: true,
-        },
-    )
-    .unwrap();
+    let restored = restore_snapshot(snapshot, RestoreOptions { normalize: true }).unwrap();
     let Some(TileNode::Tabs(tabs)) = restored.node(TileId(0)) else {
         panic!("root should remain tabs");
     };
@@ -1753,20 +1819,16 @@ fn serde_covers_public_data_types() {
 
     assert_serde::<TileId>();
     assert_serde::<PaneId>();
-    assert_serde::<SurfaceId>();
     assert_serde::<Revision>();
 
     assert_serde::<Axis>();
     assert_serde::<Placement>();
     assert_serde::<TabBarPlacement>();
-    assert_serde::<LayoutConstraints>();
     assert_serde::<SplitConstraints>();
     assert_serde::<TileNode>();
     assert_serde::<SplitNode>();
     assert_serde::<TabNode>();
     assert_serde::<PaneNode>();
-    assert_serde::<SurfaceKind>();
-    assert_serde::<TileSurface>();
     assert_serde::<LayoutInput>();
     assert_serde::<TileTree>();
 

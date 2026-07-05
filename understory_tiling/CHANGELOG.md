@@ -21,6 +21,16 @@ Understory Tiling has not had a published release yet.
   leaves, normalization, semantic operations, and flattened layout solving.
 - Added basic drag/drop and resize proposal generation, validation and commit
   helpers, snapshot and repair shells, and pure-data regression tests.
+- Added committed tab-group move operations so tab-bar drags can produce and
+  apply real split-dock proposals.
+
+### Changed
+
+- Kept the initial public API focused on implemented MVP behavior by removing
+  reserved replace, resize-delta, floating-surface, layout-constraint, and
+  missing-pane repair placeholders.
+- Resize previews now relayout with the caller-provided layout input instead of
+  reconstructing geometry from the current frame.
 
 [Unreleased]: https://github.com/forest-rs/understory/compare/HEAD
 

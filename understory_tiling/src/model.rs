@@ -4,7 +4,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::{PaneId, Rect, Size, SurfaceId, TileId};
+use crate::{PaneId, Rect, Size, TileId};
 
 // TODO: Re-export `kurbo::Axis` instead once it supports serde under
 // `kurbo/serde`.
@@ -56,20 +56,6 @@ pub enum TabBarPlacement {
     Right,
     /// Do not emit tab bar geometry.
     Hidden,
-}
-
-/// Basic min/max layout constraints.
-///
-/// This is a data shape for caller-authored constraints. The current MVP keeps
-/// it in the model for forward compatibility; layout currently uses
-/// [`LayoutInput::min_pane_size`] as the global minimum.
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct LayoutConstraints {
-    /// Minimum accepted size.
-    pub min_size: Size,
-    /// Optional maximum accepted size.
-    pub max_size: Option<Size>,
 }
 
 /// Per-child constraints for a split node.
@@ -152,43 +138,6 @@ pub struct PaneNode {
     pub pane: PaneId,
 }
 
-/// Abstract surface kind.
-///
-/// Used by [`TileSurface`] to describe future root, floating, external-window,
-/// or auto-hide surfaces. The MVP layout API only solves the root tree.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum SurfaceKind {
-    /// Primary root surface.
-    Root,
-    /// Future floating surface.
-    Floating,
-    /// Future external window surface.
-    ExternalWindow,
-    /// Future auto-hide strip surface.
-    AutoHide,
-}
-
-/// Abstract surface record.
-///
-/// Keep this in persisted or host-side state when modelling more than one
-/// surface. Current layout entry points take [`LayoutInput`] and solve the root
-/// tree directly; they do not open windows or manage floating surfaces.
-#[derive(Clone, Debug)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct TileSurface {
-    /// Surface id.
-    pub id: SurfaceId,
-    /// Surface kind.
-    pub kind: SurfaceKind,
-    /// Root tile for this surface.
-    pub root: TileId,
-    /// Surface bounds.
-    ///
-    /// Bounds supplied to layout APIs are expected to be finite.
-    pub bounds: Rect,
-}
-
 /// Geometry-affecting input for layout solving.
 ///
 /// Construct this at render time and pass it to
@@ -224,14 +173,6 @@ pub struct LayoutInput {
     /// [`LayoutFrame::projection`](crate::LayoutFrame::projection). Missing or
     /// inactive panes leave the frame unprojected.
     pub zoom: Option<PaneId>,
-    /// Reserved switch for layout-time drop target generation.
-    ///
-    /// Current drag/drop target generation happens in
-    /// [`drop_targets_for_drag`](crate::drop_targets_for_drag) from a solved
-    /// [`LayoutFrame`](crate::LayoutFrame). This field is preserved for callers
-    /// that want to keep layout inputs forward-compatible with a future layout
-    /// pass that can emit target hints directly.
-    pub generate_drop_targets: bool,
 }
 
 impl TileNode {

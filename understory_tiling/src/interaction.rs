@@ -361,13 +361,6 @@ pub enum DockProposal {
         /// Target index.
         index: usize,
     },
-    /// Future float-pane proposal.
-    FloatPane {
-        /// Pane to float.
-        pane: PaneId,
-        /// Requested floating bounds.
-        bounds: Rect,
-    },
 }
 
 /// Uncommitted resize proposal.
@@ -430,12 +423,20 @@ pub struct ResizeOptions {
     ///
     /// Expected to be finite and non-negative.
     pub min_pane_size: Size,
+    /// Layout input used to produce full resize preview frames.
+    ///
+    /// Set this to the same geometry input used to create the current
+    /// [`LayoutFrame`] when the host wants [`InteractionUpdate::preview`] to
+    /// contain a solved preview layout. Leave it as `None` to skip full resize
+    /// previews.
+    pub preview_layout: Option<LayoutInput>,
 }
 
 impl Default for ResizeOptions {
     fn default() -> Self {
         Self {
             min_pane_size: Size::new(20.0, 20.0),
+            preview_layout: None,
         }
     }
 }
@@ -458,12 +459,6 @@ pub struct DragOptions {
     ///
     /// Expected to be finite and in the range `0.0..=1.0`.
     pub tab_insert_threshold: f64,
-    /// Whether floating targets should be generated.
-    ///
-    /// Floating targets are currently marked non-accepting because committed
-    /// floating surfaces are not implemented yet. The default is `false` so
-    /// unsupported targets do not appear in normal interaction overlays.
-    pub allow_float: bool,
     /// Whether tab reordering is allowed.
     pub allow_reorder_tabs: bool,
     /// Whether split targets are allowed.
@@ -484,7 +479,6 @@ impl Default for DragOptions {
         Self {
             edge_zone_fraction: 0.25,
             tab_insert_threshold: 0.5,
-            allow_float: false,
             allow_reorder_tabs: true,
             allow_split: true,
             allow_tab_into: true,
@@ -529,8 +523,8 @@ impl InteractionOptions {
     /// Creates interaction options from a layout input.
     ///
     /// Use this in renderers that keep one layout input per frame. Drag
-    /// previews will relayout with `input`, and resize interactions will use
-    /// `input.min_pane_size` for solved-geometry clamping.
+    /// and resize previews will relayout with `input`, and resize interactions
+    /// will use `input.min_pane_size` for solved-geometry clamping.
     #[must_use]
     pub fn from_layout_input(input: LayoutInput) -> Self {
         let drag = DragOptions {
@@ -540,6 +534,7 @@ impl InteractionOptions {
 
         let resize = ResizeOptions {
             min_pane_size: input.min_pane_size,
+            preview_layout: Some(input),
         };
 
         Self {
@@ -763,7 +758,7 @@ fn update_resize(
     let proposal = resize_proposal_from_frame(tree, frame, resize, point, options);
     let preview = proposal
         .as_ref()
-        .and_then(|proposal| preview_for_resize(tree, frame, proposal, options));
+        .and_then(|proposal| preview_for_resize(tree, proposal, options));
     resize.proposal = proposal.clone();
     InteractionUpdate {
         proposal: proposal.map(Proposal::Resize),
@@ -789,9 +784,6 @@ pub fn drop_targets_for_drag(
     options: &DragOptions,
 ) -> Vec<DropTargetFrame> {
     let mut targets = Vec::new();
-    if matches!(drag.subject, DragSubject::TabGroup(_)) {
-        return targets;
-    }
     debug_assert!(
         (0.0..=0.5).contains(&options.edge_zone_fraction),
         "DragOptions::edge_zone_fraction must be finite and in 0.0..=0.5",
@@ -882,28 +874,6 @@ pub fn drop_targets_for_drag(
         }
     }
 
-    if options.allow_float
-        && let Some(root_rect) = frame_bounds(frame)
-        && !root_rect.contains(drag.current)
-    {
-        let bounds = Rect::new(
-            drag.current.x - 120.0,
-            drag.current.y - 80.0,
-            drag.current.x + 120.0,
-            drag.current.y + 80.0,
-        );
-        let id = DropTargetId(u32::try_from(targets.len()).expect("drop target arena exhausted"));
-        targets.push(DropTargetFrame {
-            id,
-            rect: bounds,
-            target: DockTarget::Float { bounds },
-            preview_rect: bounds,
-            priority: 5,
-            distance: 0.0,
-            accepts: false,
-        });
-    }
-
     targets
 }
 
@@ -968,11 +938,10 @@ fn proposal_for_drag(
 pub(crate) fn op_for_dock_proposal(proposal: DockProposal) -> Result<TileOp, TileError> {
     match proposal {
         DockProposal::MovePane { pane, target } => Ok(TileOp::MovePane { pane, target }),
+        DockProposal::MoveTabGroup { group, target } => Ok(TileOp::MoveTabGroup { group, target }),
         DockProposal::ReorderTab { group, pane, index } => {
             Ok(TileOp::ReorderTab { group, pane, index })
         }
-        DockProposal::FloatPane { pane, bounds } => Ok(TileOp::FloatPane { pane, bounds }),
-        DockProposal::MoveTabGroup { .. } => Err(TileError::Unsupported),
     }
 }
 
@@ -1090,11 +1059,8 @@ fn target_accepts(
     target: DockTarget,
     options: &DragOptions,
 ) -> bool {
-    if matches!(drag.subject, DragSubject::TabGroup(_)) {
-        return false;
-    }
     match target {
-        DockTarget::Root | DockTarget::Replace { .. } => true,
+        DockTarget::Root => true,
         DockTarget::Split { tile, .. } => split_target_accepts(tree, frame, drag, tile),
         DockTarget::TabInto { group, index } => {
             if !options.allow_tab_into {
@@ -1109,7 +1075,6 @@ fn target_accepts(
                 DragSubject::TabGroup(_) => false,
             }
         }
-        DockTarget::Float { .. } => false,
     }
 }
 
@@ -1137,7 +1102,7 @@ fn split_target_accepts(
                 _ => false,
             }
         }
-        DragSubject::TabGroup(_) => false,
+        DragSubject::TabGroup(group) => group != tile,
     }
 }
 
@@ -1336,16 +1301,10 @@ fn resize_proposal_from_frame(
 
 fn preview_for_resize(
     tree: &TileTree,
-    frame: &LayoutFrame,
     proposal: &ResizeProposal,
     options: &ResizeOptions,
 ) -> Option<LayoutFrame> {
-    let bounds = frame_bounds(frame)?;
-    let split_handle_thickness = frame
-        .split_handles
-        .iter()
-        .find(|handle| handle.split == proposal.split && handle.handle == proposal.handle)
-        .map(|handle| handle_thickness(handle.rect, handle.axis))?;
+    let input = options.preview_layout?;
     let mut preview_tree = tree.clone();
     preview_tree
         .apply(TileOp::SetSplitShares {
@@ -1353,14 +1312,7 @@ fn preview_for_resize(
             shares: proposal.new_shares.clone(),
         })
         .ok()?;
-    Some(preview_tree.layout(LayoutInput {
-        bounds,
-        tab_bar_thickness: tab_bar_thickness(frame),
-        split_handle_thickness,
-        min_pane_size: options.min_pane_size,
-        zoom: frame.projection.as_ref().map(|projection| projection.focus),
-        generate_drop_targets: false,
-    }))
+    Some(preview_tree.layout(input))
 }
 
 fn preview_for_dock_proposal(
@@ -1383,22 +1335,6 @@ fn split_child_frames(frame: &LayoutFrame, split: TileId) -> Vec<SplitChildFrame
         .collect::<Vec<_>>();
     children.sort_by_key(|child| child.index);
     children
-}
-
-fn handle_thickness(rect: Rect, axis: Axis) -> f64 {
-    major_length(rect, axis)
-}
-
-fn tab_bar_thickness(frame: &LayoutFrame) -> f64 {
-    frame
-        .tab_bars
-        .iter()
-        .map(|bar| match bar.placement {
-            crate::TabBarPlacement::Top | crate::TabBarPlacement::Bottom => bar.rect.height(),
-            crate::TabBarPlacement::Left | crate::TabBarPlacement::Right => bar.rect.width(),
-            crate::TabBarPlacement::Hidden => 0.0,
-        })
-        .fold(0.0, f64::max)
 }
 
 fn drag_distance_squared(origin: Point, point: Point) -> f64 {

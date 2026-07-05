@@ -14,23 +14,12 @@ use crate::{
 ///
 /// Store this in [`DockPolicyData`] when validating proposals. Current
 /// validation uses the move, tab, split, edge, and zone fields for supported
-/// dock proposals; close, float, and pin capabilities are reserved for
-/// operations that do not yet commit successfully.
+/// dock proposals.
 #[derive(Clone, Copy, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PaneCapabilities {
-    /// Whether pane close operations are allowed.
-    ///
-    /// Reserved for close-policy validation.
-    pub closable: bool,
     /// Whether pane move operations are allowed.
     pub movable: bool,
-    /// Whether pane float operations are allowed.
-    ///
-    /// Reserved until floating surfaces can be committed.
-    pub floatable: bool,
-    /// Whether pane pinning is allowed by future APIs.
-    pub pinnable: bool,
     /// Whether the pane may join tab groups.
     pub tabbable: bool,
     /// Whether the pane may be used as a split target.
@@ -121,10 +110,7 @@ pub struct ProposalValidationInput<'a> {
 impl Default for PaneCapabilities {
     fn default() -> Self {
         Self {
-            closable: true,
             movable: true,
-            floatable: true,
-            pinnable: true,
             tabbable: true,
             split_target: true,
             allowed_edges: EdgeSet::ALL,
@@ -241,10 +227,8 @@ impl ZoneSet {
     pub const SPLIT: Self = Self(0b0001);
     /// Tab-into zone.
     pub const TAB: Self = Self(0b0010);
-    /// Floating zone.
-    pub const FLOAT: Self = Self(0b0100);
     /// All zones.
-    pub const ALL: Self = Self(0b0111);
+    pub const ALL: Self = Self(0b0011);
 
     /// Returns whether every zone in `other` is present.
     ///
@@ -350,11 +334,11 @@ fn validate_dock_policy(
             require(capabilities.movable)?;
             validate_target_policy(*target, capabilities)
         }
-        DockProposal::MoveTabGroup { target, .. } => validate_target_policy(*target, capabilities),
-        DockProposal::ReorderTab { .. } => require(capabilities.movable && capabilities.tabbable),
-        DockProposal::FloatPane { .. } => {
-            require(capabilities.floatable && capabilities.allowed_zones.contains(ZoneSet::FLOAT))
+        DockProposal::MoveTabGroup { target, .. } => {
+            require(capabilities.movable)?;
+            validate_target_policy(*target, capabilities)
         }
+        DockProposal::ReorderTab { .. } => require(capabilities.movable && capabilities.tabbable),
     }
 }
 
@@ -363,7 +347,7 @@ fn validate_target_policy(
     capabilities: &PaneCapabilities,
 ) -> Result<(), TileError> {
     match target {
-        DockTarget::Root | DockTarget::Replace { .. } => {
+        DockTarget::Root => {
             require(capabilities.movable && capabilities.allowed_zones.contains(ZoneSet::SPLIT))
         }
         DockTarget::Split {
@@ -380,11 +364,6 @@ fn validate_target_policy(
             capabilities.movable
                 && capabilities.tabbable
                 && capabilities.allowed_zones.contains(ZoneSet::TAB),
-        ),
-        DockTarget::Float { .. } => require(
-            capabilities.movable
-                && capabilities.floatable
-                && capabilities.allowed_zones.contains(ZoneSet::FLOAT),
         ),
     }
 }

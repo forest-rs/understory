@@ -19,8 +19,8 @@ workspace = true
 [features]
 default = ["std"]
 
-# This crate is `no_std` + `alloc` without default features. Enable `libm` for
-# no_std targets that need Kurbo geometry math, or `std` for std builds.
+# Default builds use `std`. For `no_std` + `alloc`, disable default features and
+# enable `libm` for Kurbo geometry math.
 std = ["kurbo/std"]
 libm = ["kurbo/libm"]
 serde = ["dep:serde", "kurbo/serde"]

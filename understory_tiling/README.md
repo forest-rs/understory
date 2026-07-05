@@ -79,7 +79,6 @@ let frame = tree.layout(LayoutInput {
     split_handle_thickness: 6.0,
     min_pane_size: Size::new(80.0, 80.0),
     zoom: None,
-    generate_drop_targets: false,
 });
 
 assert_eq!(frame.panes.len(), 2);
@@ -111,7 +110,6 @@ let layout_input = LayoutInput {
     split_handle_thickness: 6.0,
     min_pane_size: Size::new(80.0, 80.0),
     zoom: None,
-    generate_drop_targets: false,
 };
 let frame = tree.layout(layout_input);
 let options = InteractionOptions::from_layout_input(layout_input);
@@ -136,10 +134,10 @@ if update.proposal.is_some() {
 }
 ```
 
-This crate is `no_std` and uses `alloc` when built without default features.
-Enable the `libm` feature for no-std targets that need Kurbo geometry math.
-Enable the `serde` feature to serialize layout trees, snapshots, frames,
-policy data, and interaction proposals.
+This crate supports `no_std` + `alloc` builds when default features are
+disabled and the `libm` feature is enabled for Kurbo geometry math. Enable
+the `serde` feature to serialize layout trees, snapshots, frames, policy
+data, and interaction proposals.
 
 <!-- cargo-rdme end -->
 

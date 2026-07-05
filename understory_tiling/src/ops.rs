@@ -4,7 +4,7 @@
 use alloc::vec::Vec;
 use core::fmt;
 
-use crate::{Axis, LayoutSnapshot, PaneId, Placement, Rect, TileId};
+use crate::{Axis, LayoutSnapshot, PaneId, Placement, TileId};
 
 /// Target for a dock or move operation.
 ///
@@ -37,16 +37,6 @@ pub enum DockTarget {
         group: TileId,
         /// Optional insertion index.
         index: Option<usize>,
-    },
-    /// Replace a target tile.
-    Replace {
-        /// Target tile.
-        tile: TileId,
-    },
-    /// Future floating target.
-    Float {
-        /// Requested floating bounds.
-        bounds: Rect,
     },
 }
 
@@ -93,6 +83,13 @@ pub enum TileOp {
         /// Move target.
         target: DockTarget,
     },
+    /// Move a tab group to a dock target.
+    MoveTabGroup {
+        /// Tab group to move.
+        group: TileId,
+        /// Move target.
+        target: DockTarget,
+    },
     /// Reorder a tab inside a group.
     ReorderTab {
         /// Target tab group.
@@ -102,30 +99,12 @@ pub enum TileOp {
         /// New tab index.
         index: usize,
     },
-    /// Resize a split by moving one handle.
-    ResizeSplit {
-        /// Split tile.
-        split: TileId,
-        /// Handle index.
-        handle: usize,
-        /// Pointer delta along the split axis.
-        ///
-        /// Expected to be finite.
-        delta: f64,
-    },
     /// Set split shares directly.
     SetSplitShares {
         /// Split tile.
         split: TileId,
         /// Replacement shares.
         shares: Vec<f64>,
-    },
-    /// Future operation for floating a pane.
-    FloatPane {
-        /// Pane to float.
-        pane: PaneId,
-        /// Requested floating bounds.
-        bounds: Rect,
     },
     /// Restore a saved layout snapshot.
     RestoreLayout {
@@ -154,12 +133,8 @@ pub enum TileError {
     StaleInteraction,
     /// Policy data rejected the operation.
     PolicyRejected,
-    /// The operation would leave no panes.
-    EmptyTree,
     /// The operation tried to close the last pane.
     CannotCloseLastPane,
-    /// The operation is reserved but not implemented in this slice.
-    Unsupported,
 }
 
 impl fmt::Display for TileError {
@@ -171,9 +146,7 @@ impl fmt::Display for TileError {
             Self::InvalidTarget => "invalid target",
             Self::StaleInteraction => "stale interaction",
             Self::PolicyRejected => "policy rejected operation",
-            Self::EmptyTree => "empty tree",
             Self::CannotCloseLastPane => "cannot close last pane",
-            Self::Unsupported => "unsupported operation",
         })
     }
 }

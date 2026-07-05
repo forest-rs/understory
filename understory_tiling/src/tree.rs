@@ -220,14 +220,9 @@ impl TileTree {
                 share,
             } => self.split_pane(pane, axis, new_pane, placement, share),
             TileOp::MovePane { pane, target } => self.move_pane(pane, target),
+            TileOp::MoveTabGroup { group, target } => self.move_tab_group(group, target),
             TileOp::ReorderTab { group, pane, index } => self.reorder_tab(group, pane, index),
-            TileOp::ResizeSplit {
-                split,
-                handle,
-                delta,
-            } => self.resize_split(split, handle, delta),
             TileOp::SetSplitShares { split, shares } => self.set_split_shares(split, shares),
-            TileOp::FloatPane { .. } => Err(TileError::Unsupported),
             TileOp::RestoreLayout { snapshot } => {
                 *self = snapshot.tree;
                 self.normalize();
@@ -336,6 +331,21 @@ impl TileTree {
         Ok(true)
     }
 
+    fn move_tab_group(&mut self, group: TileId, target: DockTarget) -> Result<bool, TileError> {
+        match self.get_node(group) {
+            Some(TileNode::Tabs(_)) => {}
+            Some(_) => return Err(TileError::InvalidTarget),
+            None => return Err(TileError::InvalidTileId),
+        }
+        self.validate_group_target(group, target)?;
+        if group == self.root && matches!(target, DockTarget::Root) {
+            return Ok(false);
+        }
+        self.detach_tile(group)?;
+        self.insert_group_at_target(group, target)?;
+        Ok(true)
+    }
+
     fn reorder_tab(
         &mut self,
         group: TileId,
@@ -362,31 +372,6 @@ impl TileTree {
         Ok(from != to)
     }
 
-    fn resize_split(
-        &mut self,
-        split: TileId,
-        handle: usize,
-        delta: f64,
-    ) -> Result<bool, TileError> {
-        let Some(TileNode::Split(node)) = self.get_node_mut(split) else {
-            return Err(TileError::InvalidTileId);
-        };
-        if handle + 1 >= node.children.len() {
-            return Err(TileError::InvalidOperation);
-        }
-        if !delta.is_finite() {
-            return Err(TileError::InvalidOperation);
-        }
-        let mut shares = repaired_shares(node.children.len(), &node.shares);
-        let delta_share = delta / 100.0;
-        let left = (shares[handle] + delta_share).max(0.01);
-        let right = (shares[handle + 1] - delta_share).max(0.01);
-        shares[handle] = left;
-        shares[handle + 1] = right;
-        node.shares = shares;
-        Ok(delta_share != 0.0)
-    }
-
     fn set_split_shares(&mut self, split: TileId, shares: Vec<f64>) -> Result<bool, TileError> {
         let Some(TileNode::Split(node)) = self.get_node_mut(split) else {
             return Err(TileError::InvalidTileId);
@@ -409,16 +394,25 @@ impl TileTree {
                 self.get_node(tile).ok_or(TileError::InvalidTileId)?;
                 Ok(())
             }
-            DockTarget::Replace { tile } => {
-                self.get_node(tile).ok_or(TileError::InvalidTileId)?;
-                Ok(())
-            }
             DockTarget::TabInto { group, .. } => match self.get_node(group) {
                 Some(TileNode::Tabs(_)) => Ok(()),
                 Some(_) => Err(TileError::InvalidTarget),
                 None => Err(TileError::InvalidTileId),
             },
-            DockTarget::Float { .. } => Err(TileError::Unsupported),
+        }
+    }
+
+    fn validate_group_target(&self, group: TileId, target: DockTarget) -> Result<(), TileError> {
+        match target {
+            DockTarget::Root => Ok(()),
+            DockTarget::Split { tile, ratio, .. } => {
+                if tile == group || !is_valid_split_fraction(ratio) {
+                    return Err(TileError::InvalidTarget);
+                }
+                self.get_node(tile).ok_or(TileError::InvalidTileId)?;
+                Ok(())
+            }
+            DockTarget::TabInto { .. } => Err(TileError::InvalidTarget),
         }
     }
 
@@ -449,12 +443,29 @@ impl TileTree {
                 self.clear_node(tile);
                 Ok(())
             }
-            DockTarget::Replace { tile: target } => {
-                self.set_node(target, TileNode::pane(pane))?;
-                self.clear_node(tile);
-                Ok(())
+        }
+    }
+
+    fn insert_group_at_target(
+        &mut self,
+        group: TileId,
+        target: DockTarget,
+    ) -> Result<(), TileError> {
+        match target {
+            DockTarget::Root => {
+                if group == self.root {
+                    Ok(())
+                } else {
+                    self.insert_tile_near(self.root, Axis::Horizontal, group, Placement::After, 0.5)
+                }
             }
-            DockTarget::Float { .. } => Err(TileError::Unsupported),
+            DockTarget::Split {
+                tile,
+                axis,
+                placement,
+                ratio,
+            } => self.insert_tile_near(tile, axis, group, placement, ratio),
+            DockTarget::TabInto { .. } => Err(TileError::InvalidTarget),
         }
     }
 
@@ -543,6 +554,23 @@ impl TileTree {
                 }
             }
         }
+        Ok(())
+    }
+
+    fn detach_tile(&mut self, tile: TileId) -> Result<(), TileError> {
+        if tile == self.root {
+            return Ok(());
+        }
+        let Some((parent_id, child_index)) = self.find_parent(tile) else {
+            return Err(TileError::InvalidOperation);
+        };
+        let Some(TileNode::Split(parent)) = self.get_node_mut(parent_id) else {
+            return Err(TileError::InvalidOperation);
+        };
+        let mut shares = repaired_shares(parent.children.len(), &parent.shares);
+        parent.children.remove(child_index);
+        shares.remove(child_index);
+        parent.shares = shares;
         Ok(())
     }
 
