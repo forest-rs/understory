@@ -22,6 +22,10 @@ These examples form a short, progressive walkthrough from routing basics to inte
   - Dispatch to focused target via `dispatch_for` and compute focus transitions with `FocusState`.
   - Run: `cargo run -p understory_examples --example responder_focus`
 
+- anchored_overlay
+  - Compose `understory_anchor` placement with `understory_overlay` lifecycle, dismissal, focus-scope, and submenu grace state.
+  - Run: `cargo run -p understory_examples --example anchored_overlay`
+
 - index_basics
   - Insert, update, commit damage, and query using `understory_index`.
   - Run: `cargo run -p understory_examples --example index_basics`

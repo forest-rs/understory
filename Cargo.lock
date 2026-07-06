@@ -638,6 +638,7 @@ version = "0.1.0"
 dependencies = [
  "invalidation",
  "kurbo",
+ "understory_anchor",
  "understory_box_tree",
  "understory_event_state",
  "understory_focus",
@@ -645,6 +646,7 @@ dependencies = [
  "understory_inspector",
  "understory_motion",
  "understory_outline",
+ "understory_overlay",
  "understory_precise_hit",
  "understory_presentation",
  "understory_presentation_properties",
