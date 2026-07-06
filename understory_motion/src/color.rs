@@ -69,6 +69,10 @@ impl ColorInterpolation {
     /// Interpolates between `from` and `to` using this policy.
     #[must_use]
     pub fn interpolate(self, from: Color, to: Color, progress: f64) -> Color {
+        assert!(
+            progress.is_finite(),
+            "color interpolation progress must be finite"
+        );
         if progress <= 0.0 {
             return from;
         }
@@ -266,5 +270,13 @@ mod tests {
             transition.sample(50),
             ColorInterpolation::SRGB.interpolate(from, to, 0.5)
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "color interpolation progress must be finite")]
+    fn color_interpolation_rejects_non_finite_progress() {
+        let color = Color::from_rgba8(0, 0, 0, 255);
+
+        let _ = ColorInterpolation::SRGB.interpolate(color, color, f64::NAN);
     }
 }

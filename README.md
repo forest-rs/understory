@@ -23,10 +23,25 @@ The focus is on clean separation of concerns, pluggable performance trade‑offs
   - Tracks deterministic parent/child stack mutation, modality underlays, dismiss regions, focus scopes, hover grace geometry, and event-to-operation resolution.
   - Designed to consume rectangles from `understory_anchor` while staying renderer-agnostic, widget-agnostic, and platform-agnostic.
 
+- `understory_property`
+  - Typed dependency-property ids, metadata, defaults, inheritance flags, value storage, and local/animation value slots.
+  - Provides the property substrate shared by bindings, expressions, style resolution, presentation properties, and host invalidation.
+  - Does not own style matching, expression evaluation, bindings, animation sampling, tree traversal, or scheduling.
+
 - `understory_property_binding`
   - Small one-way property binding primitives for dependency-property endpoints.
   - Tracks source/target endpoint indexes, dirty binding selection, dependency ordering, and deterministic drain reports.
   - Host code owns property storage and application invalidation policy through the `BindingHost` boundary.
+
+- `understory_property_expression`
+  - Pure, typed expression IR for deriving dependency-property values from properties, resources, literals, conditionals, and registered functions.
+  - Exposes dependency facts for invalidation and bundles defaults/functions in `ExpressionLayer`.
+  - Does not own property storage, style matching, tree traversal, scheduling, writes, or parser vocabulary.
+
+- `understory_style`
+  - Presentation policy for dependency properties: selector matching, cascade rules, theme resources, style expressions, and expression-aware value resolution.
+  - Resolves through Animation -> Local -> Style -> optional resource fallback -> Inherited -> Expression default -> Registry default.
+  - Does not own widgets, bindings, animation sampling, layout, rendering, caching, dirty queues, frame scheduling, or tree-wide invalidation walks.
 
 - `understory_presentation`
   - Retained, resolved drawing primitives keyed by caller-owned geometry ids.
@@ -169,13 +184,20 @@ For example, a canvas or DWG or DXF viewer can reuse the box and index layers wi
   - `understory_timing/README.md` documents host-driven timer queue scheduling, expiration, and repeat policy.
   - `understory_transcript/README.md` documents append-order transcript storage, generic payloads, explicit update semantics, typed entry kinds, and chat/tool/process-style usage.
   - `understory_view2d/README.md` documents the 2D and 1D viewport types, clamping/fit modes, and examples of using visible regions for culling.
+  - `understory_property/README.md` documents dependency-property registration, metadata, local/animation slots, inheritance, and erased values.
   - `understory_property_binding/README.md` documents one-way property bindings, host endpoint adapters, and binding-local invalidation.
+  - `understory_property_expression/README.md` documents typed pure property expressions, dependency inspection, expression defaults, and function registration.
+  - `understory_style/README.md` documents presentation policy resolution, selector matching, cascade rules, theme resources, style expressions, and resolver provenance.
   - `understory_presentation/README.md` documents retained resolved drawing primitives, template part identities, and dirty-key draining.
   - `understory_presentation_properties/README.md` documents canonical presentation property registration and surface resolution.
 - Run examples.
   - `cargo run -p understory_examples --example index_basics`
   - `cargo run -p understory_examples --example basic_present`
   - `cargo run -p understory_examples --example presentation_properties`
+  - `cargo run -p understory_examples --example property_binding_loop`
+  - `cargo run -p understory_examples --example style_subject_walk`
+  - `cargo run -p understory_examples --example style_reactive_loop`
+  - `cargo run -p understory_examples --example style_motion_loop`
   - `cargo run -p understory_examples --example box_tree_basics`
   - `cargo run -p understory_examples --example box_tree_visible_list`
   - `cargo run -p understory_examples --example outline_property_grid`

@@ -30,6 +30,10 @@ These examples form a short, progressive walkthrough from routing basics to inte
   - Drive the canonical `understory_property_binding` host loop over `understory_property` source slots: bindings write `TemplateBinding`, user `Local` values mask and reveal those writes, template teardown clears retained bindings, and partial reports still feed app invalidation.
   - Run: `cargo run -p understory_examples --example property_binding_loop`
 
+- style_reactive_loop
+  - Tie properties, bindings, style cascades, expression defaults/style expressions, theme resources, invalidation, and animation-slot samples into one host-owned frame loop.
+  - Run: `cargo run -p understory_examples --example style_reactive_loop`
+
 - basic_present
   - Build a small `understory_presentation` store, mutate resolved surface/text primitives, drain dirty geometry keys, and show the paint-side lookup shape.
   - Run: `cargo run -p understory_examples --example basic_present`

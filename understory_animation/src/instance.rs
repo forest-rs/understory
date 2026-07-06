@@ -267,14 +267,13 @@ where
 
     /// Sets playback rate while preserving local continuity.
     ///
-    /// Returns `false` when `playback_rate` is not finite or when the rate
-    /// value was unchanged. An unchanged finite rate still reanchors playback
-    /// at `timeline_time`, preserving local continuity for callers that use the
-    /// call as an explicit rebase point.
+    /// Returns `false` when the rate value was unchanged. An unchanged finite
+    /// rate still reanchors playback at `timeline_time`, preserving local
+    /// continuity for callers that use the call as an explicit rebase point.
+    ///
+    /// `playback_rate` must be finite.
     pub fn set_playback_rate(&mut self, playback_rate: f64, timeline_time: TimelineTime) -> bool {
-        if !playback_rate.is_finite() {
-            return false;
-        }
+        assert!(playback_rate.is_finite(), "playback rate must be finite");
         let changed = self.playback.playback_rate() != playback_rate;
         self.playback
             .set_playback_rate(playback_rate, timeline_time);

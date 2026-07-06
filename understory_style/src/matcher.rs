@@ -22,7 +22,7 @@ use crate::selector::{
     ClassId, PartTag, PseudoClassId, Selector, SelectorCombinator, SelectorInputs, Specificity,
     TypeTag,
 };
-use crate::style::{Style, StyleValueRef};
+use crate::style::{ErasedStyleValueKind, Style, StyleValueKind, StyleValueRef};
 use crate::stylesheet::StyleOrigin;
 
 const LINEAR_LOOKUP_LIMIT: usize = 8;
@@ -249,7 +249,10 @@ impl Matcher {
         }
     }
 
-    /// Returns the best matching style entry for a property at this state.
+    /// Returns the best matching legacy style entry for a property at this state.
+    ///
+    /// Expression entries are expression-blind here and are treated as absent
+    /// by this borrowed API.
     #[must_use]
     pub fn get_entry_ref<T: Clone + 'static>(
         &self,
@@ -259,21 +262,25 @@ impl Matcher {
         let mut best = None;
 
         for rule in self.matching_rules(state) {
-            let Some(value) = rule.style.value_ref(property) else {
+            if !rule.style.contains(property) {
                 continue;
-            };
+            }
             let key = rule.cascade_key();
-            if best.as_ref().is_none_or(
-                |(best_key, _): &(CascadeEntryKey, StyleValueRef<'_, T>)| key > *best_key,
-            ) {
-                best = Some((key, value));
+            if best
+                .as_ref()
+                .is_none_or(|(best_key, _): &(CascadeEntryKey, &MatchRule)| key > *best_key)
+            {
+                best = Some((key, rule));
             }
         }
 
-        best.map(|(_, value)| value)
+        best.and_then(|(_, rule)| rule.style.value_ref(property))
     }
 
     /// Returns the best matching concrete style value for a property at this state.
+    ///
+    /// Resource and expression entries are expression-blind here and return
+    /// `None`.
     #[must_use]
     pub fn get_value_ref<T: Clone + 'static>(
         &self,
@@ -650,6 +657,26 @@ impl<'a> WinningStyleSource<'a> {
         }
     }
 
+    pub(crate) fn value_kind<T: Clone + 'static>(
+        &self,
+        property: Property<T>,
+    ) -> Option<StyleValueKind<'a, T>> {
+        match self {
+            Self::Direct { style, .. } => style.value_kind(property),
+            Self::Rule(rule) => rule.style.value_kind(property),
+        }
+    }
+
+    pub(crate) fn value_kind_erased(
+        &self,
+        property_id: PropertyId,
+    ) -> Option<ErasedStyleValueKind<'a>> {
+        match self {
+            Self::Direct { style, .. } => style.value_kind_erased(property_id),
+            Self::Rule(rule) => rule.style.value_kind_erased(property_id),
+        }
+    }
+
     fn contains_id(&self, property_id: PropertyId) -> bool {
         self.style().contains_id(property_id)
     }
@@ -722,13 +749,16 @@ impl StyleCascade {
         self.inner.matcher.matching_rules(state)
     }
 
-    /// Returns the best Style-layer entry for a property at this state.
+    /// Returns the best legacy Style-layer entry for a property at this state.
     ///
     /// Ordering is deterministic:
     /// 1. Higher [`StyleOrigin`] wins.
     /// 2. Higher selector specificity wins (direct styles have specificity 0).
     /// 3. Later sources win.
     /// 4. Later rules win within one pushed rule group.
+    ///
+    /// Expression entries are expression-blind here. If an expression entry
+    /// wins the style layer, this method returns `None`.
     #[must_use]
     pub fn get_entry_ref<T: Clone + 'static>(
         &self,
@@ -740,6 +770,9 @@ impl StyleCascade {
     }
 
     /// Returns the best concrete Style-layer value for a property at this state.
+    ///
+    /// Resource and expression entries are expression-blind here and return
+    /// `None`.
     #[must_use]
     pub fn get_value_ref<T: Clone + 'static>(
         &self,
@@ -820,6 +853,17 @@ impl StyleCascade {
         property: Property<T>,
     ) -> Option<WinningStyleSource<'_>> {
         self.winning_source_for_id(state, property.id())
+    }
+
+    /// Returns the expression-aware winning Style-layer entry for a property.
+    #[must_use]
+    pub fn value_kind<T: Clone + 'static>(
+        &self,
+        state: MatchState,
+        property: Property<T>,
+    ) -> Option<StyleValueKind<'_, T>> {
+        self.compute_winning_source(state, property.id())?
+            .value_kind(property)
     }
 
     fn candidate_property_ids(&self, old: MatchState, new: MatchState) -> Vec<PropertyId> {

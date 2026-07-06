@@ -488,8 +488,8 @@ mod tests {
     use understory_presentation::Color;
     use understory_property::{DependencyObject, PropertyRegistry, PropertyStore};
     use understory_style::{
-        NoResolveParentLookup, ResolveCx, StyleBuilder, StyleCascadeBuilder, StyleOrigin,
-        ThemeBuilder,
+        ExpressionLayer, NoResolveParentLookup, ResolveCx, StyleBuilder, StyleCascadeBuilder,
+        StyleOrigin, ThemeBuilder,
     };
 
     use super::*;
@@ -578,7 +578,8 @@ mod tests {
         let mut registry = PropertyRegistry::new();
         let surface = register_surface(&mut registry);
         let theme = ThemeBuilder::new().build();
-        let cx = ResolveCx::new(&registry, &theme, NoResolveParentLookup);
+        let expressions = ExpressionLayer::new();
+        let cx = ResolveCx::new(&registry, &theme, &expressions, NoResolveParentLookup);
         let element = Element::new(1);
 
         let primitive = surface.resolve_surface(&cx, &element, None);
@@ -596,7 +597,8 @@ mod tests {
         let mut registry = PropertyRegistry::new();
         let surface = register_surface(&mut registry);
         let theme = ThemeBuilder::new().build();
-        let cx = ResolveCx::new(&registry, &theme, NoResolveParentLookup);
+        let expressions = ExpressionLayer::new();
+        let cx = ResolveCx::new(&registry, &theme, &expressions, NoResolveParentLookup);
         let element = Element::new(1);
 
         let style = StyleBuilder::new()
@@ -661,6 +663,7 @@ mod tests {
         let mut registry = PropertyRegistry::new();
         let surface = register_surface(&mut registry);
         let theme = ThemeBuilder::new().build();
+        let expressions = ExpressionLayer::new();
         let mut element = Element::new(1);
         element.store.set_local(surface.border_widths.top, 6.0);
 
@@ -670,7 +673,7 @@ mod tests {
         let cascade = StyleCascadeBuilder::new()
             .push_style(StyleOrigin::Base, style)
             .build();
-        let cx = ResolveCx::new(&registry, &theme, NoResolveParentLookup);
+        let cx = ResolveCx::new(&registry, &theme, &expressions, NoResolveParentLookup);
 
         let primitive = surface.resolve_surface(
             &cx,

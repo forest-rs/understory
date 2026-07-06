@@ -30,6 +30,26 @@ impl Spring {
         rest_speed: f64,
         rest_delta: f64,
     ) -> Self {
+        assert!(
+            stiffness.is_finite() && stiffness > 0.0,
+            "spring stiffness must be finite and > 0"
+        );
+        assert!(
+            damping.is_finite() && damping >= 0.0,
+            "spring damping must be finite and >= 0"
+        );
+        assert!(
+            mass.is_finite() && mass > 0.0,
+            "spring mass must be finite and > 0"
+        );
+        assert!(
+            rest_speed.is_finite() && rest_speed >= 0.0,
+            "spring rest speed must be finite and >= 0"
+        );
+        assert!(
+            rest_delta.is_finite() && rest_delta >= 0.0,
+            "spring rest delta must be finite and >= 0"
+        );
         Self {
             stiffness,
             damping,
@@ -57,12 +77,14 @@ impl Spring {
         initial_velocity: f64,
         elapsed: TimerDuration,
     ) -> SpringSample {
-        if !self.is_solvable() {
-            return SpringSample {
-                value: to,
-                velocity: 0.0,
-            };
-        }
+        assert!(
+            from.is_finite() && to.is_finite(),
+            "spring endpoints must be finite"
+        );
+        assert!(
+            initial_velocity.is_finite(),
+            "spring initial velocity must be finite"
+        );
 
         let seconds = seconds(elapsed);
         let displacement = from - to;
@@ -87,15 +109,6 @@ impl Spring {
     pub fn is_at_rest(self, sample: SpringSample, target: f64) -> bool {
         (sample.velocity.abs() <= self.rest_speed)
             && ((sample.value - target).abs() <= self.rest_delta)
-    }
-
-    fn is_solvable(self) -> bool {
-        self.stiffness.is_finite()
-            && self.damping.is_finite()
-            && self.mass.is_finite()
-            && self.stiffness > 0.0
-            && self.damping >= 0.0
-            && self.mass > 0.0
     }
 }
 
@@ -127,6 +140,11 @@ impl Decay {
     /// Creates decay parameters.
     #[must_use]
     pub const fn new(time_constant: TimerDuration, rest_speed: f64) -> Self {
+        assert!(time_constant > 0, "decay time constant must be > 0");
+        assert!(
+            rest_speed.is_finite() && rest_speed >= 0.0,
+            "decay rest speed must be finite and >= 0"
+        );
         Self {
             time_constant,
             rest_speed,
@@ -149,12 +167,11 @@ impl Decay {
         initial_velocity: f64,
         elapsed: TimerDuration,
     ) -> DecaySample {
-        if self.time_constant == 0 || !initial_velocity.is_finite() {
-            return DecaySample {
-                value: from,
-                velocity: 0.0,
-            };
-        }
+        assert!(from.is_finite(), "decay start value must be finite");
+        assert!(
+            initial_velocity.is_finite(),
+            "decay initial velocity must be finite"
+        );
 
         let tau = seconds(self.time_constant);
         let t = seconds(elapsed);
@@ -246,6 +263,18 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "spring stiffness must be finite and > 0")]
+    fn spring_rejects_invalid_parameters() {
+        let _ = Spring::new(f64::NAN, 28.0, 1.0, 0.01, 0.01);
+    }
+
+    #[test]
+    #[should_panic(expected = "spring initial velocity must be finite")]
+    fn spring_rejects_invalid_sample_inputs() {
+        let _ = Spring::default().sample_scalar(0.0, 100.0, f64::NAN, 1_000_000);
+    }
+
+    #[test]
     fn decay_preserves_absolute_time_sampling() {
         let decay = Decay::new(500_000_000, 0.01);
         let start = decay.sample_scalar(0.0, 100.0, 0);
@@ -254,5 +283,17 @@ mod tests {
         assert_eq!(start.value, 0.0);
         assert!(later.value > 0.0);
         assert!(later.velocity < start.velocity);
+    }
+
+    #[test]
+    #[should_panic(expected = "decay time constant must be > 0")]
+    fn decay_rejects_invalid_parameters() {
+        let _ = Decay::new(0, 0.01);
+    }
+
+    #[test]
+    #[should_panic(expected = "decay initial velocity must be finite")]
+    fn decay_rejects_invalid_sample_inputs() {
+        let _ = Decay::default().sample_scalar(0.0, f64::NAN, 1_000_000);
     }
 }

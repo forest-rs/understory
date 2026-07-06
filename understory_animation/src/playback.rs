@@ -169,11 +169,9 @@ impl AnimationPlayback {
 
     /// Sets the playback rate while preserving local continuity.
     ///
-    /// Non-finite rates are ignored.
+    /// `playback_rate` must be finite.
     pub fn set_playback_rate(&mut self, playback_rate: f64, timeline_time: TimelineTime) {
-        if !playback_rate.is_finite() {
-            return;
-        }
+        assert!(playback_rate.is_finite(), "playback rate must be finite");
         if let Some(local_time) = self.current_time(timeline_time) {
             self.anchor_local_time = local_time;
             self.anchor_timeline_time = timeline_time;
@@ -253,7 +251,7 @@ impl AnimationPlayback {
 }
 
 fn inactive_start_rate(playback_rate: f64) -> f64 {
-    if playback_rate.is_finite() && playback_rate != 0.0 {
+    if playback_rate != 0.0 {
         playback_rate.abs()
     } else {
         1.0
@@ -271,7 +269,11 @@ impl Default for AnimationPlayback {
     reason = "finite non-negative playback durations saturate before conversion"
 )]
 fn scale_duration(duration: TimerDuration, scale: f64) -> TimerDuration {
-    if !scale.is_finite() || scale <= 0.0 || duration == 0 {
+    assert!(
+        scale.is_finite() && scale >= 0.0,
+        "playback duration scale must be finite and >= 0"
+    );
+    if scale == 0.0 || duration == 0 {
         0
     } else {
         let scaled = duration as f64 * scale;

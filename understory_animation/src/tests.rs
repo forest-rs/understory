@@ -76,6 +76,20 @@ fn keyframes_are_sampled_in_offset_order() {
 }
 
 #[test]
+#[should_panic(expected = "keyframe offsets must be finite")]
+fn keyframe_effect_rejects_non_finite_offsets() {
+    let _ = KeyframeEffect::new(vec![Keyframe::new(f64::NAN, 0.0_f64)]);
+}
+
+#[test]
+#[should_panic(expected = "effect progress must be finite")]
+fn keyframe_effect_rejects_non_finite_progress() {
+    let effect = KeyframeEffect::from_values(vec![0.0_f64, 10.0]);
+
+    let _ = effect.sample_at(f64::NAN);
+}
+
+#[test]
 fn stack_effect_start_time_delays_sampling() {
     let effect = KeyframeEffect::from_values(vec![0.0_f64, 10.0]);
     let stack_effect =
@@ -195,6 +209,14 @@ fn playback_rate_and_reverse_preserve_local_continuity() {
     playback.reverse(at_ms(30));
     assert_eq!(playback.playback_rate(), -2.0);
     assert_eq!(playback.current_time(at_ms(35)), Some(at_ms(30)));
+}
+
+#[test]
+#[should_panic(expected = "playback rate must be finite")]
+fn playback_rejects_non_finite_rate() {
+    let mut playback = AnimationPlayback::running_at(at_ms(0));
+
+    playback.set_playback_rate(f64::NAN, at_ms(20));
 }
 
 #[test]

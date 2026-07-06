@@ -2,8 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use alloc::vec::Vec;
-use core::cmp::Ordering;
-
 use understory_motion::AnimatableValue;
 
 /// How an effect sample combines with the value beneath it in a target stack.
@@ -47,11 +45,11 @@ impl<T> KeyframeEffect<T> {
     /// Keyframes are stored in ascending offset order.
     #[must_use]
     pub fn new(mut keyframes: Vec<Keyframe<T>>) -> Self {
-        debug_assert!(
+        assert!(
             keyframes.iter().all(|keyframe| keyframe.offset.is_finite()),
             "keyframe offsets must be finite"
         );
-        keyframes.sort_by(|a, b| a.offset.partial_cmp(&b.offset).unwrap_or(Ordering::Equal));
+        keyframes.sort_by(|a, b| a.offset.total_cmp(&b.offset));
         Self {
             keyframes,
             composite: CompositeOperation::Replace,
@@ -105,6 +103,7 @@ impl<T: AnimatableValue> KeyframeEffect<T> {
     /// Samples this effect at normalized progress `progress`.
     #[must_use]
     pub fn sample_at(&self, progress: f64) -> Option<T> {
+        assert!(progress.is_finite(), "effect progress must be finite");
         let [first] = self.keyframes.as_slice() else {
             let progress = progress.clamp(0.0, 1.0);
             return self.sample_many(progress);

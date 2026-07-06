@@ -1,22 +1,34 @@
 // Copyright 2025 the Understory Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! Resolution context for full precedence chain.
+//! Resolution context for property precedence.
 //!
 //! This module provides [`ResolveCx`], which bundles everything needed to
-//! resolve property values through the full precedence chain.
+//! resolve property values through animation, local, style, theme, expression,
+//! inheritance, and default stages. [`ResolveQuery`] adds explicit options for
+//! configured lookups.
 
 use alloc::boxed::Box;
+use core::any::TypeId;
 
 use understory_property::{
-    DependencyObject, LocalValueSource, ParentLookup, Property, PropertyRegistry, PropertyStore,
+    DependencyObject, ErasedValue, LocalValueSource, ParentLookup, Property, PropertyId,
+    PropertyRegistry, PropertyStore,
+};
+use understory_property_expression::{
+    ExprError, ExpressionDefaults, ExpressionLayer, FunctionRegistry, InFlightProperties,
 };
 
-use crate::matcher::{MatchState, StyleCascade, WinningStyleSource};
+use crate::matcher::{MatchState, StyleCascade};
 use crate::selector::{Selector, Specificity};
-use crate::style::StyleValueRef;
+use crate::style::{ErasedStyleValueKind, StyleExpressionId, StyleValueKind};
 use crate::stylesheet::StyleOrigin;
 use crate::theme::{ResourceKey, Theme};
+
+#[path = "resolve_expression.rs"]
+mod expression;
+#[path = "resolve_provenance.rs"]
+mod provenance;
 
 /// Parent data used by [`ResolveCx`] when walking inherited values.
 ///
@@ -83,14 +95,65 @@ impl<'a, K: Copy + Eq + 'a> ResolveParent<'a, K> {
 /// A resolved value paired with the source that supplied it.
 ///
 /// This is an owned, cold-path inspection result. Normal rendering and update
-/// loops should keep using [`ResolveCx::get_value_ref`] or
-/// [`ResolveCx::get_value`].
+/// loops should keep using [`ResolveCx::get_value`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct Resolved<T> {
     /// The resolved value.
     pub value: T,
     /// The resolution stage and source metadata that supplied `value`.
     pub source: ResolvedSource,
+}
+
+/// A value resolved by the resolver.
+#[derive(Clone, Debug, PartialEq)]
+enum ResolvedValue<'a, T> {
+    /// A value borrowed from an existing property store, style, theme, or
+    /// metadata default.
+    Borrowed(&'a T),
+    /// A value computed by evaluating an expression.
+    Owned(T),
+}
+
+impl<T: Clone> ResolvedValue<'_, T> {
+    /// Returns the resolved value as an owned value.
+    #[must_use]
+    fn into_owned(self) -> T {
+        match self {
+            Self::Borrowed(value) => value.clone(),
+            Self::Owned(value) => value,
+        }
+    }
+}
+
+/// Expression state carried by [`ResolveCx`].
+///
+/// Most callers pass an [`ExpressionLayer`] to [`ResolveCx::new`]. Low-level
+/// callers can use this type when defaults and function registrations are stored
+/// separately.
+#[derive(Copy, Clone, Debug)]
+pub struct ExprResolveOptions<'a> {
+    /// Property default expressions keyed by dependency property id.
+    pub defaults: &'a ExpressionDefaults,
+    /// Function registry used by expression call nodes.
+    pub functions: &'a FunctionRegistry,
+}
+
+impl<'a> ExprResolveOptions<'a> {
+    /// Creates expression resolution options from default expressions and
+    /// function registry references.
+    #[must_use]
+    pub const fn new(defaults: &'a ExpressionDefaults, functions: &'a FunctionRegistry) -> Self {
+        Self {
+            defaults,
+            functions,
+        }
+    }
+}
+
+impl<'a> From<&'a ExpressionLayer> for ExprResolveOptions<'a> {
+    fn from(layer: &'a ExpressionLayer) -> Self {
+        Self::new(layer.defaults(), layer.functions())
+    }
 }
 
 /// Owned provenance for a resolved style value.
@@ -117,6 +180,8 @@ pub enum ResolvedSource {
     ///
     /// If `resource` is `Some`, the rule won the cascade but its value was
     /// dereferenced through that theme resource key.
+    /// If `expression` is `Some`, the rule won with an evaluated style
+    /// expression entry.
     CascadeRule {
         /// The winning rule origin.
         origin: StyleOrigin,
@@ -130,11 +195,15 @@ pub enum ResolvedSource {
         order: u32,
         /// Theme resource key used by the cascade entry, if any.
         resource: Option<ResourceKey>,
+        /// Style expression entry used by the cascade entry, if any.
+        expression: Option<StyleExpressionId>,
     },
     /// A direct style source won the cascade stage.
     ///
     /// If `resource` is `Some`, the direct style won the cascade but its value
     /// was dereferenced through that theme resource key.
+    /// If `expression` is `Some`, the direct style won with an evaluated style
+    /// expression entry.
     CascadeDirect {
         /// The winning direct style origin.
         origin: StyleOrigin,
@@ -142,6 +211,8 @@ pub enum ResolvedSource {
         source_index: usize,
         /// Theme resource key used by the cascade entry, if any.
         resource: Option<ResourceKey>,
+        /// Style expression entry used by the cascade entry, if any.
+        expression: Option<StyleExpressionId>,
     },
     /// A property-level theme resource fallback supplied the value.
     ///
@@ -161,6 +232,11 @@ pub enum ResolvedSource {
     },
     /// The property registry default supplied the value.
     Default,
+    /// A property-level expression default supplied the value.
+    DefaultExpression {
+        /// The property whose expression default supplied the value.
+        property: PropertyId,
+    },
 }
 
 /// Lookup used by [`ResolveCx`] to walk inherited values.
@@ -245,12 +321,17 @@ where
     }
 }
 
-/// Resolution context bundling registry, theme, and parent lookup.
+/// Resolution context bundling registry, theme resources, expression state, and
+/// parent lookup.
 ///
-/// This avoids passing many parameters to resolution functions and provides
-/// the full WinUI-style precedence chain:
+/// This avoids passing many parameters to resolution functions. Resolution uses
+/// this precedence chain:
 ///
-/// **Animation → Local → Style → Theme → Inherited → Default**
+/// **Animation → Local → Style → Resource fallback → Inherited → Expression default → Default**
+///
+/// The resource fallback stage is present only when a [`ResolveQuery`] supplies
+/// one. Theme resources are also consulted when a winning style entry or
+/// expression token references a [`ResourceKey`].
 ///
 /// # Type Parameters
 ///
@@ -261,7 +342,8 @@ where
 ///
 /// ```rust
 /// use understory_style::{
-///     NoResolveParentLookup, ResolveCx, StyleCascadeBuilder, StyleBuilder, StyleOrigin, ThemeBuilder,
+///     ExpressionLayer, NoResolveParentLookup, ResolveCx, StyleCascadeBuilder, StyleBuilder,
+///     StyleOrigin, ThemeBuilder,
 /// };
 /// use understory_property::{
 ///     DependencyObject, PropertyMetadataBuilder, PropertyRegistry, PropertyStore,
@@ -271,13 +353,13 @@ where
 /// let width = registry.register("Width", PropertyMetadataBuilder::new(0.0_f64).build());
 ///
 /// let theme = ThemeBuilder::new().build();
+/// let expressions = ExpressionLayer::new();
 /// let style = StyleBuilder::new().set(width, 80.0).build();
 /// let cascade = StyleCascadeBuilder::new()
 ///     .push_style(StyleOrigin::Override, style)
 ///     .build();
 ///
-/// // Create context with no parent lookup (flat tree)
-/// let cx = ResolveCx::new(&registry, &theme, NoResolveParentLookup);
+/// let cx = ResolveCx::new(&registry, &theme, &expressions, NoResolveParentLookup);
 ///
 /// struct Element {
 ///     key: u32,
@@ -313,10 +395,60 @@ where
     registry: &'a PropertyRegistry,
     /// The current theme for resource lookups.
     theme: &'a Theme,
+    /// Expression defaults and functions used during resolution.
+    expr: ExprResolveOptions<'a>,
     /// Lookup used to walk inherited values.
     store_lookup: F,
     /// Phantom to hold K in the type.
     _marker: core::marker::PhantomData<K>,
+}
+
+/// Configurable property resolution query.
+///
+/// `ResolveQuery` is the advanced API for callers that need to opt into a
+/// non-default resolution policy, such as combining style state with a
+/// caller-supplied property-level resource fallback. Normal app code should
+/// prefer [`ResolveCx::get_value`] or [`ResolveCx::explain_value`].
+///
+/// ```rust
+/// # use understory_property::{DependencyObject, PropertyMetadataBuilder, PropertyRegistry, PropertyStore};
+/// # use understory_style::{ExpressionLayer, NoResolveParentLookup, ResolveCx, ResourceKey, ThemeBuilder};
+/// # struct Element { key: u32, store: PropertyStore<u32> }
+/// # impl DependencyObject<u32> for Element {
+/// #     fn property_store(&self) -> &PropertyStore<u32> { &self.store }
+/// #     fn property_store_mut(&mut self) -> &mut PropertyStore<u32> { &mut self.store }
+/// #     fn key(&self) -> u32 { self.key }
+/// #     fn parent_key(&self) -> Option<u32> { None }
+/// # }
+/// const WIDTH_TOKEN: ResourceKey = ResourceKey::new(1);
+///
+/// let mut registry = PropertyRegistry::new();
+/// let width = registry.register("Width", PropertyMetadataBuilder::new(0.0_f64).build());
+///
+/// let theme = ThemeBuilder::new().set(WIDTH_TOKEN, 80.0_f64).build();
+/// let expressions = ExpressionLayer::new();
+/// let resolve = ResolveCx::new(&registry, &theme, &expressions, NoResolveParentLookup);
+/// let element = Element { key: 1, store: PropertyStore::new(1) };
+///
+/// let value = resolve
+///     .query(&element, width)
+///     .resource_fallback(WIDTH_TOKEN)
+///     .try_value()
+///     .unwrap();
+///
+/// assert_eq!(value, 80.0);
+/// ```
+#[derive(Copy, Clone, Debug)]
+pub struct ResolveQuery<'cx, 'a, K, F, O, T>
+where
+    K: Copy + Eq + 'a,
+    F: ResolveParentLookup<'a, K>,
+{
+    resolve: &'cx ResolveCx<'a, K, F>,
+    object: &'cx O,
+    property: Property<T>,
+    style: Option<(&'cx StyleCascade, MatchState)>,
+    resource_fallback: Option<ResourceKey>,
 }
 
 impl<'a, K, F> core::fmt::Debug for ResolveCx<'a, K, F>
@@ -328,6 +460,7 @@ where
         f.debug_struct("ResolveCx")
             .field("registry", &self.registry)
             .field("theme", &self.theme)
+            .field("expr", &self.expr)
             .field("store_lookup", &core::any::type_name::<F>())
             .finish()
     }
@@ -344,11 +477,18 @@ where
     ///
     /// * `registry` - The property registry
     /// * `theme` - The current theme
+    /// * `expr` - Expression defaults and functions
     /// * `store_lookup` - Lookup returning resolver parent data for a given key
-    pub fn new(registry: &'a PropertyRegistry, theme: &'a Theme, store_lookup: F) -> Self {
+    pub fn new(
+        registry: &'a PropertyRegistry,
+        theme: &'a Theme,
+        expr: impl Into<ExprResolveOptions<'a>>,
+        store_lookup: F,
+    ) -> Self {
         Self {
             registry,
             theme,
+            expr: expr.into(),
             store_lookup,
             _marker: core::marker::PhantomData,
         }
@@ -367,6 +507,116 @@ where
     pub fn theme(&self) -> &Theme {
         self.theme
     }
+
+    /// Starts a configurable resolution query.
+    ///
+    /// Use this when a lookup needs options beyond the normal
+    /// [`ResolveCx::get_value`] or [`ResolveCx::explain_value`] path, such as
+    /// combining style state with a caller-supplied resource fallback.
+    #[must_use]
+    pub fn query<'cx, T, O>(
+        &'cx self,
+        object: &'cx O,
+        property: Property<T>,
+    ) -> ResolveQuery<'cx, 'a, K, F, O, T>
+    where
+        T: Clone + 'static,
+        O: DependencyObject<K>,
+    {
+        ResolveQuery {
+            resolve: self,
+            object,
+            property,
+            style: None,
+            resource_fallback: None,
+        }
+    }
+}
+
+impl<'cx, 'a, K, F, O, T> ResolveQuery<'cx, 'a, K, F, O, T>
+where
+    K: Copy + Eq + 'a,
+    F: ResolveParentLookup<'a, K>,
+    O: DependencyObject<K>,
+    T: Clone + 'static,
+{
+    /// Adds matched style state to this query.
+    #[must_use]
+    pub fn style(mut self, cascade: &'cx StyleCascade, state: MatchState) -> Self {
+        self.style = Some((cascade, state));
+        self
+    }
+
+    /// Adds a caller-supplied property-level theme resource fallback.
+    ///
+    /// This fallback is checked after animation, local, and style values, and
+    /// before inherited values, expression defaults, and registry defaults. It
+    /// is distinct from
+    /// [`expr::token`][understory_property_expression::expr::token], which is
+    /// an inspectable dependency inside a style or default expression.
+    #[must_use]
+    pub fn resource_fallback(mut self, resource: ResourceKey) -> Self {
+        self.resource_fallback = Some(resource);
+        self
+    }
+
+    /// Resolves this query and returns an owned value.
+    ///
+    /// This is the fallible counterpart to [`ResolveCx::get_value`] for callers
+    /// that want to inspect expression and configuration errors instead of
+    /// treating them as invalid style setup.
+    pub fn try_value(self) -> Result<T, ExprError> {
+        self.resolve
+            .resolve_query_value(
+                self.object,
+                self.property,
+                self.style,
+                self.resource_fallback,
+            )
+            .map(ResolvedValue::into_owned)
+    }
+
+    /// Resolves this query and explains which precedence stage supplied the
+    /// value.
+    ///
+    /// This is the fallible counterpart to [`ResolveCx::explain_value`].
+    pub fn try_explain(self) -> Result<Resolved<T>, ExprError> {
+        self.resolve.explain_query_value(
+            self.object,
+            self.property,
+            self.style,
+            self.resource_fallback,
+        )
+    }
+}
+
+#[derive(Copy, Clone)]
+struct ResolveSubject<'a, K: Copy + Eq> {
+    store: &'a PropertyStore<K>,
+    parent_key: Option<K>,
+}
+
+impl<'a, K: Copy + Eq> ResolveSubject<'a, K> {
+    fn from_object<O>(object: &'a O) -> Self
+    where
+        O: DependencyObject<K>,
+    {
+        Self {
+            store: object.property_store(),
+            parent_key: object.parent_key(),
+        }
+    }
+
+    fn from_parent(parent: ResolveParent<'a, K>) -> Self {
+        Self {
+            store: parent.store(),
+            parent_key: parent.parent_key(),
+        }
+    }
+}
+
+fn resolution_panic<T>(property: PropertyId, err: ExprError) -> T {
+    panic!("failed to resolve property {:?}: {:?}", property, err)
 }
 
 impl<'a, K, F> ResolveCx<'a, K, F>
@@ -374,79 +624,150 @@ where
     K: Copy + Eq + 'a,
     F: ResolveParentLookup<'a, K>,
 {
-    fn style_value_ref<'cx, T>(
+    fn style_resolved_value<'cx, 's, T>(
         &'cx self,
+        subject: ResolveSubject<'s, K>,
         cascade: &'cx StyleCascade,
         state: MatchState,
         property: Property<T>,
-    ) -> Option<&'cx T>
+        expr: ExprResolveOptions<'cx>,
+        in_flight: &mut InFlightProperties,
+    ) -> Result<Option<ResolvedValue<'cx, T>>, ExprError>
     where
         T: Clone + 'static,
     {
-        cascade
-            .get_entry_ref(state, property)
-            .and_then(|entry| match entry {
-                StyleValueRef::Value(value) => Some(value),
-                StyleValueRef::Resource(key) => self.theme.get::<T>(key),
-            })
+        self.style_resolved_value_source(subject, cascade, state, property, expr, in_flight)
+            .map(|value| value.map(|(value, _)| value))
     }
 
-    fn cascade_value_source<'cx, T>(
+    fn style_resolved_value_source<'cx, 's, T>(
         &'cx self,
+        subject: ResolveSubject<'s, K>,
         cascade: &'cx StyleCascade,
         state: MatchState,
         property: Property<T>,
-    ) -> Option<(&'cx T, ResolvedSource)>
+        expr: ExprResolveOptions<'cx>,
+        in_flight: &mut InFlightProperties,
+    ) -> Result<Option<(ResolvedValue<'cx, T>, ResolvedSource)>, ExprError>
     where
         T: Clone + 'static,
     {
-        match cascade.winning_source_for_id(state, property.id())? {
-            WinningStyleSource::Direct {
-                origin,
-                source_index,
-                style,
-            } => {
-                let entry = style.value_ref(property)?;
-                let (value, resource) = match entry {
-                    StyleValueRef::Value(value) => (value, None),
-                    StyleValueRef::Resource(key) => (self.theme.get::<T>(key)?, Some(key)),
-                };
-                Some((
-                    value,
-                    ResolvedSource::CascadeDirect {
-                        origin,
-                        source_index,
-                        resource,
-                    },
-                ))
-            }
-            WinningStyleSource::Rule(rule) => {
-                let entry = rule.style().value_ref(property)?;
-                let (value, resource) = match entry {
-                    StyleValueRef::Value(value) => (value, None),
-                    StyleValueRef::Resource(key) => (self.theme.get::<T>(key)?, Some(key)),
-                };
-                Some((
-                    value,
-                    ResolvedSource::CascadeRule {
-                        origin: rule.origin(),
-                        selector: rule.selector().clone(),
-                        specificity: rule.selector().specificity(),
-                        source_index: rule.source_index(),
-                        order: rule.order(),
-                        resource,
-                    },
-                ))
+        let Some(source) = cascade.winning_source_for_id(state, property.id()) else {
+            return Ok(None);
+        };
+        let source_metadata = provenance::source_metadata(&source);
+        let Some(kind) = source.value_kind(property) else {
+            return Ok(None);
+        };
+        match kind {
+            StyleValueKind::Value(value) => Ok(Some((
+                ResolvedValue::Borrowed(value),
+                source_metadata.into_resolved_source(None, None),
+            ))),
+            StyleValueKind::Resource(key) => Ok(self.theme.get::<T>(key).map(|value| {
+                (
+                    ResolvedValue::Borrowed(value),
+                    source_metadata.into_resolved_source(Some(key), None),
+                )
+            })),
+            StyleValueKind::Expr(expr_ref) => {
+                let value = self.eval_expression(
+                    subject,
+                    property,
+                    Some((cascade, state)),
+                    expr,
+                    expr_ref.as_erased(),
+                    in_flight,
+                )?;
+                Ok(Some((
+                    ResolvedValue::Owned(value),
+                    source_metadata.into_resolved_source(None, Some(expr_ref.expression_id())),
+                )))
             }
         }
     }
 
-    fn inherited_value_ref<'cx, T>(
+    fn style_erased_resolved_value<'cx, 's>(
+        &'cx self,
+        subject: ResolveSubject<'s, K>,
+        cascade: &'cx StyleCascade,
+        state: MatchState,
+        property: PropertyId,
+        expr: ExprResolveOptions<'cx>,
+        in_flight: &mut InFlightProperties,
+    ) -> Result<Option<ErasedValue>, ExprError> {
+        let Some(source) = cascade.winning_source_for_id(state, property) else {
+            return Ok(None);
+        };
+        match source.value_kind_erased(property) {
+            Some(ErasedStyleValueKind::Value(value)) => Ok(Some(value.clone())),
+            Some(ErasedStyleValueKind::Resource(key)) => Ok(self.theme.get_erased(key)),
+            Some(ErasedStyleValueKind::Expr(style_expr)) => {
+                let expected = self.registry.get(property).map_or_else(
+                    || style_expr.type_id(),
+                    |registration| registration.type_id(),
+                );
+                self.eval_expression_erased(
+                    subject,
+                    property,
+                    Some((cascade, state)),
+                    expr,
+                    style_expr,
+                    expected,
+                    in_flight,
+                )
+                .map(Some)
+            }
+            None => Ok(None),
+        }
+    }
+
+    fn inherited_erased_value<'cx>(
+        &'cx self,
+        mut current_key: Option<K>,
+        property: PropertyId,
+        cascade: Option<&'cx StyleCascade>,
+        expr: ExprResolveOptions<'cx>,
+        in_flight: &mut InFlightProperties,
+    ) -> Result<Option<ErasedValue>, ExprError> {
+        while let Some(key) = current_key {
+            let Some(parent) = self.store_lookup.lookup_resolve_parent(key) else {
+                break;
+            };
+
+            if let Some(value) = parent.store().animation_erased(property) {
+                return Ok(Some(value.clone()));
+            }
+            if let Some(value) = parent.store().local_winner_erased(property) {
+                return Ok(Some(value.clone()));
+            }
+            if let (Some(cascade), Some(match_state)) = (cascade, parent.match_state())
+                && let Some(value) = self.style_erased_resolved_value(
+                    ResolveSubject::from_parent(parent),
+                    cascade,
+                    match_state,
+                    property,
+                    expr,
+                    in_flight,
+                )?
+            {
+                return Ok(Some(value));
+            }
+
+            current_key = parent.parent_key();
+        }
+
+        Ok(None)
+    }
+
+    fn inherited_resolved_value<'cx, T>(
         &'cx self,
         mut current_key: Option<K>,
         property: Property<T>,
         cascade: Option<&'cx StyleCascade>,
-    ) -> Option<&'cx T>
+        expr: ExprResolveOptions<'cx>,
+        in_flight: &mut InFlightProperties,
+    ) -> Result<Option<ResolvedValue<'cx, T>>, ExprError>
     where
         T: Clone + 'static,
     {
@@ -456,29 +777,38 @@ where
             };
 
             if let Some(value) = parent.store().get_animation(property) {
-                return Some(value);
+                return Ok(Some(ResolvedValue::Borrowed(value)));
             }
             if let Some(value) = parent.store().get_local(property) {
-                return Some(value);
+                return Ok(Some(ResolvedValue::Borrowed(value)));
             }
             if let (Some(cascade), Some(match_state)) = (cascade, parent.match_state())
-                && let Some(value) = self.style_value_ref(cascade, match_state, property)
+                && let Some(value) = self.style_resolved_value(
+                    ResolveSubject::from_parent(parent),
+                    cascade,
+                    match_state,
+                    property,
+                    expr,
+                    in_flight,
+                )?
             {
-                return Some(value);
+                return Ok(Some(value));
             }
 
             current_key = parent.parent_key();
         }
 
-        None
+        Ok(None)
     }
 
-    fn inherited_value_source<'cx, T>(
+    fn inherited_resolved_value_source<'cx, T>(
         &'cx self,
         mut current_key: Option<K>,
         property: Property<T>,
         cascade: Option<&'cx StyleCascade>,
-    ) -> Option<(&'cx T, ResolvedSource)>
+        expr: ExprResolveOptions<'cx>,
+        in_flight: &mut InFlightProperties,
+    ) -> Result<Option<(ResolvedValue<'cx, T>, ResolvedSource)>, ExprError>
     where
         T: Clone + 'static,
     {
@@ -489,107 +819,69 @@ where
             };
 
             if let Some(value) = parent.store().get_animation(property) {
-                return Some((
-                    value,
+                return Ok(Some((
+                    ResolvedValue::Borrowed(value),
                     ResolvedSource::Inherited {
                         ancestor_depth,
                         inner: Box::new(ResolvedSource::Animation),
                     },
-                ));
+                )));
             }
             if let Some(value) = parent.store().get_local(property) {
                 let source = parent
                     .store()
                     .winning_local_source(property)
                     .unwrap_or(LocalValueSource::Local);
-                return Some((
-                    value,
+                return Ok(Some((
+                    ResolvedValue::Borrowed(value),
                     ResolvedSource::Inherited {
                         ancestor_depth,
                         inner: Box::new(ResolvedSource::LocalOverride { source }),
                     },
-                ));
+                )));
             }
             if let (Some(cascade), Some(match_state)) = (cascade, parent.match_state())
-                && let Some((value, source)) =
-                    self.cascade_value_source(cascade, match_state, property)
+                && let Some((value, source)) = self.style_resolved_value_source(
+                    ResolveSubject::from_parent(parent),
+                    cascade,
+                    match_state,
+                    property,
+                    expr,
+                    in_flight,
+                )?
             {
-                return Some((
+                return Ok(Some((
                     value,
                     ResolvedSource::Inherited {
                         ancestor_depth,
                         inner: Box::new(source),
                     },
-                ));
+                )));
             }
 
             current_key = parent.parent_key();
             ancestor_depth = ancestor_depth.saturating_add(1);
         }
 
-        None
+        Ok(None)
     }
 
-    /// Resolves a property value through the full precedence chain, borrowed.
-    ///
-    /// This is the borrowed variant of [`ResolveCx::get_value`]. It returns a reference to the
-    /// effective value, avoiding cloning for large types.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the property is not registered in the registry.
-    pub fn get_value_ref<'cx, T, O>(
-        &'cx self,
-        object: &'cx O,
-        property: Property<T>,
-        style: Option<(&'cx StyleCascade, MatchState)>,
-    ) -> &'cx T
-    where
-        T: Clone + 'static,
-        O: DependencyObject<K>,
-    {
-        // 1. Animation value
-        if let Some(value) = object.property_store().get_animation(property) {
-            return value;
-        }
-
-        // 2. Local value
-        if let Some(value) = object.property_store().get_local(property) {
-            return value;
-        }
-
-        // 3. Style-layer value
-        if let Some((style, state)) = style
-            && let Some(value) = self.style_value_ref(style, state, property)
-        {
-            return value;
-        }
-
-        // 4. Inherited value (if property inherits). Style-aware lookups
-        // include Animation -> Local -> Style for each ancestor; plain
-        // property lookups include Animation -> Local only.
-        if let Some(metadata) = self.registry.get_metadata::<T>(property) {
-            if metadata.inherits()
-                && let Some(value) =
-                    self.inherited_value_ref(object.parent_key(), property, style.map(|s| s.0))
-            {
-                return value;
-            }
-            // 5. Default value
-            return metadata.default_value();
-        }
-
-        panic!("Property {:?} not found in registry", property.id());
-    }
-
-    /// Resolves a property value through the full precedence chain.
+    /// Resolves a property value through the expression-aware precedence chain.
     ///
     /// Precedence (highest to lowest):
     /// 1. Animation value on the object
     /// 2. Local value on the object
     /// 3. Style value (if style provided)
     /// 4. Inherited value (if property inherits, walks parent chain)
-    /// 5. Default value from registry
+    /// 5. Expression default
+    /// 6. Default value from registry
+    ///
+    /// # Panics
+    ///
+    /// Panics when expression evaluation or resolver configuration fails, such
+    /// as a missing resource referenced by an expression, a type mismatch, or
+    /// an expression cycle. Use [`Self::query`] and [`ResolveQuery::try_value`]
+    /// when the caller needs to inspect those errors.
     ///
     /// # Arguments
     ///
@@ -597,9 +889,6 @@ where
     /// * `property` - The property to resolve
     /// * `style` - Optional matched style cascade and state to check for property values
     ///
-    /// # Panics
-    ///
-    /// Panics if the property is not registered in the registry.
     pub fn get_value<T, O>(
         &self,
         object: &O,
@@ -610,17 +899,22 @@ where
         T: Clone + 'static,
         O: DependencyObject<K>,
     {
-        self.get_value_ref(object, property, style).clone()
+        self.resolve_query_value(object, property, style, None)
+            .map(ResolvedValue::into_owned)
+            .unwrap_or_else(|err| resolution_panic(property.id(), err))
     }
 
     /// Resolves a property value and explains which precedence stage supplied it.
     ///
     /// This is an owned, cold-path inspection API. It mirrors
-    /// [`Self::get_value`] and does not affect the borrowed hot path.
+    /// [`Self::get_value`].
     ///
     /// # Panics
     ///
-    /// Panics if the property is not registered in the registry.
+    /// Panics for the same invalid expression or resolver configuration cases
+    /// as [`Self::get_value`]. Use [`Self::query`] and
+    /// [`ResolveQuery::try_explain`] when the caller needs to inspect those
+    /// errors.
     pub fn explain_value<T, O>(
         &self,
         object: &O,
@@ -631,35 +925,95 @@ where
         T: Clone + 'static,
         O: DependencyObject<K>,
     {
-        self.explain_value_with_theme(object, property, style, None)
+        self.explain_query_value(object, property, style, None)
+            .unwrap_or_else(|err| resolution_panic(property.id(), err))
     }
 
-    /// Resolves a property value with a resource fallback and explains the winner.
-    ///
-    /// This mirrors [`Self::get_value_with_theme`]. `ThemeResource` provenance
-    /// is reported only for the property-level fallback passed through
-    /// `resource_key`; cascade entries that point at resources are reported as
-    /// `CascadeRule` or `CascadeDirect` with `resource: Some(_)`.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the property is not registered in the registry.
-    pub fn explain_value_with_theme<T, O>(
-        &self,
-        object: &O,
+    fn resolve_query_value<'cx, T, O>(
+        &'cx self,
+        object: &'cx O,
         property: Property<T>,
-        style: Option<(&StyleCascade, MatchState)>,
-        resource_key: Option<ResourceKey>,
-    ) -> Resolved<T>
+        style: Option<(&'cx StyleCascade, MatchState)>,
+        resource_fallback: Option<ResourceKey>,
+    ) -> Result<ResolvedValue<'cx, T>, ExprError>
     where
         T: Clone + 'static,
         O: DependencyObject<K>,
     {
+        let expr = self.expr;
         if let Some(value) = object.property_store().get_animation(property) {
-            return Resolved {
+            return Ok(ResolvedValue::Borrowed(value));
+        }
+
+        if let Some(value) = object.property_store().get_local(property) {
+            return Ok(ResolvedValue::Borrowed(value));
+        }
+
+        let mut in_flight = InFlightProperties::new();
+        if let Some((style, state)) = style
+            && let Some(value) = self.style_resolved_value(
+                ResolveSubject::from_object(object),
+                style,
+                state,
+                property,
+                expr,
+                &mut in_flight,
+            )?
+        {
+            return Ok(value);
+        }
+
+        if let Some(key) = resource_fallback
+            && let Some(value) = self.theme.get::<T>(key)
+        {
+            return Ok(ResolvedValue::Borrowed(value));
+        }
+
+        let metadata = self.typed_metadata(property)?;
+        if metadata.inherits()
+            && let Some(value) = self.inherited_resolved_value(
+                object.parent_key(),
+                property,
+                style.map(|s| s.0),
+                expr,
+                &mut in_flight,
+            )?
+        {
+            return Ok(value);
+        }
+
+        if let Some(default_expr) = expr.defaults.get(property.id()) {
+            let value = self.eval_default_expression(
+                ResolveSubject::from_object(object),
+                property,
+                style,
+                expr,
+                default_expr,
+                &mut in_flight,
+            )?;
+            return Ok(ResolvedValue::Owned(value));
+        }
+
+        Ok(ResolvedValue::Borrowed(metadata.default_value()))
+    }
+
+    fn explain_query_value<'cx, T, O>(
+        &'cx self,
+        object: &'cx O,
+        property: Property<T>,
+        style: Option<(&'cx StyleCascade, MatchState)>,
+        resource_fallback: Option<ResourceKey>,
+    ) -> Result<Resolved<T>, ExprError>
+    where
+        T: Clone + 'static,
+        O: DependencyObject<K>,
+    {
+        let expr = self.expr;
+        if let Some(value) = object.property_store().get_animation(property) {
+            return Ok(Resolved {
                 value: value.clone(),
                 source: ResolvedSource::Animation,
-            };
+            });
         }
 
         if let Some(value) = object.property_store().get_local(property) {
@@ -667,916 +1021,96 @@ where
                 .property_store()
                 .winning_local_source(property)
                 .unwrap_or(LocalValueSource::Local);
-            return Resolved {
+            return Ok(Resolved {
                 value: value.clone(),
                 source: ResolvedSource::LocalOverride { source },
-            };
+            });
         }
 
+        let mut in_flight = InFlightProperties::new();
         if let Some((style, state)) = style
-            && let Some((value, source)) = self.cascade_value_source(style, state, property)
+            && let Some((value, source)) = self.style_resolved_value_source(
+                ResolveSubject::from_object(object),
+                style,
+                state,
+                property,
+                expr,
+                &mut in_flight,
+            )?
         {
-            return Resolved {
-                value: value.clone(),
+            return Ok(Resolved {
+                value: value.into_owned(),
                 source,
-            };
+            });
         }
 
-        if let Some(key) = resource_key
+        if let Some(key) = resource_fallback
             && let Some(value) = self.theme.get::<T>(key)
         {
-            return Resolved {
+            return Ok(Resolved {
                 value: value.clone(),
                 source: ResolvedSource::ThemeResource { key },
-            };
+            });
         }
 
-        if let Some(metadata) = self.registry.get_metadata::<T>(property) {
-            if metadata.inherits()
-                && let Some((value, source)) =
-                    self.inherited_value_source(object.parent_key(), property, style.map(|s| s.0))
-            {
-                return Resolved {
-                    value: value.clone(),
-                    source,
-                };
-            }
-            return Resolved {
-                value: metadata.default_value().clone(),
-                source: ResolvedSource::Default,
-            };
+        let metadata = self.typed_metadata(property)?;
+        if metadata.inherits()
+            && let Some((value, source)) = self.inherited_resolved_value_source(
+                object.parent_key(),
+                property,
+                style.map(|s| s.0),
+                expr,
+                &mut in_flight,
+            )?
+        {
+            return Ok(Resolved {
+                value: value.into_owned(),
+                source,
+            });
         }
 
-        panic!("Property {:?} not found in registry", property.id());
+        if let Some(default_expr) = expr.defaults.get(property.id()) {
+            let value = self.eval_default_expression(
+                ResolveSubject::from_object(object),
+                property,
+                style,
+                expr,
+                default_expr,
+                &mut in_flight,
+            )?;
+            return Ok(Resolved {
+                value,
+                source: ResolvedSource::DefaultExpression {
+                    property: property.id(),
+                },
+            });
+        }
+
+        Ok(Resolved {
+            value: metadata.default_value().clone(),
+            source: ResolvedSource::Default,
+        })
     }
 
-    /// Resolves a property value with a resource key fallback, borrowed.
-    ///
-    /// This is the borrowed variant of [`ResolveCx::get_value_with_theme`].
-    ///
-    /// # Panics
-    ///
-    /// Panics if the property is not registered in the registry.
-    pub fn get_value_with_theme_ref<'cx, T, O>(
-        &'cx self,
-        object: &'cx O,
-        property: Property<T>,
-        style: Option<(&'cx StyleCascade, MatchState)>,
-        resource_key: Option<ResourceKey>,
-    ) -> &'cx T
-    where
-        T: Clone + 'static,
-        O: DependencyObject<K>,
-    {
-        // 1. Animation value
-        if let Some(value) = object.property_store().get_animation(property) {
-            return value;
-        }
-
-        // 2. Local value
-        if let Some(value) = object.property_store().get_local(property) {
-            return value;
-        }
-
-        // 3. Style-layer value
-        if let Some((style, state)) = style
-            && let Some(value) = self.style_value_ref(style, state, property)
-        {
-            return value;
-        }
-
-        // 4. Theme resource
-        if let Some(key) = resource_key
-            && let Some(value) = self.theme.get::<T>(key)
-        {
-            return value;
-        }
-
-        // 5. Inherited value (if property inherits). Style-aware lookups
-        // include Animation -> Local -> Style for each ancestor; plain
-        // property lookups include Animation -> Local only.
-        if let Some(metadata) = self.registry.get_metadata::<T>(property) {
-            if metadata.inherits()
-                && let Some(value) =
-                    self.inherited_value_ref(object.parent_key(), property, style.map(|s| s.0))
-            {
-                return value;
-            }
-            // 6. Default value
-            return metadata.default_value();
-        }
-
-        panic!("Property {:?} not found in registry", property.id());
-    }
-
-    /// Resolves a property value with a resource key fallback.
-    ///
-    /// This is useful when a property can be set directly or can reference
-    /// a theme resource. The precedence is:
-    ///
-    /// 1. Animation value on the object
-    /// 2. Local value on the object
-    /// 3. Style value (if style provided)
-    /// 4. Theme resource (if `resource_key` provided and present in theme)
-    /// 5. Inherited value (if property inherits)
-    /// 6. Default value from registry
-    ///
-    /// # Arguments
-    ///
-    /// * `object` - The object to get the value for
-    /// * `property` - The property to resolve
-    /// * `style` - Optional matched style cascade and state to check
-    /// * `resource_key` - Optional theme resource key to check
-    ///
-    /// # Panics
-    ///
-    /// Panics if the property is not registered in the registry.
-    pub fn get_value_with_theme<T, O>(
+    fn typed_metadata<T: Clone + 'static>(
         &self,
-        object: &O,
         property: Property<T>,
-        style: Option<(&StyleCascade, MatchState)>,
-        resource_key: Option<ResourceKey>,
-    ) -> T
-    where
-        T: Clone + 'static,
-        O: DependencyObject<K>,
-    {
-        self.get_value_with_theme_ref(object, property, style, resource_key)
-            .clone()
+    ) -> Result<&understory_property::PropertyMetadata<T>, ExprError> {
+        self.registry.get_metadata(property).ok_or_else(|| {
+            if let Some(registration) = self.registry.get(property.id()) {
+                ExprError::TypeMismatch {
+                    expected: TypeId::of::<T>(),
+                    actual: registration.type_id(),
+                }
+            } else {
+                ExprError::MissingProperty {
+                    property: property.id(),
+                }
+            }
+        })
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{StyleBuilder, ThemeBuilder};
-    use crate::{StyleCascadeBuilder, StyleOrigin};
-    use alloc::collections::BTreeMap;
-    use alloc::string::String;
-    use understory_property::{LocalValueSource, PropertyMetadataBuilder, PropertyStore};
-
-    struct TestElement {
-        key: u32,
-        parent: Option<u32>,
-        store: PropertyStore<u32>,
-    }
-
-    impl TestElement {
-        fn new(key: u32, parent: Option<u32>) -> Self {
-            Self {
-                key,
-                parent,
-                store: PropertyStore::new(key),
-            }
-        }
-    }
-
-    impl DependencyObject<u32> for TestElement {
-        fn property_store(&self) -> &PropertyStore<u32> {
-            &self.store
-        }
-
-        fn property_store_mut(&mut self) -> &mut PropertyStore<u32> {
-            &mut self.store
-        }
-
-        fn key(&self) -> u32 {
-            self.key
-        }
-
-        fn parent_key(&self) -> Option<u32> {
-            self.parent
-        }
-    }
-
-    #[test]
-    fn resolve_local_value() {
-        let mut registry = PropertyRegistry::new();
-        let width = registry.register("Width", PropertyMetadataBuilder::new(0.0_f64).build());
-
-        let theme = ThemeBuilder::new().build();
-
-        let mut element = TestElement::new(1, None);
-        element.store.set_local(width, 100.0);
-
-        let cx = ResolveCx::new(&registry, &theme, NoResolveParentLookup);
-        let value = cx.get_value(&element, width, None);
-        assert_eq!(value, 100.0);
-    }
-
-    #[test]
-    fn resolve_local_value_ref_borrows_from_store() {
-        let mut registry = PropertyRegistry::new();
-        let width = registry.register("Width", PropertyMetadataBuilder::new(0.0_f64).build());
-
-        let theme = ThemeBuilder::new().build();
-
-        let mut element = TestElement::new(1, None);
-        element.store.set_local(width, 100.0);
-
-        let cx = ResolveCx::new(&registry, &theme, NoResolveParentLookup);
-        let value_ref = cx.get_value_ref(&element, width, None);
-        assert!(core::ptr::eq(
-            value_ref,
-            element.property_store().get_local(width).unwrap()
-        ));
-        assert_eq!(*value_ref, 100.0);
-    }
-
-    #[test]
-    fn resolve_animation_over_local() {
-        let mut registry = PropertyRegistry::new();
-        let width = registry.register("Width", PropertyMetadataBuilder::new(0.0_f64).build());
-
-        let theme = ThemeBuilder::new().build();
-
-        let mut element = TestElement::new(1, None);
-        element.store.set_local(width, 100.0);
-        element.store.set_animation(width, 200.0);
-
-        let cx = ResolveCx::new(&registry, &theme, NoResolveParentLookup);
-        let value = cx.get_value(&element, width, None);
-        assert_eq!(value, 200.0);
-    }
-
-    #[test]
-    fn resolve_local_over_style() {
-        let mut registry = PropertyRegistry::new();
-        let width = registry.register("Width", PropertyMetadataBuilder::new(0.0_f64).build());
-
-        let theme = ThemeBuilder::new().build();
-        let style = StyleBuilder::new().set(width, 50.0).build();
-        let style = StyleCascadeBuilder::new()
-            .push_style(StyleOrigin::Override, style)
-            .build();
-
-        let mut element = TestElement::new(1, None);
-        element.store.set_local(width, 100.0);
-
-        let cx = ResolveCx::new(&registry, &theme, NoResolveParentLookup);
-        let value = cx.get_value(&element, width, Some((&style, style.root_state())));
-        assert_eq!(value, 100.0);
-    }
-
-    #[test]
-    fn resolve_style_value() {
-        let mut registry = PropertyRegistry::new();
-        let width = registry.register("Width", PropertyMetadataBuilder::new(0.0_f64).build());
-
-        let theme = ThemeBuilder::new().build();
-        let style = StyleBuilder::new().set(width, 50.0).build();
-        let style = StyleCascadeBuilder::new()
-            .push_style(StyleOrigin::Override, style)
-            .build();
-
-        let element = TestElement::new(1, None);
-
-        let cx = ResolveCx::new(&registry, &theme, NoResolveParentLookup);
-        let value = cx.get_value(&element, width, Some((&style, style.root_state())));
-        assert_eq!(value, 50.0);
-    }
-
-    #[test]
-    fn resolve_default_value() {
-        let mut registry = PropertyRegistry::new();
-        let width = registry.register("Width", PropertyMetadataBuilder::new(42.0_f64).build());
-
-        let theme = ThemeBuilder::new().build();
-        let element = TestElement::new(1, None);
-
-        let cx = ResolveCx::new(&registry, &theme, NoResolveParentLookup);
-        let value = cx.get_value(&element, width, None);
-        assert_eq!(value, 42.0);
-    }
-
-    #[test]
-    fn resolve_inherited_value() {
-        let mut registry = PropertyRegistry::new();
-        let font_size = registry.register(
-            "FontSize",
-            PropertyMetadataBuilder::new(12.0_f64)
-                .inherits(true)
-                .build(),
-        );
-
-        let theme = ThemeBuilder::new().build();
-
-        let mut parent = TestElement::new(1, None);
-        parent.store.set_local(font_size, 16.0);
-
-        let child = TestElement::new(2, Some(1));
-
-        let elements: BTreeMap<u32, &TestElement> =
-            [(1, &parent), (2, &child)].into_iter().collect();
-
-        let cx = ResolveCx::new(
-            &registry,
-            &theme,
-            PropertyParentLookup::new(|key| {
-                elements
-                    .get(&key)
-                    .map(|e| (e.property_store(), e.parent_key()))
-            }),
-        );
-
-        let value = cx.get_value(&child, font_size, None);
-        assert_eq!(value, 16.0);
-    }
-
-    #[test]
-    fn resolve_local_over_inherited() {
-        let mut registry = PropertyRegistry::new();
-        let font_size = registry.register(
-            "FontSize",
-            PropertyMetadataBuilder::new(12.0_f64)
-                .inherits(true)
-                .build(),
-        );
-
-        let theme = ThemeBuilder::new().build();
-
-        let mut parent = TestElement::new(1, None);
-        parent.store.set_local(font_size, 16.0);
-
-        let mut child = TestElement::new(2, Some(1));
-        child.store.set_local(font_size, 20.0);
-
-        let elements: BTreeMap<u32, &TestElement> =
-            [(1, &parent), (2, &child)].into_iter().collect();
-
-        let cx = ResolveCx::new(
-            &registry,
-            &theme,
-            PropertyParentLookup::new(|key| {
-                elements
-                    .get(&key)
-                    .map(|e| (e.property_store(), e.parent_key()))
-            }),
-        );
-
-        let value = cx.get_value(&child, font_size, None);
-        assert_eq!(value, 20.0);
-    }
-
-    #[test]
-    fn resolve_style_over_inherited() {
-        let mut registry = PropertyRegistry::new();
-        let font_size = registry.register(
-            "FontSize",
-            PropertyMetadataBuilder::new(12.0_f64)
-                .inherits(true)
-                .build(),
-        );
-
-        let theme = ThemeBuilder::new().build();
-        let style = StyleBuilder::new().set(font_size, 18.0).build();
-        let style = StyleCascadeBuilder::new()
-            .push_style(StyleOrigin::Override, style)
-            .build();
-
-        let mut parent = TestElement::new(1, None);
-        parent.store.set_local(font_size, 16.0);
-
-        let child = TestElement::new(2, Some(1));
-
-        let elements: BTreeMap<u32, &TestElement> =
-            [(1, &parent), (2, &child)].into_iter().collect();
-
-        let cx = ResolveCx::new(
-            &registry,
-            &theme,
-            PropertyParentLookup::new(|key| {
-                elements
-                    .get(&key)
-                    .map(|e| (e.property_store(), e.parent_key()))
-            }),
-        );
-
-        let value = cx.get_value(&child, font_size, Some((&style, style.root_state())));
-        assert_eq!(value, 18.0);
-    }
-
-    #[test]
-    fn resolve_inherited_value_from_parent_style_state() {
-        use crate::{SelectorInputs, SelectorStep, TypeTag};
-
-        const BUTTON: TypeTag = TypeTag(1);
-        const TEXT: TypeTag = TypeTag(2);
-
-        struct StyledLookup<'a> {
-            entries: &'a [(u32, &'a TestElement, MatchState)],
-        }
-
-        impl<'a> ResolveParentLookup<'a, u32> for StyledLookup<'a> {
-            fn lookup_resolve_parent(&self, key: u32) -> Option<ResolveParent<'a, u32>> {
-                self.entries
-                    .iter()
-                    .find(|(entry_key, _, _)| *entry_key == key)
-                    .map(|(_, element, match_state)| {
-                        ResolveParent::with_match_state(
-                            element.property_store(),
-                            element.parent_key(),
-                            *match_state,
-                        )
-                    })
-            }
-        }
-
-        let mut registry = PropertyRegistry::new();
-        let foreground = registry.register(
-            "Foreground",
-            PropertyMetadataBuilder::new(0_u32).inherits(true).build(),
-        );
-
-        let theme = ThemeBuilder::new().build();
-        let button_style = StyleBuilder::new().set(foreground, 0xff_ff_ff_u32).build();
-        let cascade = StyleCascadeBuilder::new()
-            .push_rule(
-                StyleOrigin::Base,
-                SelectorStep::type_tag(BUTTON),
-                button_style,
-            )
-            .build();
-
-        let button = TestElement::new(1, None);
-        let text = TestElement::new(2, Some(1));
-        let button_state =
-            cascade.enter_subject(cascade.root_state(), &SelectorInputs::typed(BUTTON));
-        let text_state = cascade.enter_subject(button_state, &SelectorInputs::typed(TEXT));
-
-        let plain_elements: BTreeMap<u32, &TestElement> =
-            [(1, &button), (2, &text)].into_iter().collect();
-        let plain_cx = ResolveCx::new(
-            &registry,
-            &theme,
-            PropertyParentLookup::new(|key| {
-                plain_elements
-                    .get(&key)
-                    .map(|e| (e.property_store(), e.parent_key()))
-            }),
-        );
-        assert_eq!(
-            plain_cx.get_value(&text, foreground, Some((&cascade, text_state))),
-            0,
-            "style-blind parent lookup preserves property-only inheritance"
-        );
-
-        let entries = [(1, &button, button_state), (2, &text, text_state)];
-        let styled_cx = ResolveCx::new(&registry, &theme, StyledLookup { entries: &entries });
-        assert_eq!(
-            styled_cx.get_value(&text, foreground, Some((&cascade, text_state))),
-            0xff_ff_ff,
-            "style-aware parent lookup should inherit the styled button foreground"
-        );
-    }
-
-    #[test]
-    fn resolve_with_theme_resource() {
-        use crate::ResourceKey;
-
-        const ACCENT_WIDTH: ResourceKey = ResourceKey::new(0);
-
-        let mut registry = PropertyRegistry::new();
-        let width = registry.register("Width", PropertyMetadataBuilder::new(0.0_f64).build());
-
-        let theme = ThemeBuilder::new().set(ACCENT_WIDTH, 75.0_f64).build();
-        let element = TestElement::new(1, None);
-
-        let cx = ResolveCx::new(&registry, &theme, NoResolveParentLookup);
-        let value = cx.get_value_with_theme(&element, width, None, Some(ACCENT_WIDTH));
-        assert_eq!(value, 75.0);
-    }
-
-    #[test]
-    fn resolve_with_theme_resource_ref_borrows_from_theme() {
-        use crate::ResourceKey;
-
-        const ACCENT_WIDTH: ResourceKey = ResourceKey::new(0);
-
-        let mut registry = PropertyRegistry::new();
-        let width = registry.register("Width", PropertyMetadataBuilder::new(0.0_f64).build());
-
-        let theme = ThemeBuilder::new().set(ACCENT_WIDTH, 75.0_f64).build();
-        let element = TestElement::new(1, None);
-
-        let cx = ResolveCx::new(&registry, &theme, NoResolveParentLookup);
-        let value_ref = cx.get_value_with_theme_ref(&element, width, None, Some(ACCENT_WIDTH));
-        assert!(core::ptr::eq(
-            value_ref,
-            theme.get::<f64>(ACCENT_WIDTH).unwrap()
-        ));
-        assert_eq!(*value_ref, 75.0);
-    }
-
-    #[test]
-    fn resolve_local_over_theme() {
-        use crate::ResourceKey;
-
-        const ACCENT_WIDTH: ResourceKey = ResourceKey::new(0);
-
-        let mut registry = PropertyRegistry::new();
-        let width = registry.register("Width", PropertyMetadataBuilder::new(0.0_f64).build());
-
-        let theme = ThemeBuilder::new().set(ACCENT_WIDTH, 75.0_f64).build();
-        let mut element = TestElement::new(1, None);
-        element.store.set_local(width, 100.0);
-
-        let cx = ResolveCx::new(&registry, &theme, NoResolveParentLookup);
-        let value = cx.get_value_with_theme(&element, width, None, Some(ACCENT_WIDTH));
-        assert_eq!(value, 100.0);
-    }
-
-    #[test]
-    fn resolve_style_over_theme() {
-        use crate::ResourceKey;
-
-        const ACCENT_WIDTH: ResourceKey = ResourceKey::new(0);
-
-        let mut registry = PropertyRegistry::new();
-        let width = registry.register("Width", PropertyMetadataBuilder::new(0.0_f64).build());
-
-        let theme = ThemeBuilder::new().set(ACCENT_WIDTH, 75.0_f64).build();
-        let style = StyleBuilder::new().set(width, 50.0).build();
-        let style = StyleCascadeBuilder::new()
-            .push_style(StyleOrigin::Override, style)
-            .build();
-        let element = TestElement::new(1, None);
-
-        let cx = ResolveCx::new(&registry, &theme, NoResolveParentLookup);
-        let value = cx.get_value_with_theme(
-            &element,
-            width,
-            Some((&style, style.root_state())),
-            Some(ACCENT_WIDTH),
-        );
-        assert_eq!(value, 50.0);
-    }
-
-    #[test]
-    fn resolve_style_resource_over_theme_fallback() {
-        use crate::ResourceKey;
-
-        const THEME_FALLBACK: ResourceKey = ResourceKey::new(0);
-        const STYLE_TOKEN: ResourceKey = ResourceKey::new(1);
-
-        let mut registry = PropertyRegistry::new();
-        let width = registry.register("Width", PropertyMetadataBuilder::new(0.0_f64).build());
-
-        let theme = ThemeBuilder::new()
-            .set(THEME_FALLBACK, 75.0_f64)
-            .set(STYLE_TOKEN, 50.0_f64)
-            .build();
-        let style = StyleBuilder::new().set_resource(width, STYLE_TOKEN).build();
-        let style = StyleCascadeBuilder::new()
-            .push_style(StyleOrigin::Override, style)
-            .build();
-        let element = TestElement::new(1, None);
-
-        let cx = ResolveCx::new(&registry, &theme, NoResolveParentLookup);
-        let value = cx.get_value_with_theme(
-            &element,
-            width,
-            Some((&style, style.root_state())),
-            Some(THEME_FALLBACK),
-        );
-        assert_eq!(value, 50.0);
-    }
-
-    #[test]
-    fn resolve_theme_over_inherited() {
-        use crate::ResourceKey;
-
-        const ACCENT_SIZE: ResourceKey = ResourceKey::new(0);
-
-        let mut registry = PropertyRegistry::new();
-        let font_size = registry.register(
-            "FontSize",
-            PropertyMetadataBuilder::new(12.0_f64)
-                .inherits(true)
-                .build(),
-        );
-
-        let theme = ThemeBuilder::new().set(ACCENT_SIZE, 18.0_f64).build();
-
-        let mut parent = TestElement::new(1, None);
-        parent.store.set_local(font_size, 16.0);
-
-        let child = TestElement::new(2, Some(1));
-
-        let elements: BTreeMap<u32, &TestElement> =
-            [(1, &parent), (2, &child)].into_iter().collect();
-
-        let cx = ResolveCx::new(
-            &registry,
-            &theme,
-            PropertyParentLookup::new(|key| {
-                elements
-                    .get(&key)
-                    .map(|e| (e.property_store(), e.parent_key()))
-            }),
-        );
-
-        let value = cx.get_value_with_theme(&child, font_size, None, Some(ACCENT_SIZE));
-        assert_eq!(value, 18.0);
-    }
-
-    #[test]
-    fn explain_reports_local_source_over_cascade() {
-        let mut registry = PropertyRegistry::new();
-        let width = registry.register("Width", PropertyMetadataBuilder::new(0.0_f64).build());
-
-        let theme = ThemeBuilder::new().build();
-        let style = StyleBuilder::new().set(width, 50.0).build();
-        let cascade = StyleCascadeBuilder::new()
-            .push_style(StyleOrigin::Override, style)
-            .build();
-
-        let mut element = TestElement::new(1, None);
-        element
-            .store
-            .set_local_with_source(width, 100.0, LocalValueSource::TemplateBinding);
-
-        let cx = ResolveCx::new(&registry, &theme, NoResolveParentLookup);
-        let resolved = cx.explain_value(&element, width, Some((&cascade, cascade.root_state())));
-
-        assert_eq!(resolved.value, 100.0);
-        assert_eq!(
-            resolved.source,
-            ResolvedSource::LocalOverride {
-                source: LocalValueSource::TemplateBinding,
-            }
-        );
-    }
-
-    #[test]
-    fn explain_reports_winning_rule_specificity() {
-        use crate::{ClassId, SelectorInputs, SelectorStep, TypeTag};
-
-        const BUTTON: TypeTag = TypeTag(1);
-        const PRIMARY: ClassId = ClassId(1);
-
-        let mut registry = PropertyRegistry::new();
-        let width = registry.register("Width", PropertyMetadataBuilder::new(0.0_f64).build());
-
-        let theme = ThemeBuilder::new().build();
-        let broad_selector = SelectorStep::type_tag(BUTTON);
-        let specific_selector = SelectorStep::type_tag(BUTTON).with_class(PRIMARY);
-        let cascade = StyleCascadeBuilder::new()
-            .push_rules(
-                StyleOrigin::Sheet,
-                [
-                    (
-                        broad_selector.clone(),
-                        StyleBuilder::new().set(width, 10.0).build(),
-                    ),
-                    (
-                        specific_selector.clone(),
-                        StyleBuilder::new().set(width, 20.0).build(),
-                    ),
-                ],
-            )
-            .build();
-        let classes = [PRIMARY];
-        let state = cascade.enter_subject(
-            cascade.root_state(),
-            &SelectorInputs::new(Some(BUTTON), &classes, &[]),
-        );
-        let element = TestElement::new(1, None);
-
-        let source = cascade.winning_source_for_id(state, width.id()).unwrap();
-        assert_eq!(
-            source.rule().unwrap().selector(),
-            &specific_selector.clone().into()
-        );
-
-        let cx = ResolveCx::new(&registry, &theme, NoResolveParentLookup);
-        let resolved = cx.explain_value(&element, width, Some((&cascade, state)));
-
-        assert_eq!(resolved.value, 20.0);
-        assert_eq!(
-            resolved.source,
-            ResolvedSource::CascadeRule {
-                origin: StyleOrigin::Sheet,
-                selector: specific_selector.clone().into(),
-                specificity: specific_selector.specificity(),
-                source_index: 0,
-                order: 1,
-                resource: None,
-            }
-        );
-    }
-
-    #[test]
-    fn explain_reports_cascade_resource_indirection() {
-        use crate::{ResourceKey, SelectorInputs, SelectorStep, TypeTag};
-
-        const CARD: TypeTag = TypeTag(1);
-        const CARD_BG: ResourceKey = ResourceKey::new(1);
-        const FALLBACK_BG: ResourceKey = ResourceKey::new(2);
-
-        let mut registry = PropertyRegistry::new();
-        let background =
-            registry.register("Background", PropertyMetadataBuilder::new(0_u32).build());
-
-        let theme = ThemeBuilder::new()
-            .set(CARD_BG, 0x00_11_22_u32)
-            .set(FALLBACK_BG, 0xff_ee_dd_u32)
-            .build();
-        let selector = SelectorStep::type_tag(CARD);
-        let style = StyleBuilder::new()
-            .set_resource(background, CARD_BG)
-            .build();
-        let cascade = StyleCascadeBuilder::new()
-            .push_rule(StyleOrigin::Sheet, selector.clone(), style)
-            .build();
-        let state = cascade.enter_subject(cascade.root_state(), &SelectorInputs::typed(CARD));
-        let element = TestElement::new(1, None);
-
-        let cx = ResolveCx::new(&registry, &theme, NoResolveParentLookup);
-        let resolved = cx.explain_value_with_theme(
-            &element,
-            background,
-            Some((&cascade, state)),
-            Some(FALLBACK_BG),
-        );
-
-        assert_eq!(resolved.value, 0x00_11_22);
-        assert_eq!(
-            resolved.source,
-            ResolvedSource::CascadeRule {
-                origin: StyleOrigin::Sheet,
-                selector: selector.into(),
-                specificity: Specificity(0, 0, 0, 1),
-                source_index: 0,
-                order: 0,
-                resource: Some(CARD_BG),
-            }
-        );
-    }
-
-    #[test]
-    fn explain_reports_property_level_theme_resource() {
-        use crate::ResourceKey;
-
-        const ACCENT_WIDTH: ResourceKey = ResourceKey::new(0);
-
-        let mut registry = PropertyRegistry::new();
-        let width = registry.register("Width", PropertyMetadataBuilder::new(0.0_f64).build());
-
-        let theme = ThemeBuilder::new().set(ACCENT_WIDTH, 75.0_f64).build();
-        let element = TestElement::new(1, None);
-
-        let cx = ResolveCx::new(&registry, &theme, NoResolveParentLookup);
-        let resolved = cx.explain_value_with_theme(&element, width, None, Some(ACCENT_WIDTH));
-
-        assert_eq!(resolved.value, 75.0);
-        assert_eq!(
-            resolved.source,
-            ResolvedSource::ThemeResource { key: ACCENT_WIDTH }
-        );
-    }
-
-    #[test]
-    fn explain_reports_inherited_ancestor_depth_and_inner_source() {
-        let mut registry = PropertyRegistry::new();
-        let font_size = registry.register(
-            "FontSize",
-            PropertyMetadataBuilder::new(12.0_f64)
-                .inherits(true)
-                .build(),
-        );
-
-        let theme = ThemeBuilder::new().build();
-        let mut grandparent = TestElement::new(1, None);
-        grandparent
-            .store
-            .set_local_with_source(font_size, 18.0, LocalValueSource::TemplateDefault);
-        let parent = TestElement::new(2, Some(1));
-        let child = TestElement::new(3, Some(2));
-
-        let elements: BTreeMap<u32, &TestElement> = [(1, &grandparent), (2, &parent), (3, &child)]
-            .into_iter()
-            .collect();
-
-        let cx = ResolveCx::new(
-            &registry,
-            &theme,
-            PropertyParentLookup::new(|key| {
-                elements
-                    .get(&key)
-                    .map(|e| (e.property_store(), e.parent_key()))
-            }),
-        );
-        let resolved = cx.explain_value(&child, font_size, None);
-
-        assert_eq!(resolved.value, 18.0);
-        assert_eq!(
-            resolved.source,
-            ResolvedSource::Inherited {
-                ancestor_depth: 2,
-                inner: Box::new(ResolvedSource::LocalOverride {
-                    source: LocalValueSource::TemplateDefault,
-                }),
-            }
-        );
-    }
-
-    #[test]
-    fn explain_reports_default_fallback() {
-        let mut registry = PropertyRegistry::new();
-        let width = registry.register("Width", PropertyMetadataBuilder::new(42.0_f64).build());
-
-        let theme = ThemeBuilder::new().build();
-        let element = TestElement::new(1, None);
-
-        let cx = ResolveCx::new(&registry, &theme, NoResolveParentLookup);
-        let resolved = cx.explain_value(&element, width, None);
-
-        assert_eq!(resolved.value, 42.0);
-        assert_eq!(resolved.source, ResolvedSource::Default);
-    }
-
-    #[test]
-    fn cx_accessors() {
-        let registry = PropertyRegistry::new();
-        let theme = ThemeBuilder::new().build();
-
-        let cx = ResolveCx::<u32, _>::new(&registry, &theme, NoResolveParentLookup);
-
-        // Can access registry and theme
-        assert_eq!(cx.registry().len(), 0);
-        assert!(cx.theme().is_empty());
-    }
-
-    #[test]
-    fn resolve_string_local_ref() {
-        let mut registry = PropertyRegistry::new();
-        let text = registry.register("Text", PropertyMetadataBuilder::new(String::new()).build());
-
-        let theme = ThemeBuilder::new().build();
-
-        let mut element = TestElement::new(1, None);
-        element.store.set_local(text, String::from("hello world"));
-
-        let cx = ResolveCx::new(&registry, &theme, NoResolveParentLookup);
-        let value_ref = cx.get_value_ref(&element, text, None);
-        assert!(core::ptr::eq(
-            value_ref,
-            element.property_store().get_local(text).unwrap()
-        ));
-        assert_eq!(value_ref.as_str(), "hello world");
-    }
-
-    /// Asserts `ResolveCx::get_value` matches `DependencyObjectExt::get_inherited`
-    /// when style=None and theme is empty for an inheriting property.
-    /// This prevents precedence drift between the two APIs.
-    #[test]
-    fn resolve_matches_get_inherited() {
-        use understory_property::DependencyObjectExt;
-
-        let mut registry = PropertyRegistry::new();
-        let font_size = registry.register(
-            "FontSize",
-            PropertyMetadataBuilder::new(12.0_f64)
-                .inherits(true)
-                .build(),
-        );
-
-        let theme = ThemeBuilder::new().build();
-
-        // Build a 3-level hierarchy: grandparent -> parent -> child
-        let mut grandparent = TestElement::new(1, None);
-        grandparent.store.set_local(font_size, 24.0);
-
-        let mut parent = TestElement::new(2, Some(1));
-        parent.store.set_animation(font_size, 18.0); // Animation at parent level
-
-        let child = TestElement::new(3, Some(2));
-
-        let elements: BTreeMap<u32, &TestElement> = [(1, &grandparent), (2, &parent), (3, &child)]
-            .into_iter()
-            .collect();
-
-        let store_lookup = |key| {
-            elements
-                .get(&key)
-                .map(|e| (e.property_store(), e.parent_key()))
-        };
-
-        // ResolveCx::get_value with no style
-        let cx = ResolveCx::new(&registry, &theme, PropertyParentLookup::new(store_lookup));
-        let cx_value = cx.get_value(&child, font_size, None);
-
-        // DependencyObjectExt::get_inherited
-        let ext_value = child.get_inherited(font_size, &registry, &|key| {
-            elements
-                .get(&key)
-                .map(|e| (e.property_store(), e.parent_key()))
-        });
-
-        // Both should return the same value (parent's animation: 18.0)
-        assert_eq!(cx_value, ext_value);
-        assert_eq!(cx_value, 18.0);
-    }
-}
+#[path = "resolve_tests.rs"]
+mod resolve_tests;

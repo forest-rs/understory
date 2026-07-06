@@ -68,7 +68,7 @@
 //! };
 //! use understory_property::{DependencyObject, PropertyRegistry, PropertyStore};
 //! use understory_style::{
-//!     NoResolveParentLookup, ResolveCx, StyleBuilder, StyleCascadeBuilder,
+//!     ExpressionLayer, NoResolveParentLookup, ResolveCx, StyleBuilder, StyleCascadeBuilder,
 //!     StyleOrigin, ThemeBuilder,
 //! };
 //!
@@ -106,7 +106,8 @@
 //!     .push_style(StyleOrigin::Base, style)
 //!     .build();
 //! let theme = ThemeBuilder::new().build();
-//! let cx = ResolveCx::new(&registry, &theme, NoResolveParentLookup);
+//! let expressions = ExpressionLayer::new();
+//! let cx = ResolveCx::new(&registry, &theme, &expressions, NoResolveParentLookup);
 //!
 //! let primitive = surface.resolve_surface(
 //!     &cx,

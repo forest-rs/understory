@@ -16,6 +16,7 @@ env:
     -p understory_overlay
     -p understory_axis
     -p understory_property_binding
+    -p understory_property_expression
     -p understory_box_tree
     -p understory_event_state
     -p understory_focus

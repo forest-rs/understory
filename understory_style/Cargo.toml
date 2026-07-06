@@ -11,6 +11,7 @@ categories = ["data-structures", "no-std"]
 [dependencies]
 invalidation.workspace = true
 understory_property.workspace = true
+understory_property_expression = { workspace = true, features = ["libm"] }
 
 [lints]
 workspace = true

@@ -14,7 +14,8 @@ use understory_presentation_properties::{
 };
 use understory_property::{DependencyObject, PropertyRegistry, PropertyStore};
 use understory_style::{
-    NoResolveParentLookup, ResolveCx, StyleBuilder, StyleCascadeBuilder, StyleOrigin, ThemeBuilder,
+    ExpressionLayer, NoResolveParentLookup, ResolveCx, StyleBuilder, StyleCascadeBuilder,
+    StyleOrigin, ThemeBuilder,
 };
 
 const GEOMETRY: Channel = Channel::new(0);
@@ -98,7 +99,8 @@ fn main() {
         .build();
 
     let theme = ThemeBuilder::new().build();
-    let cx = ResolveCx::new(&registry, &theme, NoResolveParentLookup);
+    let expressions = ExpressionLayer::new();
+    let cx = ResolveCx::new(&registry, &theme, &expressions, NoResolveParentLookup);
     let button = Widget::new(42);
 
     let resolved_surface = surface.resolve_surface(

@@ -4,12 +4,21 @@
 // After you edit the crate's doc comment, run this command, then check README.md for any missing links
 // cargo rdme --workspace-project=understory_style --heading-base-level=0
 
-//! Understory Style: Style and theme resolution for dependency properties.
+//! Understory Style: presentation policy for dependency properties.
 //!
-//! This crate extends `understory_property` with style and theme support,
-//! providing the full WinUI-style precedence chain:
+//! This crate extends `understory_property` with selector matching, cascade
+//! rules, theme resources, style expressions, and expression-aware value
+//! resolution. It is the presentation policy layer: it decides which property
+//! value wins for a styled subject, but it does not own the app's reactive
+//! runtime.
 //!
-//! **Animation → Local → Style → Theme → Inherited → Default**
+//! Resolution follows this precedence chain:
+//!
+//! **Animation → Local → Style → Resource fallback → Inherited → Expression default → Default**
+//!
+//! The resource fallback stage is present only when a configured
+//! [`ResolveQuery`] supplies one. Theme values are also consulted when a winning
+//! style entry or expression token points at a [`ResourceKey`].
 //!
 //! ## Start Here
 //!
@@ -25,13 +34,16 @@
 //!
 //! - selector matching over child and descendant paths;
 //! - optional style vocabulary interning from author-facing names to compact ids;
-//! - style and theme values for dependency properties;
-//! - conservative style invalidation through `invalidation` channels;
+//! - style values, style expressions, and theme resources for dependency properties;
+//! - expression-aware resolution through animation, local, style, inheritance,
+//!   expression defaults, and registry defaults;
+//! - conservative style invalidation facts through `invalidation` channels;
 //! - inspection hooks for matched rules and winning style sources.
 //!
-//! The crate does not own widgets, templates, layout, rendering, event
-//! dispatch, sibling relationships, parent queries, or structural selectors
-//! such as `nth-*`, `odd`, or `even`.
+//! The crate does not own widgets, templates, bindings, animation sampling,
+//! layout, rendering, event dispatch, caching, dirty queues, frame scheduling,
+//! sibling relationships, parent queries, or structural selectors such as
+//! `nth-*`, `odd`, or `even`.
 //!
 //! ### Glossary
 //!
@@ -241,16 +253,223 @@
 //! assert_eq!(light_theme.get::<u32>(ACCENT_COLOR), Some(&0x0078D4));
 //! ```
 //!
+//! ### Expression Defaults
+//!
+//! Expression defaults derive a property value from other resolved properties
+//! and theme resources. App code normally keeps one [`ExpressionLayer`] and
+//! passes it to [`ResolveCx::new`].
+//!
+//! ```rust
+//! use understory_property::{
+//!     DependencyObject, PropertyMetadataBuilder, PropertyRegistry, PropertyStore,
+//! };
+//! use understory_style::{
+//!     ExpressionLayer, NoResolveParentLookup, ResolveCx, ResourceKey, ThemeBuilder, expr,
+//! };
+//!
+//! const GAP_TOKEN: ResourceKey = ResourceKey::new(0);
+//!
+//! struct Element {
+//!     key: u32,
+//!     parent: Option<u32>,
+//!     store: PropertyStore<u32>,
+//! }
+//!
+//! impl DependencyObject<u32> for Element {
+//!     fn property_store(&self) -> &PropertyStore<u32> { &self.store }
+//!     fn property_store_mut(&mut self) -> &mut PropertyStore<u32> { &mut self.store }
+//!     fn key(&self) -> u32 { self.key }
+//!     fn parent_key(&self) -> Option<u32> { self.parent }
+//! }
+//!
+//! let mut registry = PropertyRegistry::new();
+//! let scale = registry.register("Scale", PropertyMetadataBuilder::new(2.0_f64).build());
+//! let padding = registry.register("Padding", PropertyMetadataBuilder::new(0.0_f64).build());
+//!
+//! let mut expressions = ExpressionLayer::new();
+//! expressions.set_default(padding, expr::prop(scale) * 2.0 + expr::token(GAP_TOKEN));
+//!
+//! let theme = ThemeBuilder::new().set(GAP_TOKEN, 4.0_f64).build();
+//! let element = Element {
+//!     key: 1,
+//!     parent: None,
+//!     store: PropertyStore::new(1),
+//! };
+//! let cx = ResolveCx::new(&registry, &theme, &expressions, NoResolveParentLookup);
+//!
+//! let value = cx.get_value(&element, padding, None);
+//! assert_eq!(value, 8.0);
+//! ```
+//!
+//! ### Style Expressions
+//!
+//! Style entries can also be expressions. [`ResolveCx`] evaluates them through
+//! the expression layer it carries.
+//!
+//! ```rust
+//! use understory_property::{
+//!     DependencyObject, PropertyMetadataBuilder, PropertyRegistry, PropertyStore,
+//! };
+//! use understory_style::{
+//!     ExpressionLayer, NoResolveParentLookup, ResolveCx, ResourceKey, StyleBuilder,
+//!     StyleCascadeBuilder, StyleOrigin, ThemeBuilder, expr,
+//! };
+//!
+//! const GAP_TOKEN: ResourceKey = ResourceKey::new(0);
+//!
+//! struct Element {
+//!     key: u32,
+//!     parent: Option<u32>,
+//!     store: PropertyStore<u32>,
+//! }
+//!
+//! impl DependencyObject<u32> for Element {
+//!     fn property_store(&self) -> &PropertyStore<u32> { &self.store }
+//!     fn property_store_mut(&mut self) -> &mut PropertyStore<u32> { &mut self.store }
+//!     fn key(&self) -> u32 { self.key }
+//!     fn parent_key(&self) -> Option<u32> { self.parent }
+//! }
+//!
+//! let mut registry = PropertyRegistry::new();
+//! let scale = registry.register("Scale", PropertyMetadataBuilder::new(2.0_f64).build());
+//! let width = registry.register("Width", PropertyMetadataBuilder::new(0.0_f64).build());
+//!
+//! let style = StyleBuilder::new()
+//!     .set(scale, 3.0)
+//!     .set_expr(width, expr::prop(scale) * 2.0 + expr::token(GAP_TOKEN))
+//!     .build();
+//! let cascade = StyleCascadeBuilder::new()
+//!     .push_style(StyleOrigin::Override, style)
+//!     .build();
+//!
+//! let theme = ThemeBuilder::new().set(GAP_TOKEN, 4.0_f64).build();
+//! let expressions = ExpressionLayer::new();
+//! let element = Element {
+//!     key: 1,
+//!     parent: None,
+//!     store: PropertyStore::new(1),
+//! };
+//! let cx = ResolveCx::new(&registry, &theme, &expressions, NoResolveParentLookup);
+//!
+//! let value = cx.get_value(&element, width, Some((&cascade, cascade.root_state())));
+//! assert_eq!(value, 10.0);
+//! ```
+//!
+//! ### Expression Dependency Inspection
+//!
+//! Expressions expose static dependency sets through
+//! [`ExprDeps`]. Hosts can inspect
+//! style expressions with [`Style::expression_entries`] and default expressions
+//! with
+//! [`ExpressionDefaults::expression_entries`][understory_property_expression::ExpressionDefaults::expression_entries]
+//! to build an invalidation index without evaluating expression bodies.
+//!
+//! The usual host policy is:
+//!
+//! - When a dependency property in `entry.deps().properties` changes on a
+//!   subject, invalidate the entry's target property on that subject.
+//! - If the target property inherits, also invalidate descendants that can
+//!   observe the inherited result.
+//! - When a dependency resource in `entry.deps().resources` changes, invalidate
+//!   target properties whose expressions mention that resource. A conservative
+//!   whole-theme invalidation can instead invalidate every expression target.
+//! - Convert each invalidated target property to work with
+//!   [`PropertyRegistry::affects_channels`][understory_property::PropertyRegistry::affects_channels].
+//!
+//! `understory_style` reports the dependency facts; it deliberately does not
+//! own caching, scheduling, dirty queues, or tree-wide invalidation walks.
+//!
+//! ### Host Frame Loop
+//!
+//! A typical host update loop keeps the orchestration outside this crate:
+//!
+//! 1. Apply app, input, or model changes to dependency-property stores.
+//! 2. Drain `understory_property_binding` so template and app bindings write
+//!    their target local-source slots.
+//! 3. Walk style subjects with [`StyleCascade::enter_subject`] or
+//!    [`StyleCascade::restyle_subject`] when selector inputs change.
+//! 4. Expand expression dependencies with [`Style::expression_entries`] and
+//!    [`ExpressionLayer::defaults`] so property and resource changes invalidate
+//!    derived targets.
+//! 5. Sample animation or motion systems into animation slots.
+//! 6. Resolve values through [`ResolveCx`] for rendering,
+//!    layout, accessibility, or diagnostics.
+//!
+//! The `style_reactive_loop` example in the workspace demonstrates this full
+//! shape end to end. The `style_motion_loop` example focuses on the
+//! style-to-motion handoff: resolve the styled target, sample a
+//! `understory_motion` transition, write each sample to the animation slot, and
+//! clear that slot when the transition completes so the styled target is visible
+//! again.
+//!
+//! ### Configured Resolution Queries
+//!
+//! [`ResolveCx::get_value`] and [`ResolveCx::explain_value`] are the normal
+//! APIs. Use [`ResolveCx::query`] when the lookup policy itself is part of the
+//! question, such as combining style state with a property-level resource
+//! fallback.
+//!
+//! ```rust
+//! use understory_property::{
+//!     DependencyObject, PropertyMetadataBuilder, PropertyRegistry, PropertyStore,
+//! };
+//! use understory_style::{
+//!     ExpressionLayer, NoResolveParentLookup, ResolveCx, ResourceKey, ThemeBuilder, expr,
+//! };
+//!
+//! const WIDTH_TOKEN: ResourceKey = ResourceKey::new(1);
+//! const DEFAULT_WIDTH: ResourceKey = ResourceKey::new(2);
+//!
+//! struct Element {
+//!     key: u32,
+//!     parent: Option<u32>,
+//!     store: PropertyStore<u32>,
+//! }
+//!
+//! impl DependencyObject<u32> for Element {
+//!     fn property_store(&self) -> &PropertyStore<u32> { &self.store }
+//!     fn property_store_mut(&mut self) -> &mut PropertyStore<u32> { &mut self.store }
+//!     fn key(&self) -> u32 { self.key }
+//!     fn parent_key(&self) -> Option<u32> { self.parent }
+//! }
+//!
+//! let mut registry = PropertyRegistry::new();
+//! let width = registry.register("Width", PropertyMetadataBuilder::new(0.0_f64).build());
+//!
+//! let mut expressions = ExpressionLayer::new();
+//! expressions.set_default(width, expr::token(DEFAULT_WIDTH));
+//!
+//! let theme = ThemeBuilder::new()
+//!     .set(WIDTH_TOKEN, 80.0_f64)
+//!     .set(DEFAULT_WIDTH, 40.0_f64)
+//!     .build();
+//! let element = Element {
+//!     key: 1,
+//!     parent: None,
+//!     store: PropertyStore::new(1),
+//! };
+//! let resolve = ResolveCx::new(&registry, &theme, &expressions, NoResolveParentLookup);
+//!
+//! let value = resolve
+//!     .query(&element, width)
+//!     .resource_fallback(WIDTH_TOKEN)
+//!     .try_value()
+//!     .unwrap();
+//!
+//! assert_eq!(value, 80.0);
+//! ```
+//!
 //! ### Resolution Context
 //!
-//! [`ResolveCx`] bundles everything needed to resolve property values
-//! through the full precedence chain. This avoids passing many parameters
-//! to resolution functions.
+//! [`ResolveCx`] bundles everything needed to resolve property values through
+//! animation, local, style, inheritance, and default stages. This avoids passing
+//! many parameters to resolution functions.
 //!
 //! ```rust
 //! use understory_style::{
-//!     ClassId, NoResolveParentLookup, SelectorStep, PseudoClassId, ResolveCx, SelectorInputs,
-//!     StyleCascade, StyleCascadeBuilder, StyleBuilder, StyleOrigin, PartTag, ThemeBuilder,
+//!     ClassId, ExpressionLayer, NoResolveParentLookup, SelectorStep, PseudoClassId, ResolveCx,
+//!     SelectorInputs, StyleCascade, StyleCascadeBuilder, StyleBuilder, StyleOrigin, PartTag,
+//!     ThemeBuilder,
 //! };
 //! use understory_property::{
 //!     DependencyObject, PropertyMetadataBuilder, PropertyRegistry, PropertyStore,
@@ -260,6 +479,7 @@
 //! let width = registry.register("Width", PropertyMetadataBuilder::new(0.0_f64).build());
 //!
 //! let theme = ThemeBuilder::new().build();
+//! let expressions = ExpressionLayer::new();
 //!
 //! const PRIMARY: ClassId = ClassId(1);
 //! const HOVER: PseudoClassId = PseudoClassId(1);
@@ -298,8 +518,9 @@
 //!     store: PropertyStore::new(1),
 //! };
 //!
-//! // Create resolution context
-//! let cx = ResolveCx::new(&registry, &theme, NoResolveParentLookup);
+//! // Create resolution context. Flat doctests use NoResolveParentLookup; apps
+//! // normally pass their tree's parent/style-state lookup here.
+//! let cx = ResolveCx::new(&registry, &theme, &expressions, NoResolveParentLookup);
 //!
 //! // Resolve with style (no hover)
 //! let inputs = SelectorInputs::new(None, &[PRIMARY], &[]);
@@ -446,16 +667,22 @@ pub use matcher::{
     StyleChangeSet, SubjectRestyle, WinningStyleSource,
 };
 pub use resolve::{
-    NoResolveParentLookup, PropertyParentLookup, ResolveCx, ResolveParent, ResolveParentLookup,
-    Resolved, ResolvedSource,
+    ExprResolveOptions, NoResolveParentLookup, PropertyParentLookup, ResolveCx, ResolveParent,
+    ResolveParentLookup, ResolveQuery, Resolved, ResolvedSource,
 };
 pub use selector::{
     ClassId, IdSet, PartTag, PseudoClassId, Selector, SelectorBuilder, SelectorCombinator,
     SelectorInputs, SelectorInputsOwned, SelectorMismatch, SelectorStep, Specificity, TypeTag,
 };
-pub use style::{Style, StyleBuilder, StyleValueRef};
+pub use style::{
+    ExprRef, Style, StyleBuilder, StyleExpressionId, StyleExpressionRef, StyleValueKind,
+    StyleValueRef,
+};
 pub use stylesheet::StyleOrigin;
 pub use theme::{ResourceKey, Theme, ThemeBuilder};
+pub use understory_property_expression::{
+    ExprDeps, ExprError, ExprResourceKey, ExpressionLayer, expr,
+};
 pub use vocabulary::{
     StylePartName, StyleTokenName, StyleTokenSet, StyleVocabulary, StyleVocabularyIdBindings,
 };

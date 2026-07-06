@@ -11,6 +11,7 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use understory_property::ErasedValue;
+use understory_property_expression::ExprResourceKey;
 
 /// A key for looking up resources in a [`Theme`].
 ///
@@ -55,6 +56,18 @@ impl fmt::Debug for ResourceKey {
 impl fmt::Display for ResourceKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "ResourceKey({})", self.0)
+    }
+}
+
+impl From<ResourceKey> for ExprResourceKey {
+    fn from(key: ResourceKey) -> Self {
+        Self::new(key.index())
+    }
+}
+
+impl From<ExprResourceKey> for ResourceKey {
+    fn from(key: ExprResourceKey) -> Self {
+        Self::new(key.index())
     }
 }
 
@@ -125,6 +138,21 @@ impl Theme {
             .binary_search_by_key(&key, |(k, _)| *k)
             .ok()
             .and_then(|idx| self.inner.resources[idx].1.downcast_ref())
+    }
+
+    /// Gets an erased owned copy of the value for a resource key, if present.
+    ///
+    /// This preserves the typed borrowed [`Self::get`] API while supporting
+    /// expression evaluation contexts that need to resolve resources without
+    /// knowing their concrete value type at compile time.
+    #[must_use]
+    #[inline]
+    pub fn get_erased(&self, key: ResourceKey) -> Option<ErasedValue> {
+        self.inner
+            .resources
+            .binary_search_by_key(&key, |(k, _)| *k)
+            .ok()
+            .map(|idx| self.inner.resources[idx].1.clone())
     }
 
     /// Returns `true` if this theme has a value for the resource key.
@@ -347,5 +375,14 @@ mod tests {
 
         // PRIMARY is u32, trying to get as f64 fails
         assert!(theme.get::<f64>(PRIMARY).is_none());
+    }
+
+    #[test]
+    fn theme_get_erased_returns_owned_value() {
+        let theme = ThemeBuilder::new().set(FONT_SIZE, 14.0_f64).build();
+
+        let value = theme.get_erased(FONT_SIZE).unwrap();
+        assert_eq!(value.downcast_ref::<f64>(), Some(&14.0));
+        assert!(theme.get_erased(PRIMARY).is_none());
     }
 }

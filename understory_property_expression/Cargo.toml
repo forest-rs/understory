@@ -1,0 +1,30 @@
+[package]
+name = "understory_property_expression"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Typed pure expression IR for Understory dependency properties"
+readme = "README.md"
+keywords = ["property", "expression", "style", "ui", "no_std"]
+categories = ["data-structures", "no-std"]
+
+[dependencies]
+color.workspace = true
+libm = { version = "0.2", optional = true, default-features = false }
+smallvec.workspace = true
+understory_property.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["libm"]
+std = ["color/std"]
+libm = ["dep:libm", "color/libm"]
+
+[package.metadata.docs.rs]
+all-features = true
+default-target = "x86_64-unknown-linux-gnu"
+targets = []

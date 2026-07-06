@@ -14,6 +14,7 @@ use invalidation::ChannelSet;
 
 use crate::id::{Property, PropertyId};
 use crate::metadata::PropertyMetadata;
+use crate::value::ErasedValue;
 
 /// A registration entry for a property.
 ///
@@ -51,6 +52,16 @@ impl PropertyRegistration {
     #[inline]
     pub fn inherits(&self) -> bool {
         self.metadata.inherits()
+    }
+
+    /// Returns the property's metadata default as an erased owned value.
+    ///
+    /// This is useful for type-erased resolution contexts that need to resolve
+    /// arbitrary dependency properties without knowing their concrete value
+    /// type at compile time.
+    #[must_use]
+    pub fn default_value_erased(&self) -> ErasedValue {
+        self.metadata.default_value_erased()
     }
 }
 
@@ -188,6 +199,17 @@ impl PropertyRegistry {
             .is_some_and(|r| r.inherits())
     }
 
+    /// Returns the metadata default for a registered property as an erased
+    /// owned value.
+    ///
+    /// Returns `None` if `id` is not registered.
+    #[must_use]
+    pub fn default_value_erased(&self, id: PropertyId) -> Option<ErasedValue> {
+        self.properties
+            .get(id.index() as usize)
+            .map(PropertyRegistration::default_value_erased)
+    }
+
     /// Returns the metadata for a typed property.
     ///
     /// Returns `None` if the property is not registered or the type doesn't match.
@@ -224,6 +246,7 @@ trait ErasedMetadata: Any {
     fn as_any(&self) -> &dyn Any;
     fn affects_channels(&self) -> ChannelSet;
     fn inherits(&self) -> bool;
+    fn default_value_erased(&self) -> ErasedValue;
 }
 
 impl<T: Clone + 'static> ErasedMetadata for PropertyMetadata<T> {
@@ -237,6 +260,10 @@ impl<T: Clone + 'static> ErasedMetadata for PropertyMetadata<T> {
 
     fn inherits(&self) -> bool {
         Self::inherits(self)
+    }
+
+    fn default_value_erased(&self) -> ErasedValue {
+        ErasedValue::new(self.default_value().clone())
     }
 }
 
@@ -338,6 +365,20 @@ mod tests {
         let metadata = registry.get_metadata(width).unwrap();
         assert_eq!(metadata.default_value(), &100.0);
         assert!(metadata.inherits());
+    }
+
+    #[test]
+    fn registry_default_value_erased() {
+        let mut registry = PropertyRegistry::new();
+        let width = registry.register("Width", PropertyMetadataBuilder::new(100.0_f64).build());
+
+        let value = registry.default_value_erased(width.id()).unwrap();
+        assert_eq!(value.downcast_ref::<f64>(), Some(&100.0));
+        assert!(
+            registry
+                .default_value_erased(PropertyId::new(999))
+                .is_none()
+        );
     }
 
     #[test]

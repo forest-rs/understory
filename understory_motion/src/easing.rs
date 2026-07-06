@@ -20,15 +20,15 @@ impl TimingFunction {
     /// input progress to output progress.
     #[must_use]
     pub const fn cubic_bezier(x1: f64, y1: f64, x2: f64, y2: f64) -> Self {
-        debug_assert!(
+        assert!(
             x1.is_finite() && (0.0 <= x1 && x1 <= 1.0),
             "cubic Bezier x1 must be finite and in 0.0..=1.0"
         );
-        debug_assert!(
+        assert!(
             x2.is_finite() && (0.0 <= x2 && x2 <= 1.0),
             "cubic Bezier x2 must be finite and in 0.0..=1.0"
         );
-        debug_assert!(
+        assert!(
             y1.is_finite() && y2.is_finite(),
             "cubic Bezier y control points must be finite"
         );
@@ -38,8 +38,12 @@ impl TimingFunction {
     }
 
     /// Samples the timing function at normalized input progress `progress`.
+    ///
+    /// Progress values outside `0.0..=1.0` are clamped, but `progress` must be
+    /// finite.
     #[must_use]
     pub fn sample(self, progress: f64) -> f64 {
+        assert!(progress.is_finite(), "timing progress must be finite");
         match self.kind {
             TimingFunctionKind::Linear => progress.clamp(0.0, 1.0),
             TimingFunctionKind::CubicBezier(curve) => curve.sample(progress),
@@ -144,6 +148,12 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "timing progress must be finite")]
+    fn timing_function_rejects_non_finite_input() {
+        let _ = TimingFunction::LINEAR.sample(f64::NAN);
+    }
+
+    #[test]
     fn cubic_bezier_allows_y_overshoot() {
         let curve = TimingFunction::cubic_bezier(0.25, -0.5, 0.75, 1.5);
 
@@ -151,9 +161,8 @@ mod tests {
     }
 
     #[test]
-    #[cfg(debug_assertions)]
     #[should_panic(expected = "cubic Bezier x1 must be finite and in 0.0..=1.0")]
-    fn cubic_bezier_rejects_invalid_x_in_debug_builds() {
+    fn cubic_bezier_rejects_invalid_x() {
         let _ = TimingFunction::cubic_bezier(-0.1, 0.0, 0.75, 1.0);
     }
 }

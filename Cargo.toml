@@ -7,6 +7,7 @@ members = [
   "understory_animation",
   "understory_animation_timeline",
   "understory_property_binding",
+  "understory_property_expression",
   "understory_guide",
   "understory_index",
   "understory_box_decoration",
@@ -48,6 +49,7 @@ repository = "https://github.com/forest-rs/understory"
 # let member crates opt into `std` or `libm` explicitly via their own features.
 kurbo = { version = "0.13.0", default-features = false }
 bitflags = "2.10.0"
+color = { version = "0.3.3", default-features = false }
 hashbrown = { version = "0.17.0", default-features = false, features = [
   "default-hasher",
 ] }
@@ -82,6 +84,7 @@ understory_presentation = { version = "0.1.0", path = "understory_presentation",
 understory_presentation_properties = { version = "0.1.0", path = "understory_presentation_properties", default-features = false }
 understory_precise_hit = { version = "0.1.0", path = "understory_precise_hit", default-features = false }
 understory_property = { version = "0.1.0", path = "understory_property", default-features = false }
+understory_property_expression = { version = "0.1.0", path = "understory_property_expression", default-features = false }
 understory_responder = { version = "0.1.0", path = "understory_responder", default-features = false }
 understory_selection = { version = "0.1.0", path = "understory_selection", default-features = false }
 understory_style = { version = "0.1.0", path = "understory_style", default-features = false }

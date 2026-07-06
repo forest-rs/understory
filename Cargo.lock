@@ -643,6 +643,7 @@ dependencies = [
  "understory_focus",
  "understory_index",
  "understory_inspector",
+ "understory_motion",
  "understory_outline",
  "understory_precise_hit",
  "understory_presentation",
@@ -775,6 +776,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "understory_property_expression"
+version = "0.1.0"
+dependencies = [
+ "color",
+ "libm",
+ "smallvec",
+ "understory_property",
+]
+
+[[package]]
 name = "understory_responder"
 version = "0.1.0"
 dependencies = [
@@ -793,6 +804,7 @@ version = "0.1.0"
 dependencies = [
  "invalidation",
  "understory_property",
+ "understory_property_expression",
 ]
 
 [[package]]
