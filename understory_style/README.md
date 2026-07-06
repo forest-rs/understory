@@ -55,7 +55,7 @@ The crate owns:
 - expression-aware resolution through animation, local, style, inheritance,
   expression defaults, and registry defaults;
 - conservative style invalidation facts through `invalidation` channels;
-- inspection hooks for matched rules and winning style sources.
+- inspection hooks for matched rules and style source provenance.
 
 The crate does not own widgets, templates, bindings, animation sampling,
 layout, rendering, event dispatch, caching, dirty queues, frame scheduling,
@@ -376,8 +376,9 @@ assert_eq!(value, 10.0);
 
 Expressions expose static dependency sets through
 [`ExprDeps`]. Hosts can inspect
-style expressions with [`Style::expression_entries`] and default expressions
-with
+cascade style expressions for a matched subject with
+[`StyleCascade::expression_entries`], standalone style payloads with
+[`Style::expression_entries`], and default expressions with
 [`ExpressionDefaults::expression_entries`][understory_property_expression::ExpressionDefaults::expression_entries]
 to build an invalidation index without evaluating expression bodies.
 
@@ -405,9 +406,9 @@ A typical host update loop keeps the orchestration outside this crate:
    their target local-source slots.
 3. Walk style subjects with [`StyleCascade::enter_subject`] or
    [`StyleCascade::restyle_subject`] when selector inputs change.
-4. Expand expression dependencies with [`Style::expression_entries`] and
-   [`ExpressionLayer::defaults`] so property and resource changes invalidate
-   derived targets.
+4. Expand expression dependencies with [`StyleCascade::expression_entries`]
+   and [`ExpressionLayer::defaults`] so property and resource changes
+   invalidate derived targets.
 5. Sample animation or motion systems into animation slots.
 6. Resolve values through [`ResolveCx`] for rendering,
    layout, accessibility, or diagnostics.

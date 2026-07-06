@@ -1,7 +1,7 @@
 // Copyright 2026 the Understory Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use crate::matcher::WinningStyleSource;
+use crate::matcher::StyleSourceRef;
 use crate::resolve::ResolvedSource;
 use crate::{ResourceKey, StyleExpressionId, StyleOrigin};
 use crate::{Selector, Specificity};
@@ -56,9 +56,9 @@ impl CascadeSourceMetadata {
     }
 }
 
-pub(super) fn source_metadata(source: &WinningStyleSource<'_>) -> CascadeSourceMetadata {
+pub(super) fn source_metadata(source: &StyleSourceRef<'_>) -> CascadeSourceMetadata {
     match source {
-        WinningStyleSource::Direct {
+        StyleSourceRef::Direct {
             origin,
             source_index,
             ..
@@ -66,7 +66,7 @@ pub(super) fn source_metadata(source: &WinningStyleSource<'_>) -> CascadeSourceM
             origin: *origin,
             source_index: *source_index,
         },
-        WinningStyleSource::Rule(rule) => CascadeSourceMetadata::Rule {
+        StyleSourceRef::Rule(rule) => CascadeSourceMetadata::Rule {
             origin: rule.origin(),
             selector: rule.selector().clone(),
             specificity: rule.selector().specificity(),

@@ -17,12 +17,16 @@ use core::cell::{Ref, RefCell};
 
 use invalidation::ChannelSet;
 use understory_property::{Property, PropertyId, PropertyRegistry};
+use understory_property_expression::{ErasedExpr, ExprDeps};
 
 use crate::selector::{
     ClassId, PartTag, PseudoClassId, Selector, SelectorCombinator, SelectorInputs, Specificity,
     TypeTag,
 };
-use crate::style::{ErasedStyleValueKind, Style, StyleValueKind, StyleValueRef};
+use crate::style::{
+    ErasedStyleValueKind, Style, StyleExpressionId, StyleExpressionRef, StyleValueKind,
+    StyleValueRef,
+};
 use crate::stylesheet::StyleOrigin;
 
 const LINEAR_LOOKUP_LIMIT: usize = 8;
@@ -579,61 +583,59 @@ impl SubjectRestyle {
     }
 }
 
-/// The style source that wins a property at a matched state.
+/// Borrowed reference to one style source in a cascade.
 #[derive(Copy, Clone, Debug)]
-pub enum WinningStyleSource<'a> {
-    /// A direct style source wins.
+pub enum StyleSourceRef<'a> {
+    /// A direct style source.
     Direct {
-        /// The winning style origin.
+        /// The source's cascade origin.
         origin: StyleOrigin,
         /// Source index used for cascade ordering.
         source_index: usize,
-        /// The winning direct style.
+        /// The direct style payload.
         style: &'a Style,
     },
-    /// A selector rule wins.
+    /// A selector rule source.
     Rule(&'a MatchRule),
 }
 
-impl WinningStyleSource<'_> {
-    /// Returns the winning source's cascade origin.
+impl<'a> StyleSourceRef<'a> {
+    /// Returns this source's cascade origin.
     #[must_use]
     pub fn origin(&self) -> StyleOrigin {
-        match self {
-            Self::Direct { origin, .. } => *origin,
+        match *self {
+            Self::Direct { origin, .. } => origin,
             Self::Rule(rule) => rule.origin(),
         }
     }
 
-    /// Returns the winning source index.
+    /// Returns this source's source index.
     #[must_use]
     pub fn source_index(&self) -> usize {
-        match self {
-            Self::Direct { source_index, .. } => *source_index,
+        match *self {
+            Self::Direct { source_index, .. } => source_index,
             Self::Rule(rule) => rule.source_index(),
         }
     }
 
-    /// Returns the winning style payload.
+    /// Returns this source's style payload.
     #[must_use]
-    pub fn style(&self) -> &Style {
-        match self {
+    pub fn style(&self) -> &'a Style {
+        match *self {
             Self::Direct { style, .. } => style,
             Self::Rule(rule) => rule.style(),
         }
     }
 
-    /// Returns the winning selector rule, if the source is rule-based.
+    /// Returns this source's selector rule, if it is rule-based.
     #[must_use]
-    pub fn rule(&self) -> Option<&MatchRule> {
-        match self {
+    pub fn rule(&self) -> Option<&'a MatchRule> {
+        match *self {
             Self::Direct { .. } => None,
             Self::Rule(rule) => Some(rule),
         }
     }
-}
 
-impl<'a> WinningStyleSource<'a> {
     fn cascade_key(&self) -> CascadeEntryKey {
         match self {
             Self::Direct {
@@ -679,6 +681,69 @@ impl<'a> WinningStyleSource<'a> {
 
     fn contains_id(&self, property_id: PropertyId) -> bool {
         self.style().contains_id(property_id)
+    }
+}
+
+/// Borrowed reference to one expression entry from a cascade style source.
+#[derive(Copy, Clone, Debug)]
+pub struct StyleCascadeExpressionRef<'a> {
+    source: StyleSourceRef<'a>,
+    entry: StyleExpressionRef<'a>,
+}
+
+impl<'a> StyleCascadeExpressionRef<'a> {
+    /// Returns the cascade origin of the style source that owns this expression.
+    #[must_use]
+    pub fn origin(self) -> StyleOrigin {
+        self.source.origin()
+    }
+
+    /// Returns the source index of the style source that owns this expression.
+    #[must_use]
+    pub fn source_index(self) -> usize {
+        self.source.source_index()
+    }
+
+    /// Returns the style payload that owns this expression.
+    #[must_use]
+    pub fn style(self) -> &'a Style {
+        self.source.style()
+    }
+
+    /// Returns the selector rule that owns this expression, if any.
+    #[must_use]
+    pub fn rule(self) -> Option<&'a MatchRule> {
+        self.source.rule()
+    }
+
+    /// Returns the underlying style expression entry.
+    #[must_use]
+    pub const fn style_entry(self) -> StyleExpressionRef<'a> {
+        self.entry
+    }
+
+    /// Returns the property set by this expression entry.
+    #[must_use]
+    pub const fn property(self) -> PropertyId {
+        self.entry.property()
+    }
+
+    /// Returns the expression entry id within the owning [`Style`].
+    #[must_use]
+    pub const fn expression_id(self) -> StyleExpressionId {
+        self.entry.expression_id()
+    }
+
+    /// Returns the erased expression.
+    #[must_use]
+    pub const fn expression(self) -> &'a ErasedExpr {
+        self.entry.expression()
+    }
+
+    /// Returns the expression's static dependencies.
+    #[must_use]
+    pub fn deps(self) -> &'a ExprDeps {
+        self.entry.deps()
     }
 }
 
@@ -749,6 +814,31 @@ impl StyleCascade {
         self.inner.matcher.matching_rules(state)
     }
 
+    /// Returns style expression entries from every source relevant to `state`.
+    ///
+    /// This includes direct styles and every selector rule that matches the
+    /// state. It is an inspection and invalidation API, not a cascade-winner
+    /// query: entries are not deduplicated by property, and lower-priority
+    /// sources are still returned when they are relevant to the matched subject.
+    /// Each returned entry exposes the owning source's origin, source index,
+    /// style payload, and optional selector rule.
+    ///
+    /// Iteration is deterministic: direct style sources are yielded first in
+    /// source-index order, then matching rules are yielded in matcher order.
+    /// Within each style payload, expression entries are yielded in property-id
+    /// order.
+    pub fn expression_entries(
+        &self,
+        state: MatchState,
+    ) -> impl Iterator<Item = StyleCascadeExpressionRef<'_>> {
+        self.style_sources(state).flat_map(|source| {
+            source
+                .style()
+                .expression_entries()
+                .map(move |entry| StyleCascadeExpressionRef { source, entry })
+        })
+    }
+
     /// Returns the best legacy Style-layer entry for a property at this state.
     ///
     /// Ordering is deterministic:
@@ -795,7 +885,7 @@ impl StyleCascade {
         &self,
         state: MatchState,
         property_id: PropertyId,
-    ) -> Option<WinningStyleSource<'_>> {
+    ) -> Option<StyleSourceRef<'_>> {
         self.compute_winning_source(state, property_id)
     }
 
@@ -851,7 +941,7 @@ impl StyleCascade {
         &self,
         state: MatchState,
         property: Property<T>,
-    ) -> Option<WinningStyleSource<'_>> {
+    ) -> Option<StyleSourceRef<'_>> {
         self.winning_source_for_id(state, property.id())
     }
 
@@ -938,7 +1028,7 @@ impl StyleCascade {
         &self,
         state: MatchState,
         property_id: PropertyId,
-    ) -> Option<WinningStyleSource<'_>> {
+    ) -> Option<StyleSourceRef<'_>> {
         let mut best = None;
 
         for source in self.style_sources(state) {
@@ -946,9 +1036,10 @@ impl StyleCascade {
                 continue;
             }
             let key = source.cascade_key();
-            if best.as_ref().is_none_or(
-                |(best_key, _): &(CascadeEntryKey, WinningStyleSource<'_>)| key > *best_key,
-            ) {
+            if best
+                .as_ref()
+                .is_none_or(|(best_key, _): &(CascadeEntryKey, StyleSourceRef<'_>)| key > *best_key)
+            {
                 best = Some((key, source));
             }
         }
@@ -956,21 +1047,21 @@ impl StyleCascade {
         best.map(|(_, source)| source)
     }
 
-    fn style_sources(&self, state: MatchState) -> impl Iterator<Item = WinningStyleSource<'_>> {
-        let direct_styles =
-            self.inner
-                .direct_styles
-                .iter()
-                .map(|source| WinningStyleSource::Direct {
-                    origin: source.origin,
-                    source_index: source.source_index,
-                    style: &source.style,
-                });
+    fn style_sources(&self, state: MatchState) -> impl Iterator<Item = StyleSourceRef<'_>> {
+        let direct_styles = self
+            .inner
+            .direct_styles
+            .iter()
+            .map(|source| StyleSourceRef::Direct {
+                origin: source.origin,
+                source_index: source.source_index,
+                style: &source.style,
+            });
         let rules = self
             .inner
             .matcher
             .matching_rules(state)
-            .map(WinningStyleSource::Rule);
+            .map(StyleSourceRef::Rule);
         direct_styles.chain(rules)
     }
 }
@@ -1241,6 +1332,7 @@ mod tests {
     use super::*;
     use crate::{
         IdSet, PartTag, PseudoClassId, SelectorCombinator, SelectorStep, StyleBuilder, TypeTag,
+        expr,
     };
     use invalidation::Channel;
     use understory_property::{PropertyMetadataBuilder, PropertyRegistry};
@@ -1769,6 +1861,60 @@ mod tests {
         assert!(background_source.rule().is_none());
         assert_eq!(background_source.origin(), StyleOrigin::Base);
         assert_eq!(background_source.style().get(background), Some(&10));
+    }
+
+    #[test]
+    fn cascade_expression_entries_include_direct_styles_and_matching_rules() {
+        let mut registry = PropertyRegistry::new();
+        let width = registry.register("Width", PropertyMetadataBuilder::new(0.0_f64).build());
+        let height = registry.register("Height", PropertyMetadataBuilder::new(0.0_f64).build());
+        let scale = registry.register("Scale", PropertyMetadataBuilder::new(1.0_f64).build());
+        let opacity = registry.register("Opacity", PropertyMetadataBuilder::new(1.0_f64).build());
+
+        let cascade = StyleCascadeBuilder::new()
+            .push_style(
+                StyleOrigin::Base,
+                StyleBuilder::new()
+                    .set_expr(width, expr::prop(scale) * 2.0)
+                    .build(),
+            )
+            .push_rule(
+                StyleOrigin::Sheet,
+                SelectorStep::type_tag(TOGGLE),
+                StyleBuilder::new()
+                    .set_expr(height, expr::prop(width) + 1.0)
+                    .build(),
+            )
+            .push_rule(
+                StyleOrigin::Sheet,
+                SelectorStep::part_tag(TRACK),
+                StyleBuilder::new()
+                    .set_expr(opacity, expr::lit(0.5))
+                    .build(),
+            )
+            .build();
+
+        let root = cascade.enter_subject(cascade.root_state(), &SelectorInputs::typed(TOGGLE));
+        let entries = cascade.expression_entries(root).collect::<Vec<_>>();
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].property(), width.id());
+        assert_eq!(entries[0].origin(), StyleOrigin::Base);
+        assert_eq!(entries[0].source_index(), 0);
+        assert!(entries[0].rule().is_none());
+        assert!(entries[0].style().contains(width));
+        assert_eq!(entries[0].deps().properties.as_slice(), &[scale.id()]);
+        assert_eq!(entries[0].style_entry().property(), entries[0].property());
+        assert_eq!(
+            entries[0].style_entry().expression_id(),
+            entries[0].expression_id()
+        );
+
+        assert_eq!(entries[1].property(), height.id());
+        assert_eq!(entries[1].origin(), StyleOrigin::Sheet);
+        assert_eq!(entries[1].source_index(), 1);
+        assert!(entries[1].rule().is_some());
+        assert_eq!(entries[1].deps().properties.as_slice(), &[width.id()]);
     }
 
     #[test]

@@ -13,8 +13,8 @@ use invalidation::Channel;
 use understory_property::{PropertyMetadataBuilder, PropertyRegistry};
 use understory_style::{
     MatchState, PartTag, PseudoClassId, Selector, SelectorInputs, SelectorInputsOwned,
-    SelectorStep, StyleBuilder, StyleCascade, StyleCascadeBuilder, StyleOrigin, TypeTag,
-    WinningStyleSource,
+    SelectorStep, StyleBuilder, StyleCascade, StyleCascadeBuilder, StyleOrigin, StyleSourceRef,
+    TypeTag,
 };
 
 const PAINT: Channel = Channel::new(1);
@@ -91,9 +91,7 @@ fn main() {
         restyle.changed_channels().contains(PAINT)
     );
 
-    if let Some(WinningStyleSource::Rule(rule)) =
-        cascade.winning_source(restyle.state(), background)
-    {
+    if let Some(StyleSourceRef::Rule(rule)) = cascade.winning_source(restyle.state(), background) {
         println!("background came from selector {:?}", rule.selector());
     }
 
