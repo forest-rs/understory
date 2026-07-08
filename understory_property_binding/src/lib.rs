@@ -4,12 +4,15 @@
 // After you edit the crate's doc comment, run this command, then check README.md for any missing links
 // cargo rdme --workspace-project=understory_property_binding --heading-base-level=0
 
-//! Understory Property Binding: small one-way property binding primitives.
+//! Understory Property Binding: small property binding primitives.
 //!
 //! This crate provides deterministic one-way binding evaluation for
 //! `understory_property` endpoints. It owns binding declarations, endpoint
 //! indexes, dirty binding selection, dependency ordering, cycle checks, and
-//! drain reports.
+//! drain reports. On top of that one-way core, [`BindingGraph`] owns two-way
+//! binding policy: reverse write-back for host-initiated target writes,
+//! provenance-based echo suppression, lifecycle-safe teardown, and a
+//! deterministic conflict rule.
 //!
 //! The intended first use is control-template glue: one property endpoint feeds
 //! another property endpoint, and the host decides how those endpoints map onto
@@ -17,7 +20,7 @@
 //!
 //! This crate deliberately does **not** own property storage, style or theme
 //! resolution, opinion composition, widget trees, host scheduling, expression
-//! parsing, two-way binding policy, or application invalidation graph ownership.
+//! parsing, or application invalidation graph ownership.
 //!
 //! ## Overview
 //!
@@ -36,7 +39,11 @@
 //! - [`EndpointKey`]: type-erased endpoint key passed across the host boundary.
 //! - [`BindingHost`]: host adapter that reads and writes erased endpoint values.
 //! - [`BindingSet`]: registered bindings plus their dirty state and dependency
-//!   graph.
+//!   graph. Construct this directly with [`BindingSet::new`] for one-way-only
+//!   integrations.
+//! - [`BindingGraph`]: safe composite owner for a [`BindingSet`] plus two-way
+//!   policy. Construct this with [`BindingGraph::new`] when a host may register
+//!   two-way bindings or wants one lifecycle API for both directions.
 //! - [`ValueSource`]: typed handle for a single stored value that can feed a
 //!   binding endpoint.
 //! - [`ExternalSource`]: typed handle for a pull-based value source that can
@@ -49,6 +56,11 @@
 //!   completed before the error.
 //! - [`BindingStats`]: structural snapshot for diagnostics and integration
 //!   tests.
+//! - [`TwoWayBindingId`]: handle returned when a [`BindingGraph`] registers a
+//!   two-way binding.
+//! - [`TwoWayReport`]: drain summary returned by [`BindingGraph::drain`].
+//! - [`ReverseRejection`]: diagnostic entry for a reverse write-back that was
+//!   skipped instead of written.
 //!
 //! ## Evaluation model
 //!
@@ -70,6 +82,36 @@
 //! Bindings can be removed with [`BindingSet::unbind`], or in groups with
 //! [`BindingSet::clear_endpoint`] and [`BindingSet::clear_owner`]. Binding ids
 //! remain stable and are not reused.
+//!
+//! ## Two-way bindings
+//!
+//! [`BindingGraph`] is the host-facing API when two-way bindings are enabled:
+//! it owns the [`BindingSet`] and reverse write-back policy together, so
+//! [`BindingGraph::clear_owner`],
+//! [`BindingGraph::clear_endpoint`], and [`BindingGraph::unbind`] remove both
+//! directions as one declaration.
+//!
+//! A two-way binding registers its forward direction as an ordinary binding
+//! here, while the graph owns the reverse direction as policy: the host routes
+//! control-initiated writes (a slider drag, text input) through
+//! [`BindingGraph::report_endpoint_write`] instead of a raw binding
+//! notification, and the next [`BindingGraph::drain`] propagates the value back
+//! to the binding's source without destroying the binding and without echoing
+//! it back at the target. Binding-driven writes delivered through
+//! [`BindingHost::set_erased`] are not reported back to the graph.
+//!
+//! Because the reverse direction is policy rather than a graph edge, the pair's
+//! intentional back-edge is exempt from cycle rejection while real cycles
+//! through the forward edge are still caught.
+//!
+//! Migration note: code that previously held a separate binding set and two-way
+//! sidecar should hold one [`BindingGraph`] instead. Register one-way bindings
+//! with [`BindingGraph::bind`] or [`BindingGraph::bind_map`], register two-way
+//! bindings with [`BindingGraph::bind_two_way`],
+//! [`BindingGraph::bind_two_way_map`], or
+//! [`BindingGraph::try_bind_two_way_map`], report host/control writes with
+//! [`BindingGraph::report_endpoint_write`], and drain with
+//! [`BindingGraph::drain`].
 //!
 //! ## Invalidation boundary
 //!
@@ -124,6 +166,9 @@
 //!   are not rolled back, and the error's partial report still carries their
 //!   affected channels. The failed binding and the rest of the current dirty
 //!   batch remain dirty for a later retry.
+//! - Two-way reverse conversion rejection and reverse target type mismatch are
+//!   reported as [`ReverseRejection`] entries in [`TwoWayReport`]. They do not
+//!   stop unrelated write-back or forward propagation.
 //! - A binding runs only after its source endpoint has been marked dirty; adding
 //!   a binding does not immediately copy the source value.
 //! - The binding set stores closures for mapped bindings, so mapped evaluators
@@ -203,16 +248,22 @@ extern crate alloc;
 
 mod endpoint;
 mod error;
+mod graph;
 mod host;
 mod report;
 mod set;
+mod two_way;
 mod value_source;
 
 pub use endpoint::{BindingId, EndpointKey, PropertyEndpoint};
 pub use error::{BindingDrainError, BindingError};
+pub use graph::BindingGraph;
 pub use host::{BindingHost, BindingHostExt};
 pub use report::{BindingReport, BindingStats, BindingWrite};
 pub use set::BindingSet;
+pub use two_way::{
+    ReverseRejection, ReverseRejectionReason, TwoWayBindingId, TwoWayDrainError, TwoWayReport,
+};
 pub use value_source::{
     ExternalSource, ExternalSourceId, VALUE_SOURCE_PROPERTY_ID, ValueSource, ValueSourceId,
     ValueSourceStore, value_source_property,

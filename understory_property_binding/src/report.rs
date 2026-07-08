@@ -4,6 +4,13 @@
 use invalidation::ChannelSet;
 
 /// Result of writing a binding target endpoint.
+///
+/// [`BindingHost::set_erased`] implementations return this after applying a
+/// binding-driven write to host storage. Use [`BindingWrite::changed`] when the
+/// observable value changed and [`BindingWrite::unchanged`] when the write was a
+/// no-op.
+///
+/// [`BindingHost::set_erased`]: crate::BindingHost::set_erased
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct BindingWrite {
     changed: bool,
@@ -104,6 +111,13 @@ impl BindingReport {
 }
 
 /// Snapshot of a binding set's structural state.
+///
+/// Callers get this from [`BindingSet::stats`] or [`BindingGraph::stats`] for
+/// diagnostics and integration tests. It reports graph structure and dirty
+/// state, not host property values.
+///
+/// [`BindingSet::stats`]: crate::BindingSet::stats
+/// [`BindingGraph::stats`]: crate::BindingGraph::stats
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct BindingStats {
     active_bindings: usize,

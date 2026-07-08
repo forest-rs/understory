@@ -2,7 +2,7 @@
 
 # Understory Property Binding
 
-**Small one-way property binding primitives for Understory**
+**Small property binding primitives for Understory**
 
 [![Latest published version.](https://img.shields.io/crates/v/understory_property_binding.svg)](https://crates.io/crates/understory_property_binding)
 [![Documentation build status.](https://img.shields.io/docsrs/understory_property_binding.svg)](https://docs.rs/understory_property_binding)
@@ -21,12 +21,15 @@ Full documentation at https://github.com/orium/cargo-rdme -->
 
 <!-- cargo-rdme start -->
 
-Understory Property Binding: small one-way property binding primitives.
+Understory Property Binding: small property binding primitives.
 
 This crate provides deterministic one-way binding evaluation for
 `understory_property` endpoints. It owns binding declarations, endpoint
 indexes, dirty binding selection, dependency ordering, cycle checks, and
-drain reports.
+drain reports. On top of that one-way core, [`BindingGraph`] owns two-way
+binding policy: reverse write-back for host-initiated target writes,
+provenance-based echo suppression, lifecycle-safe teardown, and a
+deterministic conflict rule.
 
 The intended first use is control-template glue: one property endpoint feeds
 another property endpoint, and the host decides how those endpoints map onto
@@ -34,7 +37,7 @@ retained objects.
 
 This crate deliberately does **not** own property storage, style or theme
 resolution, opinion composition, widget trees, host scheduling, expression
-parsing, two-way binding policy, or application invalidation graph ownership.
+parsing, or application invalidation graph ownership.
 
 ## Overview
 
@@ -53,7 +56,11 @@ application-level invalidation coordinator.
 - [`EndpointKey`]: type-erased endpoint key passed across the host boundary.
 - [`BindingHost`]: host adapter that reads and writes erased endpoint values.
 - [`BindingSet`]: registered bindings plus their dirty state and dependency
-  graph.
+  graph. Construct this directly with [`BindingSet::new`] for one-way-only
+  integrations.
+- [`BindingGraph`]: safe composite owner for a [`BindingSet`] plus two-way
+  policy. Construct this with [`BindingGraph::new`] when a host may register
+  two-way bindings or wants one lifecycle API for both directions.
 - [`ValueSource`]: typed handle for a single stored value that can feed a
   binding endpoint.
 - [`ExternalSource`]: typed handle for a pull-based value source that can
@@ -66,6 +73,11 @@ application-level invalidation coordinator.
   completed before the error.
 - [`BindingStats`]: structural snapshot for diagnostics and integration
   tests.
+- [`TwoWayBindingId`]: handle returned when a [`BindingGraph`] registers a
+  two-way binding.
+- [`TwoWayReport`]: drain summary returned by [`BindingGraph::drain`].
+- [`ReverseRejection`]: diagnostic entry for a reverse write-back that was
+  skipped instead of written.
 
 ## Evaluation model
 
@@ -87,6 +99,36 @@ time so draining remains deterministic.
 Bindings can be removed with [`BindingSet::unbind`], or in groups with
 [`BindingSet::clear_endpoint`] and [`BindingSet::clear_owner`]. Binding ids
 remain stable and are not reused.
+
+## Two-way bindings
+
+[`BindingGraph`] is the host-facing API when two-way bindings are enabled:
+it owns the [`BindingSet`] and reverse write-back policy together, so
+[`BindingGraph::clear_owner`],
+[`BindingGraph::clear_endpoint`], and [`BindingGraph::unbind`] remove both
+directions as one declaration.
+
+A two-way binding registers its forward direction as an ordinary binding
+here, while the graph owns the reverse direction as policy: the host routes
+control-initiated writes (a slider drag, text input) through
+[`BindingGraph::report_endpoint_write`] instead of a raw binding
+notification, and the next [`BindingGraph::drain`] propagates the value back
+to the binding's source without destroying the binding and without echoing
+it back at the target. Binding-driven writes delivered through
+[`BindingHost::set_erased`] are not reported back to the graph.
+
+Because the reverse direction is policy rather than a graph edge, the pair's
+intentional back-edge is exempt from cycle rejection while real cycles
+through the forward edge are still caught.
+
+Migration note: code that previously held a separate binding set and two-way
+sidecar should hold one [`BindingGraph`] instead. Register one-way bindings
+with [`BindingGraph::bind`] or [`BindingGraph::bind_map`], register two-way
+bindings with [`BindingGraph::bind_two_way`],
+[`BindingGraph::bind_two_way_map`], or
+[`BindingGraph::try_bind_two_way_map`], report host/control writes with
+[`BindingGraph::report_endpoint_write`], and drain with
+[`BindingGraph::drain`].
 
 ## Invalidation boundary
 
@@ -141,6 +183,9 @@ the context attached to the binding and hands it back to the host on writes.
   are not rolled back, and the error's partial report still carries their
   affected channels. The failed binding and the rest of the current dirty
   batch remain dirty for a later retry.
+- Two-way reverse conversion rejection and reverse target type mismatch are
+  reported as [`ReverseRejection`] entries in [`TwoWayReport`]. They do not
+  stop unrelated write-back or forward propagation.
 - A binding runs only after its source endpoint has been marked dirty; adding
   a binding does not immediately copy the source value.
 - The binding set stores closures for mapped bindings, so mapped evaluators
@@ -219,7 +264,20 @@ assert_eq!(
 [`BindingError::MissingSource`]: https://docs.rs/understory_property_binding/latest/understory_property_binding/enum.BindingError.html#variant.MissingSource
 [`BindingError::SourceTypeMismatch`]: https://docs.rs/understory_property_binding/latest/understory_property_binding/enum.BindingError.html#variant.SourceTypeMismatch
 [`BindingDrainError`]: https://docs.rs/understory_property_binding/latest/understory_property_binding/struct.BindingDrainError.html
+[`BindingGraph`]: https://docs.rs/understory_property_binding/latest/understory_property_binding/struct.BindingGraph.html
+[`BindingGraph::bind`]: https://docs.rs/understory_property_binding/latest/understory_property_binding/struct.BindingGraph.html#method.bind
+[`BindingGraph::bind_map`]: https://docs.rs/understory_property_binding/latest/understory_property_binding/struct.BindingGraph.html#method.bind_map
+[`BindingGraph::bind_two_way`]: https://docs.rs/understory_property_binding/latest/understory_property_binding/struct.BindingGraph.html#method.bind_two_way
+[`BindingGraph::bind_two_way_map`]: https://docs.rs/understory_property_binding/latest/understory_property_binding/struct.BindingGraph.html#method.bind_two_way_map
+[`BindingGraph::clear_endpoint`]: https://docs.rs/understory_property_binding/latest/understory_property_binding/struct.BindingGraph.html#method.clear_endpoint
+[`BindingGraph::clear_owner`]: https://docs.rs/understory_property_binding/latest/understory_property_binding/struct.BindingGraph.html#method.clear_owner
+[`BindingGraph::drain`]: https://docs.rs/understory_property_binding/latest/understory_property_binding/struct.BindingGraph.html#method.drain
+[`BindingGraph::new`]: https://docs.rs/understory_property_binding/latest/understory_property_binding/struct.BindingGraph.html#method.new
+[`BindingGraph::report_endpoint_write`]: https://docs.rs/understory_property_binding/latest/understory_property_binding/struct.BindingGraph.html#method.report_endpoint_write
+[`BindingGraph::try_bind_two_way_map`]: https://docs.rs/understory_property_binding/latest/understory_property_binding/struct.BindingGraph.html#method.try_bind_two_way_map
+[`BindingGraph::unbind`]: https://docs.rs/understory_property_binding/latest/understory_property_binding/struct.BindingGraph.html#method.unbind
 [`BindingHost`]: https://docs.rs/understory_property_binding/latest/understory_property_binding/trait.BindingHost.html
+[`BindingHost::set_erased`]: https://docs.rs/understory_property_binding/latest/understory_property_binding/trait.BindingHost.html#tymethod.set_erased
 [`BindingId`]: https://docs.rs/understory_property_binding/latest/understory_property_binding/struct.BindingId.html
 [`BindingReport`]: https://docs.rs/understory_property_binding/latest/understory_property_binding/struct.BindingReport.html
 [`BindingSet`]: https://docs.rs/understory_property_binding/latest/understory_property_binding/struct.BindingSet.html
@@ -230,6 +288,7 @@ assert_eq!(
 [`BindingSet::drain`]: https://docs.rs/understory_property_binding/latest/understory_property_binding/struct.BindingSet.html#method.drain
 [`BindingSet::mark_endpoint_changed`]: https://docs.rs/understory_property_binding/latest/understory_property_binding/struct.BindingSet.html#method.mark_endpoint_changed
 [`BindingSet::mark_source_changed`]: https://docs.rs/understory_property_binding/latest/understory_property_binding/struct.BindingSet.html#method.mark_source_changed
+[`BindingSet::new`]: https://docs.rs/understory_property_binding/latest/understory_property_binding/struct.BindingSet.html#method.new
 [`BindingSet::unbind`]: https://docs.rs/understory_property_binding/latest/understory_property_binding/struct.BindingSet.html#method.unbind
 [`BindingStats`]: https://docs.rs/understory_property_binding/latest/understory_property_binding/struct.BindingStats.html
 [`BindingWrite`]: https://docs.rs/understory_property_binding/latest/understory_property_binding/struct.BindingWrite.html
@@ -237,6 +296,9 @@ assert_eq!(
 [`ExternalSource`]: https://docs.rs/understory_property_binding/latest/understory_property_binding/struct.ExternalSource.html
 [`invalidation::InvalidationTracker`]: https://docs.rs/invalidation/latest/invalidation/struct.InvalidationTracker.html
 [`PropertyEndpoint`]: https://docs.rs/understory_property_binding/latest/understory_property_binding/struct.PropertyEndpoint.html
+[`ReverseRejection`]: https://docs.rs/understory_property_binding/latest/understory_property_binding/struct.ReverseRejection.html
+[`TwoWayBindingId`]: https://docs.rs/understory_property_binding/latest/understory_property_binding/struct.TwoWayBindingId.html
+[`TwoWayReport`]: https://docs.rs/understory_property_binding/latest/understory_property_binding/struct.TwoWayReport.html
 [`ValueSource`]: https://docs.rs/understory_property_binding/latest/understory_property_binding/struct.ValueSource.html
 
 ## Minimum supported Rust Version (MSRV)
