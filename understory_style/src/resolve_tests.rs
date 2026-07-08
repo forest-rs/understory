@@ -4,6 +4,7 @@
 use super::*;
 use crate::{ExpressionLayer, StyleBuilder, ThemeBuilder, expr};
 use crate::{StyleCascadeBuilder, StyleOrigin};
+use crate::{ThemeScope, ThemeVariant, VariantThemeBuilder};
 use alloc::collections::BTreeMap;
 use alloc::vec;
 use understory_property::{LocalValueSource, PropertyMetadataBuilder, PropertyStore};
@@ -1271,4 +1272,271 @@ fn resolve_matches_get_inherited() {
     // Both should return the same value (parent's animation: 18.0)
     assert_eq!(cx_value, ext_value);
     assert_eq!(cx_value, 18.0);
+}
+
+const ACCENT: ResourceKey = ResourceKey::new(40);
+const GAP: ResourceKey = ResourceKey::new(41);
+
+/// App theme: `ACCENT` and `GAP` in the base table, `ACCENT` overridden by
+/// the dark variant.
+fn light_dark_variant_theme() -> VariantTheme {
+    VariantThemeBuilder::new()
+        .base(
+            ThemeBuilder::new()
+                .set(ACCENT, 0x0078D4_u32)
+                .set(GAP, 4.0_f64)
+                .build(),
+        )
+        .variant(
+            ThemeVariant::DARK,
+            ThemeBuilder::new().set(ACCENT, 0x4CC2FF_u32).build(),
+        )
+        .build()
+}
+
+#[test]
+fn resolve_style_resource_through_variant_theme() {
+    let mut registry = PropertyRegistry::new();
+    let background = registry.register("Background", PropertyMetadataBuilder::new(0_u32).build());
+
+    let style = StyleBuilder::new().set_resource(background, ACCENT).build();
+    let cascade = StyleCascadeBuilder::new()
+        .push_style(StyleOrigin::Base, style)
+        .build();
+
+    let theme = light_dark_variant_theme();
+    let expressions = ExpressionLayer::new();
+    let element = TestElement::new(1, None);
+    let style_state = Some((&cascade, cascade.root_state()));
+
+    // No active variant resolves from the base table.
+    let cx = ResolveCx::new(&registry, &theme, &expressions, NoResolveParentLookup);
+    assert_eq!(cx.get_value(&element, background, style_state), 0x0078D4);
+
+    // The dark variant overrides the base entry.
+    let dark = ThemeResolveOptions::from(&theme).with_variant(ThemeVariant::DARK);
+    let cx = ResolveCx::new(&registry, dark, &expressions, NoResolveParentLookup);
+    assert_eq!(cx.get_value(&element, background, style_state), 0x4CC2FF);
+
+    // An unknown variant falls back cleanly to the base table.
+    let sepia = ThemeResolveOptions::from(&theme).with_variant(ThemeVariant::new(16));
+    let cx = ResolveCx::new(&registry, sepia, &expressions, NoResolveParentLookup);
+    assert_eq!(cx.get_value(&element, background, style_state), 0x0078D4);
+}
+
+#[test]
+fn resolve_style_resource_through_scope_shadows_outer_scope() {
+    let mut registry = PropertyRegistry::new();
+    let background = registry.register("Background", PropertyMetadataBuilder::new(0_u32).build());
+
+    let style = StyleBuilder::new().set_resource(background, ACCENT).build();
+    let cascade = StyleCascadeBuilder::new()
+        .push_style(StyleOrigin::Base, style)
+        .build();
+
+    let app = ThemeScope::new(ThemeBuilder::new().set(ACCENT, 0x0078D4_u32).build());
+    let popup = app.child(ThemeBuilder::new().set(ACCENT, 0xE81123_u32).build());
+    let expressions = ExpressionLayer::new();
+    let element = TestElement::new(1, None);
+    let style_state = Some((&cascade, cascade.root_state()));
+
+    let cx = ResolveCx::new(&registry, &popup, &expressions, NoResolveParentLookup);
+    let resolved = cx.explain_value(&element, background, style_state);
+    assert_eq!(resolved.value, 0xE81123);
+    assert_eq!(
+        resolved.source,
+        ResolvedSource::CascadeDirect {
+            origin: StyleOrigin::Base,
+            source_index: 0,
+            resource: Some(ACCENT),
+            expression: None,
+        }
+    );
+
+    // The outer scope is unaffected by the popup's overrides.
+    let cx = ResolveCx::new(&registry, &app, &expressions, NoResolveParentLookup);
+    assert_eq!(cx.get_value(&element, background, style_state), 0x0078D4);
+}
+
+#[test]
+fn resolve_scope_chain_falls_back_to_root() {
+    let mut registry = PropertyRegistry::new();
+    let gap = registry.register("Gap", PropertyMetadataBuilder::new(0.0_f64).build());
+
+    let style = StyleBuilder::new().set_resource(gap, GAP).build();
+    let cascade = StyleCascadeBuilder::new()
+        .push_style(StyleOrigin::Base, style)
+        .build();
+
+    // Neither inner scope overrides GAP, so the root app theme supplies it.
+    let app = ThemeScope::new(ThemeBuilder::new().set(GAP, 4.0_f64).build());
+    let inner = app
+        .child(ThemeBuilder::new().set(ACCENT, 1_u32).build())
+        .child(Theme::default());
+    let expressions = ExpressionLayer::new();
+    let element = TestElement::new(1, None);
+
+    let cx = ResolveCx::new(&registry, &inner, &expressions, NoResolveParentLookup);
+    let value = cx.get_value(&element, gap, Some((&cascade, cascade.root_state())));
+    assert_eq!(value, 4.0);
+}
+
+#[test]
+fn resolve_variant_and_scope_composed() {
+    let mut registry = PropertyRegistry::new();
+    let background = registry.register("Background", PropertyMetadataBuilder::new(0_u32).build());
+    let gap = registry.register("Gap", PropertyMetadataBuilder::new(0.0_f64).build());
+
+    let style = StyleBuilder::new()
+        .set_resource(background, ACCENT)
+        .set_resource(gap, GAP)
+        .build();
+    let cascade = StyleCascadeBuilder::new()
+        .push_style(StyleOrigin::Base, style)
+        .build();
+
+    // The island shadows ACCENT with a base-only entry; GAP falls back
+    // outward to the app theme under the same active variant.
+    let app = ThemeScope::new(light_dark_variant_theme());
+    let island = app.child(ThemeBuilder::new().set(ACCENT, 0xE81123_u32).build());
+    let expressions = ExpressionLayer::new();
+    let element = TestElement::new(1, None);
+    let style_state = Some((&cascade, cascade.root_state()));
+
+    let dark_island = ThemeResolveOptions::from(&island).with_variant(ThemeVariant::DARK);
+    let cx = ResolveCx::new(&registry, dark_island, &expressions, NoResolveParentLookup);
+    // Inner scope wins for keys it contains, even over the outer dark table.
+    assert_eq!(cx.get_value(&element, background, style_state), 0xE81123);
+    // Keys the inner scope lacks fall back outward with variant fallback.
+    assert_eq!(cx.get_value(&element, gap, style_state), 4.0);
+
+    let dark_app = ThemeResolveOptions::from(&app).with_variant(ThemeVariant::DARK);
+    let cx = ResolveCx::new(&registry, dark_app, &expressions, NoResolveParentLookup);
+    assert_eq!(cx.get_value(&element, background, style_state), 0x4CC2FF);
+}
+
+#[test]
+fn style_expression_token_observes_scoped_variant_values() {
+    let mut registry = PropertyRegistry::new();
+    let width = registry.register("Width", PropertyMetadataBuilder::new(0.0_f64).build());
+
+    let style = StyleBuilder::new()
+        .set_expr(width, expr::token(GAP) * 2.0)
+        .build();
+    let cascade = StyleCascadeBuilder::new()
+        .push_style(StyleOrigin::Override, style)
+        .build();
+
+    let app = ThemeScope::new(light_dark_variant_theme());
+    let popup = app.child(
+        VariantThemeBuilder::new()
+            .variant(
+                ThemeVariant::DARK,
+                ThemeBuilder::new().set(GAP, 8.0_f64).build(),
+            )
+            .build(),
+    );
+    let expressions = ExpressionLayer::new();
+    let element = TestElement::new(1, None);
+    let style_state = Some((&cascade, cascade.root_state()));
+
+    // The popup's dark table supplies GAP under the dark variant.
+    let dark_popup = ThemeResolveOptions::from(&popup).with_variant(ThemeVariant::DARK);
+    let cx = ResolveCx::new(&registry, dark_popup, &expressions, NoResolveParentLookup);
+    assert_eq!(cx.get_value(&element, width, style_state), 16.0);
+
+    // Without the dark variant, the popup theme does not contain GAP, so the
+    // token falls back outward to the app theme's base table.
+    let cx = ResolveCx::new(&registry, &popup, &expressions, NoResolveParentLookup);
+    assert_eq!(cx.get_value(&element, width, style_state), 8.0);
+}
+
+#[test]
+fn default_expression_token_observes_variant_values() {
+    let mut registry = PropertyRegistry::new();
+    let width = registry.register("Width", PropertyMetadataBuilder::new(0.0_f64).build());
+
+    let mut expressions = ExpressionLayer::new();
+    expressions.set_default(width, expr::token(ACCENT));
+
+    let theme = VariantThemeBuilder::new()
+        .base(ThemeBuilder::new().set(ACCENT, 10.0_f64).build())
+        .variant(
+            ThemeVariant::HIGH_CONTRAST,
+            ThemeBuilder::new().set(ACCENT, 20.0_f64).build(),
+        )
+        .build();
+    let element = TestElement::new(1, None);
+
+    let high_contrast = ThemeResolveOptions::from(&theme).with_variant(ThemeVariant::HIGH_CONTRAST);
+    let cx = ResolveCx::new(
+        &registry,
+        high_contrast,
+        &expressions,
+        NoResolveParentLookup,
+    );
+    assert_eq!(cx.get_value(&element, width, None), 20.0);
+
+    let cx = ResolveCx::new(&registry, &theme, &expressions, NoResolveParentLookup);
+    assert_eq!(cx.get_value(&element, width, None), 10.0);
+}
+
+#[test]
+fn query_resource_fallback_observes_scoped_variant_values() {
+    let mut registry = PropertyRegistry::new();
+    let width = registry.register("Width", PropertyMetadataBuilder::new(0.0_f64).build());
+
+    let app = ThemeScope::new(
+        VariantThemeBuilder::new()
+            .base(ThemeBuilder::new().set(GAP, 4.0_f64).build())
+            .variant(
+                ThemeVariant::DARK,
+                ThemeBuilder::new().set(GAP, 6.0_f64).build(),
+            )
+            .build(),
+    );
+    let popup = app.child(ThemeBuilder::new().set(GAP, 12.0_f64).build());
+    let expressions = ExpressionLayer::new();
+    let element = TestElement::new(1, None);
+
+    let dark_app = ThemeResolveOptions::from(&app).with_variant(ThemeVariant::DARK);
+    let cx = ResolveCx::new(&registry, dark_app, &expressions, NoResolveParentLookup);
+    let resolved = cx
+        .query(&element, width)
+        .resource_fallback(GAP)
+        .try_explain()
+        .unwrap();
+    assert_eq!(resolved.value, 6.0);
+    assert_eq!(resolved.source, ResolvedSource::ThemeResource { key: GAP });
+
+    let cx = ResolveCx::new(&registry, &popup, &expressions, NoResolveParentLookup);
+    let value = cx
+        .query(&element, width)
+        .resource_fallback(GAP)
+        .try_value()
+        .unwrap();
+    assert_eq!(value, 12.0);
+}
+
+#[test]
+fn theme_accessors_expose_base_theme_and_active_variant() {
+    let registry = PropertyRegistry::new();
+    let expressions = ExpressionLayer::new();
+
+    let app = ThemeScope::new(light_dark_variant_theme());
+    let popup = app.child(ThemeBuilder::new().set(ACCENT, 0xE81123_u32).build());
+
+    let dark_popup = ThemeResolveOptions::from(&popup).with_variant(ThemeVariant::DARK);
+    let cx: ResolveCx<'_, u32, _> =
+        ResolveCx::new(&registry, dark_popup, &expressions, NoResolveParentLookup);
+
+    assert_eq!(
+        cx.theme_options().active_variant(),
+        Some(ThemeVariant::DARK)
+    );
+    // `theme()` exposes the root scope's variant-blind base table.
+    assert_eq!(cx.theme().get::<u32>(ACCENT), Some(&0x0078D4));
+    // `theme_options()` sees the popup's shadowing entry.
+    assert_eq!(cx.theme_options().get::<u32>(ACCENT), Some(&0xE81123));
+    assert!(cx.theme_options().contains(GAP));
 }

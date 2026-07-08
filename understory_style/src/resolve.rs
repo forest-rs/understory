@@ -23,7 +23,7 @@ use crate::matcher::{MatchState, StyleCascade};
 use crate::selector::{Selector, Specificity};
 use crate::style::{ErasedStyleValueKind, StyleExpressionId, StyleValueKind};
 use crate::stylesheet::StyleOrigin;
-use crate::theme::{ResourceKey, Theme};
+use crate::theme::{ResourceKey, Theme, ThemeScope, ThemeVariant, VariantTheme};
 
 #[path = "resolve_expression.rs"]
 mod expression;
@@ -153,6 +153,141 @@ impl<'a> ExprResolveOptions<'a> {
 impl<'a> From<&'a ExpressionLayer> for ExprResolveOptions<'a> {
     fn from(layer: &'a ExpressionLayer) -> Self {
         Self::new(layer.defaults(), layer.functions())
+    }
+}
+
+/// Theme lookup state carried by [`ResolveCx`].
+///
+/// This bundles the theme source with the active [`ThemeVariant`]. Most callers
+/// pass a `&Theme`, `&VariantTheme`, or `&ThemeScope` directly to
+/// [`ResolveCx::new`]; use [`Self::with_variant`] to select the active variant.
+///
+/// Every theme lookup performed during resolution flows through this type:
+/// style resource entries, caller-supplied resource fallbacks, and
+/// [`expr::token`][understory_property_expression::expr::token] references all
+/// observe the same variant and scope fallback.
+///
+/// ```rust
+/// use understory_style::{ResourceKey, ThemeBuilder, ThemeResolveOptions, ThemeScope, ThemeVariant};
+///
+/// const ACCENT: ResourceKey = ResourceKey::new(0);
+///
+/// let scope = ThemeScope::new(ThemeBuilder::new().set(ACCENT, 0x0078D4_u32).build());
+/// let theme = ThemeResolveOptions::from(&scope).with_variant(ThemeVariant::DARK);
+///
+/// assert_eq!(theme.get::<u32>(ACCENT), Some(&0x0078D4));
+/// ```
+#[derive(Copy, Clone, Debug)]
+pub struct ThemeResolveOptions<'a> {
+    source: ThemeSource<'a>,
+    variant: Option<ThemeVariant>,
+}
+
+/// The theme storage consulted by [`ThemeResolveOptions`].
+#[derive(Copy, Clone, Debug)]
+enum ThemeSource<'a> {
+    /// A flat theme table with no variant dimension.
+    Flat(&'a Theme),
+    /// A variant-aware theme.
+    Variants(&'a VariantTheme),
+    /// A subtree-scoped theme chain.
+    Scope(&'a ThemeScope),
+}
+
+impl<'a> ThemeResolveOptions<'a> {
+    /// Selects the active theme variant.
+    ///
+    /// Flat `&Theme` sources have no variant tables, so the active variant
+    /// only affects [`VariantTheme`] and [`ThemeScope`] sources.
+    #[must_use]
+    pub fn with_variant(mut self, variant: ThemeVariant) -> Self {
+        self.variant = Some(variant);
+        self
+    }
+
+    /// Returns the active theme variant, if one was selected.
+    #[must_use]
+    #[inline]
+    pub fn active_variant(&self) -> Option<ThemeVariant> {
+        self.variant
+    }
+
+    /// Gets the value for a resource key through variant and scope fallback.
+    #[must_use]
+    pub fn get<T: Clone + 'static>(&self, key: ResourceKey) -> Option<&'a T> {
+        match self.source {
+            ThemeSource::Flat(theme) => theme.get(key),
+            ThemeSource::Variants(theme) => theme.get(self.variant, key),
+            ThemeSource::Scope(scope) => scope.get(self.variant, key),
+        }
+    }
+
+    /// Gets an erased owned copy of the value for a resource key through
+    /// variant and scope fallback.
+    #[must_use]
+    pub fn get_erased(&self, key: ResourceKey) -> Option<ErasedValue> {
+        match self.source {
+            ThemeSource::Flat(theme) => theme.get_erased(key),
+            ThemeSource::Variants(theme) => theme.get_erased(self.variant, key),
+            ThemeSource::Scope(scope) => scope.get_erased(self.variant, key),
+        }
+    }
+
+    /// Returns `true` if any consulted table has a value for the resource key.
+    #[must_use]
+    pub fn contains(&self, key: ResourceKey) -> bool {
+        match self.source {
+            ThemeSource::Flat(theme) => theme.contains(key),
+            ThemeSource::Variants(theme) => theme.contains(self.variant, key),
+            ThemeSource::Scope(scope) => scope.contains(self.variant, key),
+        }
+    }
+
+    /// Returns the variant-blind base theme table.
+    ///
+    /// For scoped sources this is the root scope's base table. Variant and
+    /// inner-scope overrides are not visible through this accessor; use
+    /// [`Self::get`] for resolution-equivalent lookups.
+    #[must_use]
+    pub fn base_theme(&self) -> &'a Theme {
+        match self.source {
+            ThemeSource::Flat(theme) => theme,
+            ThemeSource::Variants(theme) => theme.base(),
+            ThemeSource::Scope(scope) => {
+                let mut current = scope;
+                while let Some(parent) = current.parent() {
+                    current = parent;
+                }
+                current.theme().base()
+            }
+        }
+    }
+}
+
+impl<'a> From<&'a Theme> for ThemeResolveOptions<'a> {
+    fn from(theme: &'a Theme) -> Self {
+        Self {
+            source: ThemeSource::Flat(theme),
+            variant: None,
+        }
+    }
+}
+
+impl<'a> From<&'a VariantTheme> for ThemeResolveOptions<'a> {
+    fn from(theme: &'a VariantTheme) -> Self {
+        Self {
+            source: ThemeSource::Variants(theme),
+            variant: None,
+        }
+    }
+}
+
+impl<'a> From<&'a ThemeScope> for ThemeResolveOptions<'a> {
+    fn from(scope: &'a ThemeScope) -> Self {
+        Self {
+            source: ThemeSource::Scope(scope),
+            variant: None,
+        }
     }
 }
 
@@ -331,7 +466,10 @@ where
 ///
 /// The resource fallback stage is present only when a [`ResolveQuery`] supplies
 /// one. Theme resources are also consulted when a winning style entry or
-/// expression token references a [`ResourceKey`].
+/// expression token references a [`ResourceKey`]. All theme lookups flow
+/// through the context's [`ThemeResolveOptions`], so an active
+/// [`ThemeVariant`] and any [`ThemeScope`] chain apply uniformly to resource
+/// fallbacks, style resource entries, and expression tokens.
 ///
 /// # Type Parameters
 ///
@@ -393,8 +531,8 @@ where
 {
     /// The property registry containing metadata and defaults.
     registry: &'a PropertyRegistry,
-    /// The current theme for resource lookups.
-    theme: &'a Theme,
+    /// The current theme lookup state for resource lookups.
+    theme: ThemeResolveOptions<'a>,
     /// Expression defaults and functions used during resolution.
     expr: ExprResolveOptions<'a>,
     /// Lookup used to walk inherited values.
@@ -476,18 +614,20 @@ where
     /// # Arguments
     ///
     /// * `registry` - The property registry
-    /// * `theme` - The current theme
+    /// * `theme` - The current theme lookup: a flat `&Theme`, a
+    ///   `&VariantTheme`, a `&ThemeScope`, or [`ThemeResolveOptions`] carrying
+    ///   an active [`ThemeVariant`]
     /// * `expr` - Expression defaults and functions
     /// * `store_lookup` - Lookup returning resolver parent data for a given key
     pub fn new(
         registry: &'a PropertyRegistry,
-        theme: &'a Theme,
+        theme: impl Into<ThemeResolveOptions<'a>>,
         expr: impl Into<ExprResolveOptions<'a>>,
         store_lookup: F,
     ) -> Self {
         Self {
             registry,
-            theme,
+            theme: theme.into(),
             expr: expr.into(),
             store_lookup,
             _marker: core::marker::PhantomData,
@@ -501,10 +641,22 @@ where
         self.registry
     }
 
-    /// Returns a reference to the current theme.
+    /// Returns a reference to the current base theme table.
+    ///
+    /// Variant and inner-scope overrides are not visible through this
+    /// accessor; use [`Self::theme_options`] for resolution-equivalent
+    /// lookups.
     #[must_use]
     #[inline]
-    pub fn theme(&self) -> &Theme {
+    pub fn theme(&self) -> &'a Theme {
+        self.theme.base_theme()
+    }
+
+    /// Returns the theme lookup state used by resolution, including the
+    /// active variant and any scope chain.
+    #[must_use]
+    #[inline]
+    pub fn theme_options(&self) -> ThemeResolveOptions<'a> {
         self.theme
     }
 
@@ -872,9 +1024,10 @@ where
     /// 1. Animation value on the object
     /// 2. Local value on the object
     /// 3. Style value (if style provided)
-    /// 4. Inherited value (if property inherits, walks parent chain)
-    /// 5. Expression default
-    /// 6. Default value from registry
+    /// 4. Caller-supplied resource fallback (if configured)
+    /// 5. Inherited value (if property inherits, walks parent chain)
+    /// 6. Expression default
+    /// 7. Default value from registry
     ///
     /// # Panics
     ///

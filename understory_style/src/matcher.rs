@@ -17,7 +17,7 @@ use core::cell::{Ref, RefCell};
 
 use invalidation::ChannelSet;
 use understory_property::{Property, PropertyId, PropertyRegistry};
-use understory_property_expression::{ErasedExpr, ExprDeps};
+use understory_property_expression::{ErasedExpr, ExprDeps, ExpressionDefaults};
 
 use crate::selector::{
     ClassId, PartTag, PseudoClassId, Selector, SelectorCombinator, SelectorInputs, Specificity,
@@ -526,6 +526,20 @@ pub struct StyleChangeSet {
 }
 
 impl StyleChangeSet {
+    /// Builds a change set from property ids, sorting and deduplicating them.
+    ///
+    /// This is useful when a host combines facts from several style-adjacent
+    /// systems, such as cascade resource entries and expression defaults.
+    #[must_use]
+    pub fn from_property_ids(property_ids: impl IntoIterator<Item = PropertyId>) -> Self {
+        let mut property_ids = property_ids.into_iter().collect::<Vec<_>>();
+        property_ids.sort_unstable();
+        property_ids.dedup();
+        Self {
+            property_ids: property_ids.into_boxed_slice(),
+        }
+    }
+
     /// Returns `true` if no properties changed.
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -542,6 +556,17 @@ impl StyleChangeSet {
     #[must_use]
     pub fn property_ids(&self) -> &[PropertyId] {
         &self.property_ids
+    }
+
+    /// Returns the union of two change sets.
+    #[must_use]
+    pub fn union(&self, other: &Self) -> Self {
+        Self::from_property_ids(
+            self.property_ids()
+                .iter()
+                .copied()
+                .chain(other.property_ids().iter().copied()),
+        )
     }
 
     /// Returns the union of invalidation channels affected by these properties.
@@ -839,6 +864,76 @@ impl StyleCascade {
         })
     }
 
+    /// Returns properties whose cascade style entries may derive from theme resources.
+    ///
+    /// This is the conservative theme-change fact for hosts: when the active
+    /// theme variant switches, or when a theme scope's resources change for a
+    /// subtree, every property reported here may resolve to a different value.
+    /// Hosts convert the result with [`StyleChangeSet::affected_channels`] and
+    /// treat those channels as dirty, without tracking which resource keys a
+    /// particular subject actually used.
+    ///
+    /// The fact is deliberately coarse: it unions every direct style and every
+    /// selector rule in the cascade, regardless of match state, and includes a
+    /// property when any entry dereferences a theme resource or when any style
+    /// expression entry mentions a resource in its dependencies. Property-level
+    /// resource fallbacks supplied through
+    /// [`ResolveQuery::resource_fallback`][crate::ResolveQuery::resource_fallback]
+    /// are caller-owned and not visible here. Expression defaults live outside
+    /// the cascade; use [`Self::resource_dependent_properties_with_defaults`]
+    /// when the host wants one combined fact for normal style resolution.
+    ///
+    /// Hosts that need finer-grained policies can build their own index from
+    /// [`Style::resource_entries`] and [`StyleCascade::expression_entries`].
+    #[must_use]
+    pub fn resource_dependent_properties(&self) -> StyleChangeSet {
+        let mut property_ids = Vec::new();
+        let direct_styles = self.inner.direct_styles.iter().map(|source| &source.style);
+        let rule_styles = self
+            .inner
+            .matcher
+            .inner
+            .rules
+            .iter()
+            .map(|rule| &rule.style);
+        for style in direct_styles.chain(rule_styles) {
+            property_ids.extend(style.resource_entries().map(|(property, _)| property));
+            property_ids.extend(
+                style
+                    .expression_entries()
+                    .filter(|entry| !entry.deps().resources.is_empty())
+                    .map(|entry| entry.property()),
+            );
+        }
+        StyleChangeSet::from_property_ids(property_ids)
+    }
+
+    /// Returns properties whose cascade entries or expression defaults may
+    /// derive from theme resources.
+    ///
+    /// This is the usual conservative theme-change fact for hosts that resolve
+    /// both style entries and expression defaults through [`ResolveCx`]. Pass
+    /// the expression layer's defaults, then convert the result with
+    /// [`StyleChangeSet::affected_channels`] and dirty the subtree whose theme
+    /// source or active variant changed.
+    ///
+    /// Caller-supplied [`ResolveQuery::resource_fallback`] keys are not visible
+    /// to the cascade or default-expression registry; hosts that use that
+    /// advanced lookup policy must track those fallbacks at the call site.
+    ///
+    /// [`ResolveCx`]: crate::ResolveCx
+    /// [`ResolveQuery::resource_fallback`]: crate::ResolveQuery::resource_fallback
+    #[must_use]
+    pub fn resource_dependent_properties_with_defaults(
+        &self,
+        defaults: &ExpressionDefaults,
+    ) -> StyleChangeSet {
+        self.resource_dependent_properties()
+            .union(&StyleChangeSet::from_property_ids(
+                defaults.resource_dependent_properties(),
+            ))
+    }
+
     /// Returns the best legacy Style-layer entry for a property at this state.
     ///
     /// Ordering is deterministic:
@@ -915,9 +1010,7 @@ impl StyleCascade {
             })
             .collect::<Vec<_>>();
 
-        StyleChangeSet {
-            property_ids: changed.into_boxed_slice(),
-        }
+        StyleChangeSet::from_property_ids(changed)
     }
 
     /// Returns the invalidation channels affected by changed style properties.
@@ -2134,5 +2227,80 @@ mod tests {
         let changes = cascade.changed_properties(unchecked_track, checked_track);
         assert!(changes.is_empty());
         assert!(changes.affected_channels(&registry).is_empty());
+    }
+
+    #[test]
+    fn resource_dependent_properties_reports_conservative_theme_facts() {
+        use crate::{ExpressionLayer, ResourceKey};
+
+        const ACCENT: ResourceKey = ResourceKey::new(1);
+        const GAP: ResourceKey = ResourceKey::new(2);
+
+        let mut registry = PropertyRegistry::new();
+        let background = registry.register(
+            "Background",
+            PropertyMetadataBuilder::new(0_u32)
+                .affects_channels(PAINT.into_set())
+                .build(),
+        );
+        let width = registry.register(
+            "Width",
+            PropertyMetadataBuilder::new(0.0_f64)
+                .affects_channels(LAYOUT.into_set())
+                .build(),
+        );
+        let height = registry.register("Height", PropertyMetadataBuilder::new(0.0_f64).build());
+        let opacity = registry.register("Opacity", PropertyMetadataBuilder::new(1.0_f64).build());
+        let padding = registry.register("Padding", PropertyMetadataBuilder::new(0.0_f64).build());
+
+        let cascade = StyleCascadeBuilder::new()
+            // Direct style: one resource entry, one literal.
+            .push_style(
+                StyleOrigin::Base,
+                StyleBuilder::new()
+                    .set_resource(background, ACCENT)
+                    .set(opacity, 0.5)
+                    .build(),
+            )
+            // Rule style: a resource-dependent expression and a
+            // resource-free expression. Rules count even when no subject
+            // matches them.
+            .push_rule(
+                StyleOrigin::Sheet,
+                SelectorStep {
+                    type_tag: Some(TOGGLE),
+                    ..SelectorStep::default()
+                },
+                StyleBuilder::new()
+                    .set_expr(width, expr::token(GAP) * 2.0)
+                    .set_expr(height, expr::prop(width) + 1.0)
+                    .build(),
+            )
+            .build();
+
+        let facts = cascade.resource_dependent_properties();
+        assert_eq!(facts.property_ids(), &[background.id(), width.id()]);
+
+        let channels = facts.affected_channels(&registry);
+        assert!(channels.contains(PAINT));
+        assert!(channels.contains(LAYOUT));
+
+        let mut expressions = ExpressionLayer::new();
+        expressions.set_default(padding, expr::token(GAP) + 1.0);
+        expressions.set_default(height, expr::lit(12.0));
+        let combined = cascade.resource_dependent_properties_with_defaults(expressions.defaults());
+        assert_eq!(
+            combined.property_ids(),
+            &[background.id(), width.id(), padding.id()]
+        );
+
+        // Literal-only cascades report nothing.
+        let literal_only = StyleCascadeBuilder::new()
+            .push_style(
+                StyleOrigin::Base,
+                StyleBuilder::new().set(opacity, 1.0).build(),
+            )
+            .build();
+        assert!(literal_only.resource_dependent_properties().is_empty());
     }
 }

@@ -3,7 +3,7 @@
 
 use core::fmt;
 
-use understory_property::Property;
+use understory_property::{Property, PropertyId};
 
 use crate::{Expr, ExpressionDefaults, FunctionRegistry};
 
@@ -36,6 +36,14 @@ impl ExpressionLayer {
     #[must_use]
     pub fn defaults(&self) -> &ExpressionDefaults {
         &self.defaults
+    }
+
+    /// Returns default-expression targets that may derive from theme resources.
+    ///
+    /// This delegates to [`ExpressionDefaults::resource_dependent_properties`]
+    /// for hosts that keep defaults inside a single expression layer.
+    pub fn resource_dependent_properties(&self) -> impl Iterator<Item = PropertyId> + '_ {
+        self.defaults.resource_dependent_properties()
     }
 
     /// Returns the function registry used during expression evaluation.
