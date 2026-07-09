@@ -902,6 +902,33 @@ impl<K: Copy + Eq> PropertyStore<K> {
         self.animation_entries.entry_clear(property.id())
     }
 
+    /// Writes an erased value into the animation slot.
+    ///
+    /// This is the erased twin of [`Self::set_animation`]. It is useful for
+    /// transition and animation runners that carry [`PropertyId`] values
+    /// rather than typed [`Property<T>`] handles.
+    ///
+    /// # Type Contract
+    ///
+    /// `value.type_id()` must match the [`PropertyRegistration`] type for
+    /// `id`. This unchecked setter does not validate the contract; callers
+    /// should validate through [`PropertyRegistry::get`] when the value's
+    /// provenance is not already trusted.
+    ///
+    /// [`PropertyRegistration`]: crate::PropertyRegistration
+    pub fn set_animation_erased(&mut self, id: PropertyId, value: ErasedValue) {
+        self.animation_entries.entry_write(id, value);
+    }
+
+    /// Clears the animation slot for a type-erased property id.
+    ///
+    /// This is the erased twin of [`Self::clear_animation`].
+    ///
+    /// Returns `true` if a value was removed.
+    pub fn clear_animation_erased(&mut self, id: PropertyId) -> bool {
+        self.animation_entries.entry_clear(id)
+    }
+
     /// Returns `true` if the property has an animation value.
     #[must_use]
     #[inline]
@@ -1263,6 +1290,32 @@ mod tests {
         assert!(store.clear_animation(width));
         assert!(!store.has_animation(width));
         assert!(store.is_empty());
+    }
+
+    #[test]
+    fn store_set_animation_erased_round_trips_through_typed_read() {
+        let (registry, width, _) = setup_registry();
+        let mut store = PropertyStore::<u32>::new(1);
+        store.set_local(width, 100.0);
+
+        store.set_animation_erased(width.id(), ErasedValue::new(200.0_f64));
+
+        assert_eq!(store.get_animation(width), Some(&200.0));
+        assert_eq!(store.get_effective_local(width, &registry), 200.0);
+    }
+
+    #[test]
+    fn store_clear_animation_erased_reveals_local() {
+        let (registry, width, _) = setup_registry();
+        let mut store = PropertyStore::<u32>::new(1);
+        store.set_local(width, 100.0);
+        store.set_animation_erased(width.id(), ErasedValue::new(200.0_f64));
+
+        assert!(store.clear_animation_erased(width.id()));
+        assert!(!store.has_animation(width));
+        assert_eq!(store.get_effective_local(width, &registry), 100.0);
+
+        assert!(!store.clear_animation_erased(width.id()));
     }
 
     #[test]

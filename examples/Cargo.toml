@@ -33,4 +33,5 @@ understory_responder = { workspace = true, features = [
 understory_style.workspace = true
 understory_timing.workspace = true
 understory_transcript = { workspace = true, features = ["std"] }
+understory_transition = { workspace = true, features = ["std"] }
 understory_virtual_list = { workspace = true, features = ["std"] }

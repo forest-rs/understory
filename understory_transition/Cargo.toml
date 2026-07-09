@@ -1,0 +1,30 @@
+[package]
+name = "understory_transition"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Style-driven property transitions with retargeting for Understory"
+readme = "README.md"
+keywords = ["ui", "transition", "animation", "no_std", "understory"]
+categories = ["gui", "no-std"]
+
+[features]
+default = ["libm"]
+libm = ["understory_motion/libm"]
+std = ["understory_motion/std"]
+
+[dependencies]
+peniko.workspace = true
+understory_motion.workspace = true
+understory_property.workspace = true
+understory_timing.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+default-target = "x86_64-unknown-linux-gnu"
+targets = []

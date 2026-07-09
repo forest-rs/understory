@@ -548,11 +548,11 @@ A typical host update loop keeps the orchestration outside this crate:
    layout, accessibility, or diagnostics.
 
 The `style_reactive_loop` example in the workspace demonstrates this full
-shape end to end. The `style_motion_loop` example focuses on the
-style-to-motion handoff: resolve the styled target, sample a
-`understory_motion` transition, write each sample to the animation slot, and
-clear that slot when the transition completes so the styled target is visible
-again.
+shape end to end. The `style_transition_loop` example focuses on the
+style-to-motion handoff: author `understory_transition` declarations in
+style rules, hand changed resolved values to its transition runner, apply
+the runner's animation-slot writes each frame, and let completion clear
+that slot so the styled target is visible again.
 
 ### Configured Resolution Queries
 
