@@ -38,6 +38,10 @@ These examples form a short, progressive walkthrough from routing basics to inte
   - Tie properties, bindings, style cascades, expression defaults/style expressions, theme resources, invalidation, and animation-slot samples into one host-owned frame loop.
   - Run: `cargo run -p understory_examples --example style_reactive_loop`
 
+- style_transition_loop
+  - Author `understory_transition` declarations in style rules, flip a pseudo-class to start a transition, retarget mid-flight with CSS-style reversing shortening, retune durations through theme tokens resolved at transition start, and clear the animation slot on completion.
+  - Run: `cargo run -p understory_examples --example style_transition_loop`
+
 - basic_present
   - Build a small `understory_presentation` store, mutate resolved surface/text primitives, drain dirty geometry keys, and show the paint-side lookup shape.
   - Run: `cargo run -p understory_examples --example basic_present`

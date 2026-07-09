@@ -33,6 +33,7 @@ env:
     -p understory_tiling
     -p understory_timing
     -p understory_transcript
+    -p understory_transition
     -p understory_view2d
     -p understory_virtual_list
   # List of features that depend on the standard library and will be excluded from no_std checks.

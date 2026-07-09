@@ -656,6 +656,7 @@ dependencies = [
  "understory_style",
  "understory_timing",
  "understory_transcript",
+ "understory_transition",
  "understory_virtual_list",
 ]
 
@@ -830,6 +831,16 @@ name = "understory_transcript"
 version = "0.1.0"
 dependencies = [
  "hashbrown",
+]
+
+[[package]]
+name = "understory_transition"
+version = "0.1.0"
+dependencies = [
+ "peniko",
+ "understory_motion",
+ "understory_property",
+ "understory_timing",
 ]
 
 [[package]]

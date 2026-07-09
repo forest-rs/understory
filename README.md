@@ -116,6 +116,11 @@ The focus is on clean separation of concerns, pluggable performance trade‑offs
   - Provides stable entry ids, typed entry kinds, `EntryBody` as a built-in text/bytes default payload, explicit parent/cause links, and explicit status/chunk updates to existing entries.
   - Designed to sit below transcript/chat/console UIs without taking on text layout, rendering, or persistence policy.
 
+- `understory_transition`
+  - Style-driven property transition declarations (duration, delay, easing) keyed by dependency-property ids, plus the retargeting/interruption state machine.
+  - Samples with host-provided monotonic time and emits animation-slot writes, retargeting interrupted transitions from their current animated value with CSS-style faster reversing.
+  - Does not own property storage, style matching, pseudo-class state detection, keyframe animations, frame scheduling, or renderer writes.
+
 - `understory_view2d`
   - 2D and 1D view/viewport primitives:
     - `Viewport2D` for canvas/CAD‑style views: camera state (pan + zoom), coordinate conversion between world and device space, view fitting (center vs align‑min), and simple clamping against optional world bounds.
@@ -183,6 +188,7 @@ For example, a canvas or DWG or DXF viewer can reuse the box and index layers wi
   - `understory_selection/README.md` documents the selection container, anchor/revision semantics, and click helpers.
   - `understory_timing/README.md` documents host-driven timer queue scheduling, expiration, and repeat policy.
   - `understory_transcript/README.md` documents append-order transcript storage, generic payloads, explicit update semantics, typed entry kinds, and chat/tool/process-style usage.
+  - `understory_transition/README.md` documents per-property transition declarations, retargeting and reversing semantics, host-driven sampling, and animation-slot write plans.
   - `understory_view2d/README.md` documents the 2D and 1D viewport types, clamping/fit modes, and examples of using visible regions for culling.
   - `understory_property/README.md` documents dependency-property registration, metadata, local/animation slots, inheritance, and erased values.
   - `understory_property_binding/README.md` documents one-way property bindings, host endpoint adapters, and binding-local invalidation.
@@ -197,7 +203,7 @@ For example, a canvas or DWG or DXF viewer can reuse the box and index layers wi
   - `cargo run -p understory_examples --example property_binding_loop`
   - `cargo run -p understory_examples --example style_subject_walk`
   - `cargo run -p understory_examples --example style_reactive_loop`
-  - `cargo run -p understory_examples --example style_motion_loop`
+  - `cargo run -p understory_examples --example style_transition_loop`
   - `cargo run -p understory_examples --example box_tree_basics`
   - `cargo run -p understory_examples --example box_tree_visible_list`
   - `cargo run -p understory_examples --example outline_property_grid`
