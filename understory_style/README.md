@@ -225,7 +225,7 @@ not a browser-CSS explanation engine.
 
 [`Style`] is a shared collection of property setters. Unlike per-element
 storage, styles are immutable after creation and can be shared across
-many elements—matching `WinUI`'s `OptimizedStyle` approach.
+many elements without duplicating setter storage.
 
 ```rust
 use understory_style::{Style, StyleBuilder};

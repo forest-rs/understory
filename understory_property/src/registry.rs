@@ -12,8 +12,9 @@ use core::any::{Any, TypeId};
 use hashbrown::HashMap;
 use invalidation::ChannelSet;
 
+use crate::coerce::CoerceContext;
 use crate::id::{Property, PropertyId};
-use crate::metadata::PropertyMetadata;
+use crate::metadata::{ErasedValidationError, PropertyMetadata};
 use crate::value::ErasedValue;
 
 /// A registration entry for a property.
@@ -62,6 +63,16 @@ impl PropertyRegistration {
     #[must_use]
     pub fn default_value_erased(&self) -> ErasedValue {
         self.metadata.default_value_erased()
+    }
+
+    pub(crate) fn validate_and_coerce_erased(
+        &self,
+        property: PropertyId,
+        value: ErasedValue,
+        cx: &CoerceContext<'_>,
+    ) -> Result<ErasedValue, ErasedValidationError> {
+        self.metadata
+            .validate_and_coerce_erased(property, value, cx)
     }
 }
 
@@ -121,7 +132,9 @@ impl PropertyRegistry {
     /// # Panics
     ///
     /// Panics if a property with the same name is already registered,
-    /// or if more than 65,536 properties are registered.
+    /// if more than 65,536 properties are registered, or if the metadata's
+    /// default value is rejected by its own validate callback (a property
+    /// whose default is invalid is a registration bug and fails fast).
     pub fn register<T: Clone + 'static>(
         &mut self,
         name: &'static str,
@@ -130,6 +143,10 @@ impl PropertyRegistry {
         assert!(
             !self.by_name.contains_key(name),
             "Property '{name}' is already registered"
+        );
+        assert!(
+            metadata.validate(metadata.default_value()),
+            "Default value for property '{name}' was rejected by its validate callback"
         );
         assert!(
             self.properties.len() < u16::MAX as usize,
@@ -247,6 +264,12 @@ trait ErasedMetadata: Any {
     fn affects_channels(&self) -> ChannelSet;
     fn inherits(&self) -> bool;
     fn default_value_erased(&self) -> ErasedValue;
+    fn validate_and_coerce_erased(
+        &self,
+        property: PropertyId,
+        value: ErasedValue,
+        cx: &CoerceContext<'_>,
+    ) -> Result<ErasedValue, ErasedValidationError>;
 }
 
 impl<T: Clone + 'static> ErasedMetadata for PropertyMetadata<T> {
@@ -264,6 +287,30 @@ impl<T: Clone + 'static> ErasedMetadata for PropertyMetadata<T> {
 
     fn default_value_erased(&self) -> ErasedValue {
         ErasedValue::new(self.default_value().clone())
+    }
+
+    fn validate_and_coerce_erased(
+        &self,
+        property: PropertyId,
+        value: ErasedValue,
+        cx: &CoerceContext<'_>,
+    ) -> Result<ErasedValue, ErasedValidationError> {
+        if !self.validate(
+            value
+                .downcast_ref::<T>()
+                .expect("type-erased property value must match its registration"),
+        ) {
+            return Err(ErasedValidationError {
+                property,
+                rejected: value,
+            });
+        }
+
+        let raw = value
+            .downcast_ref::<T>()
+            .expect("type-erased property value must match its registration")
+            .clone();
+        Ok(ErasedValue::new(self.coerce(cx, raw)))
     }
 }
 
@@ -389,6 +436,30 @@ mod tests {
 
         let names: Vec<_> = registry.iter().map(|(_, r)| r.name()).collect();
         assert_eq!(names, vec!["Width", "Height"]);
+    }
+
+    #[test]
+    #[should_panic(expected = "Default value for property 'Value' was rejected")]
+    fn registry_rejects_invalid_default_value() {
+        let mut registry = PropertyRegistry::new();
+        registry.register(
+            "Value",
+            PropertyMetadataBuilder::new(f64::NAN)
+                .validate(|v| v.is_finite())
+                .build(),
+        );
+    }
+
+    #[test]
+    fn registry_accepts_valid_default_value() {
+        let mut registry = PropertyRegistry::new();
+        let value = registry.register(
+            "Value",
+            PropertyMetadataBuilder::new(0.0_f64)
+                .validate(|v| v.is_finite())
+                .build(),
+        );
+        assert_eq!(registry.name(value.id()), Some("Value"));
     }
 
     #[test]

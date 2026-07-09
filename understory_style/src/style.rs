@@ -148,9 +148,8 @@ impl<'a> StyleExpressionRef<'a> {
 /// A shared, immutable collection of property setters.
 ///
 /// Styles store property values once and can be shared across many elements.
-/// This follows `WinUI`'s `OptimizedStyle` pattern for memory efficiency—rather
-/// than storing style values per-element, elements hold a reference to a
-/// shared style.
+/// This keeps style matches memory-efficient: rather than storing style values
+/// per-element, elements hold a reference to a shared style.
 ///
 /// Styles are immutable after creation. Use [`StyleBuilder`] to construct them.
 ///

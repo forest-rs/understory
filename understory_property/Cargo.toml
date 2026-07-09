@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "WPF/WinUI-style dependency property system with layered value resolution"
+description = "Dependency property system with layered value resolution"
 keywords = ["property", "dependency", "ui", "framework", "no_std"]
 categories = ["data-structures", "no-std"]
 

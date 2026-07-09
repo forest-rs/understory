@@ -9,6 +9,10 @@
 use alloc::boxed::Box;
 use invalidation::ChannelSet;
 
+use crate::coerce::CoerceContext;
+use crate::id::PropertyId;
+use crate::value::ErasedValue;
+
 /// Callback invoked when a property value changes.
 ///
 /// The callback receives the previous effective-local value and the new
@@ -18,9 +22,72 @@ pub type PropertyChangedCallback<T> = Box<dyn Fn(Option<&T>, &T) + Send + Sync>;
 
 /// Callback for coercing a property value before it's stored.
 ///
-/// This can be used to clamp values, validate ranges, etc.
-/// The callback receives the proposed value and returns the coerced value.
-pub type CoerceValueCallback<T> = Box<dyn Fn(T) -> T + Send + Sync>;
+/// This can be used to clamp values into range, snap to ticks, etc. The
+/// callback receives a [`CoerceContext`] giving read access to the owning
+/// object's other effective property values (e.g. `Slider.Value` clamping
+/// against the current `Minimum`/`Maximum`), plus the proposed value, and
+/// returns the coerced value.
+///
+/// Coercion **adjusts** a value; to **reject** one, use
+/// [`ValidateValueCallback`] instead.
+pub type CoerceValueCallback<T> = Box<dyn Fn(&CoerceContext<'_>, T) -> T + Send + Sync>;
+
+/// Callback for validating a raw property value before coercion.
+///
+/// Returns `true` if the value is acceptable. Validation **rejects** invalid
+/// values (the write fails with [`ValidationError`]); it must not depend on
+/// other property values and runs on the *raw* incoming value, before
+/// coercion. Coercion, by contrast, **adjusts** values.
+pub type ValidateValueCallback<T> = Box<dyn Fn(&T) -> bool + Send + Sync>;
+
+/// Error returned when a write is rejected by a property's validate callback.
+///
+/// The rejected raw value is handed back to the caller so it isn't lost.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidationError<T> {
+    /// The property whose validate callback rejected the value.
+    pub property: PropertyId,
+    /// The rejected raw value (before coercion).
+    pub rejected: T,
+}
+
+impl<T> core::fmt::Display for ValidationError<T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "value for property {} was rejected by its validate callback",
+            self.property
+        )
+    }
+}
+
+impl<T: core::fmt::Debug> core::error::Error for ValidationError<T> {}
+
+/// Error returned when a type-erased checked write is rejected by validation.
+///
+/// This is the erased counterpart to [`ValidationError`]. It is used by
+/// adapter/runtime code that carries [`PropertyId`] plus [`ErasedValue`] rather
+/// than a typed [`crate::Property<T>`] handle. The rejected raw value is
+/// returned so callers can surface or recover the input that failed.
+#[derive(Debug, Clone)]
+pub struct ErasedValidationError {
+    /// The property whose validate callback rejected the value.
+    pub property: PropertyId,
+    /// The rejected raw erased value (before coercion).
+    pub rejected: ErasedValue,
+}
+
+impl core::fmt::Display for ErasedValidationError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "value for property {} was rejected by its validate callback",
+            self.property
+        )
+    }
+}
+
+impl core::error::Error for ErasedValidationError {}
 
 /// Metadata for a dependency property.
 ///
@@ -49,6 +116,7 @@ pub struct PropertyMetadata<T: Clone + 'static> {
     affects_channels: ChannelSet,
     changed_callback: Option<PropertyChangedCallback<T>>,
     coerce_callback: Option<CoerceValueCallback<T>>,
+    validate_callback: Option<ValidateValueCallback<T>>,
 }
 
 impl<T: Clone + 'static> PropertyMetadata<T> {
@@ -59,6 +127,7 @@ impl<T: Clone + 'static> PropertyMetadata<T> {
     /// - `affects_channels`: empty
     /// - `changed_callback`: `None`
     /// - `coerce_callback`: `None`
+    /// - `validate_callback`: `None`
     #[must_use]
     pub fn new(default_value: T) -> Self {
         Self {
@@ -67,6 +136,7 @@ impl<T: Clone + 'static> PropertyMetadata<T> {
             affects_channels: ChannelSet::empty(),
             changed_callback: None,
             coerce_callback: None,
+            validate_callback: None,
         }
     }
 
@@ -100,13 +170,26 @@ impl<T: Clone + 'static> PropertyMetadata<T> {
     }
 
     /// Coerces a value using the coerce callback if one is set.
+    ///
+    /// The [`CoerceContext`] lets the callback read the owning object's other
+    /// effective property values (e.g. clamping `Value` against the current
+    /// `Minimum`/`Maximum`).
     #[inline]
-    pub fn coerce(&self, value: T) -> T {
+    pub fn coerce(&self, cx: &CoerceContext<'_>, value: T) -> T {
         if let Some(callback) = &self.coerce_callback {
-            callback(value)
+            callback(cx, value)
         } else {
             value
         }
+    }
+
+    /// Validates a raw value using the validate callback if one is set.
+    ///
+    /// Returns `true` when no validate callback is registered.
+    #[must_use]
+    #[inline]
+    pub fn validate(&self, value: &T) -> bool {
+        self.validate_callback.as_ref().is_none_or(|f| f(value))
     }
 
     /// Returns whether a changed callback is set.
@@ -122,6 +205,13 @@ impl<T: Clone + 'static> PropertyMetadata<T> {
     pub fn has_coerce_callback(&self) -> bool {
         self.coerce_callback.is_some()
     }
+
+    /// Returns whether a validate callback is set.
+    #[must_use]
+    #[inline]
+    pub fn has_validate_callback(&self) -> bool {
+        self.validate_callback.is_some()
+    }
 }
 
 // Manual Debug impl since callbacks aren't Debug
@@ -133,6 +223,7 @@ impl<T: Clone + core::fmt::Debug + 'static> core::fmt::Debug for PropertyMetadat
             .field("affects_channels", &self.affects_channels)
             .field("has_changed_callback", &self.changed_callback.is_some())
             .field("has_coerce_callback", &self.coerce_callback.is_some())
+            .field("has_validate_callback", &self.validate_callback.is_some())
             .finish()
     }
 }
@@ -151,7 +242,7 @@ impl<T: Clone + core::fmt::Debug + 'static> core::fmt::Debug for PropertyMetadat
 /// let metadata = PropertyMetadataBuilder::new(0.0_f64)
 ///     .inherits(true)
 ///     .affects_channels(LAYOUT.into_set() | PAINT.into_set())
-///     .coerce(|v| v.max(0.0).min(100.0))
+///     .coerce(|v| v.clamp(0.0, 100.0))
 ///     .build();
 /// ```
 pub struct PropertyMetadataBuilder<T: Clone + 'static> {
@@ -160,6 +251,7 @@ pub struct PropertyMetadataBuilder<T: Clone + 'static> {
     affects_channels: ChannelSet,
     changed_callback: Option<PropertyChangedCallback<T>>,
     coerce_callback: Option<CoerceValueCallback<T>>,
+    validate_callback: Option<ValidateValueCallback<T>>,
 }
 
 // Manual Debug impl since callbacks aren't Debug
@@ -171,6 +263,7 @@ impl<T: Clone + core::fmt::Debug + 'static> core::fmt::Debug for PropertyMetadat
             .field("affects_channels", &self.affects_channels)
             .field("has_changed_callback", &self.changed_callback.is_some())
             .field("has_coerce_callback", &self.coerce_callback.is_some())
+            .field("has_validate_callback", &self.validate_callback.is_some())
             .finish()
     }
 }
@@ -185,6 +278,7 @@ impl<T: Clone + 'static> PropertyMetadataBuilder<T> {
             affects_channels: ChannelSet::empty(),
             changed_callback: None,
             coerce_callback: None,
+            validate_callback: None,
         }
     }
 
@@ -217,15 +311,74 @@ impl<T: Clone + 'static> PropertyMetadataBuilder<T> {
         self
     }
 
-    /// Sets a callback to coerce values before they are stored.
+    /// Sets a context-free callback to coerce values before they are stored.
     ///
-    /// This is useful for clamping values, validation, etc.
+    /// Use this for static adjustments such as clamping to a fixed range,
+    /// snapping, or normalizing non-finite values. It is shorthand for
+    /// [`coerce_with`](Self::coerce_with) with a callback that ignores the
+    /// [`CoerceContext`].
     #[must_use]
     pub fn coerce<F>(mut self, callback: F) -> Self
     where
         F: Fn(T) -> T + Send + Sync + 'static,
     {
+        self.coerce_callback = Some(Box::new(move |_cx: &CoerceContext<'_>, value| {
+            callback(value)
+        }));
+        self
+    }
+
+    /// Sets a context-aware callback to coerce values before they are stored.
+    ///
+    /// The callback receives a [`CoerceContext`] with read access to the
+    /// owning object's other effective property values, enabling
+    /// cross-property coercion such as clamping `Slider.Value` against the
+    /// current `Minimum`/`Maximum`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use understory_property::{CoerceContext, PropertyMetadataBuilder, PropertyRegistry};
+    ///
+    /// let mut registry = PropertyRegistry::new();
+    /// let minimum = registry.register("Minimum", PropertyMetadataBuilder::new(0.0_f64).build());
+    /// let maximum = registry.register("Maximum", PropertyMetadataBuilder::new(100.0_f64).build());
+    /// let value = registry.register(
+    ///     "Value",
+    ///     PropertyMetadataBuilder::new(0.0_f64)
+    ///         .coerce_with(move |cx: &CoerceContext<'_>, v: f64| {
+    ///             v.max(cx.get(minimum)).min(cx.get(maximum))
+    ///         })
+    ///         .build(),
+    /// );
+    /// ```
+    #[must_use]
+    pub fn coerce_with<F>(mut self, callback: F) -> Self
+    where
+        F: Fn(&CoerceContext<'_>, T) -> T + Send + Sync + 'static,
+    {
         self.coerce_callback = Some(Box::new(callback));
+        self
+    }
+
+    /// Sets a callback to validate raw values before coercion.
+    ///
+    /// Validation **rejects**: a write whose value fails validation does not
+    /// happen and reports [`ValidationError`] (or panics, on the infallible
+    /// notifying paths). It runs on the raw incoming value, *before*
+    /// coercion, and deliberately receives no [`CoerceContext`]: validation
+    /// is for intrinsic input well-formedness, while cross-property adjustment
+    /// belongs in [`coerce_with`](Self::coerce_with).
+    ///
+    /// The property's default value must itself pass validation;
+    /// [`PropertyRegistry::register`](crate::PropertyRegistry::register)
+    /// panics otherwise.
+    #[must_use]
+    pub fn validate<F>(mut self, callback: F) -> Self
+    where
+        F: Fn(&T) -> bool + Send + Sync + 'static,
+    {
+        self.validate_callback = Some(Box::new(callback));
         self
     }
 
@@ -238,6 +391,7 @@ impl<T: Clone + 'static> PropertyMetadataBuilder<T> {
             affects_channels: self.affects_channels,
             changed_callback: self.changed_callback,
             coerce_callback: self.coerce_callback,
+            validate_callback: self.validate_callback,
         }
     }
 }
@@ -253,6 +407,14 @@ mod tests {
     const LAYOUT: Channel = Channel::new(0);
     const PAINT: Channel = Channel::new(1);
 
+    /// Builds a context over an empty store/registry for callback tests.
+    fn with_empty_context<R>(f: impl FnOnce(&CoerceContext<'_>) -> R) -> R {
+        let registry = crate::PropertyRegistry::new();
+        let store = crate::PropertyStore::<u32>::new(1);
+        let cx = CoerceContext::new(&store, &registry);
+        f(&cx)
+    }
+
     #[test]
     fn metadata_defaults() {
         let metadata = PropertyMetadata::new(42_i32);
@@ -261,6 +423,7 @@ mod tests {
         assert!(metadata.affects_channels().is_empty());
         assert!(!metadata.has_changed_callback());
         assert!(!metadata.has_coerce_callback());
+        assert!(!metadata.has_validate_callback());
     }
 
     #[test]
@@ -282,9 +445,47 @@ mod tests {
             .coerce(|v| v.clamp(0.0, 100.0))
             .build();
 
-        assert_eq!(metadata.coerce(-10.0), 0.0);
-        assert_eq!(metadata.coerce(50.0), 50.0);
-        assert_eq!(metadata.coerce(150.0), 100.0);
+        with_empty_context(|cx| {
+            assert_eq!(metadata.coerce(cx, -10.0), 0.0);
+            assert_eq!(metadata.coerce(cx, 50.0), 50.0);
+            assert_eq!(metadata.coerce(cx, 150.0), 100.0);
+        });
+    }
+
+    #[test]
+    fn metadata_coerce_with_reads_context() {
+        let mut registry = crate::PropertyRegistry::new();
+        let minimum = registry.register("Minimum", PropertyMetadataBuilder::new(0.0_f64).build());
+
+        let metadata = PropertyMetadataBuilder::new(0.0_f64)
+            .coerce_with(move |cx: &CoerceContext<'_>, v: f64| v.max(cx.get(minimum)))
+            .build();
+        assert!(metadata.has_coerce_callback());
+
+        let mut store = crate::PropertyStore::<u32>::new(1);
+        store.set_local(minimum, 10.0);
+
+        let cx = CoerceContext::new(&store, &registry);
+        assert_eq!(metadata.coerce(&cx, 5.0), 10.0);
+        assert_eq!(metadata.coerce(&cx, 42.0), 42.0);
+    }
+
+    #[test]
+    fn metadata_validate() {
+        let metadata = PropertyMetadataBuilder::new(0.0_f64)
+            .validate(|v| v.is_finite())
+            .build();
+
+        assert!(metadata.has_validate_callback());
+        assert!(metadata.validate(&1.5));
+        assert!(!metadata.validate(&f64::NAN));
+        assert!(!metadata.validate(&f64::INFINITY));
+    }
+
+    #[test]
+    fn metadata_validate_without_callback_accepts_everything() {
+        let metadata = PropertyMetadata::new(0.0_f64);
+        assert!(metadata.validate(&f64::NAN));
     }
 
     #[test]

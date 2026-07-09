@@ -10,6 +10,7 @@
 use invalidation::ChannelSet;
 
 use crate::id::{Property, PropertyId};
+use crate::metadata::ValidationError;
 use crate::registry::PropertyRegistry;
 use crate::store::{LocalValueSource, PropertyStore};
 
@@ -355,14 +356,20 @@ pub trait DependencyObjectExt<K: Copy + Eq>: DependencyObject<K> {
         self.property_store_mut().set_animation(property, value);
     }
 
-    /// Sets the local value with coercion and callbacks.
+    /// Sets the local value with validation, coercion, and callbacks.
     ///
     /// This is the "blessed" API for setting property values. It:
-    /// 1. Coerces the value using the property's coerce callback (if any)
-    /// 2. Stores the value at the local layer
-    /// 3. Computes the new effective local value (`Animation -> Local -> default`)
-    /// 4. Calls the property's changed callback if that effective local value changed
-    /// 5. Returns affected channels only when the effective local value changed
+    /// 1. Validates the raw value using the property's validate callback (if
+    ///    any); an invalid value **panics** (use
+    ///    [`try_set_local_notifying`](Self::try_set_local_notifying) to get a
+    ///    [`ValidationError`] instead)
+    /// 2. Coerces the value using the property's coerce callback (if any),
+    ///    with read access to this object's other effective property values
+    ///    via [`CoerceContext`](crate::CoerceContext)
+    /// 3. Stores the value at the local layer
+    /// 4. Computes the new effective local value (`Animation -> Local -> default`)
+    /// 5. Calls the property's changed callback if that effective local value changed
+    /// 6. Returns affected channels only when the effective local value changed
     ///
     /// This helper does **not** consult inheritance or style layers; it only
     /// reasons about the same effective-local resolution used by
@@ -422,23 +429,47 @@ pub trait DependencyObjectExt<K: Copy + Eq>: DependencyObject<K> {
     /// // Caller marks dirty
     /// assert!(channels.contains(LAYOUT));
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if the property has a validate callback and it rejects `value`.
     fn set_local_notifying<T: Clone + PartialEq + 'static>(
         &mut self,
         property: Property<T>,
         value: T,
         registry: &PropertyRegistry,
     ) -> ChannelSet {
+        match self.try_set_local_notifying(property, value, registry) {
+            Ok(channels) => channels,
+            Err(err) => panic!(
+                "Value for property '{}' was rejected by its validate callback",
+                registry.name(err.property).unwrap_or("<unregistered>")
+            ),
+        }
+    }
+
+    /// Fallible variant of [`set_local_notifying`](Self::set_local_notifying).
+    ///
+    /// Runs the same validate → coerce → store → notify pipeline, but when
+    /// the property's validate callback rejects the raw value the write does
+    /// not happen (the prior value is left intact, no callback fires) and the
+    /// rejected value is returned in [`ValidationError`].
+    fn try_set_local_notifying<T: Clone + PartialEq + 'static>(
+        &mut self,
+        property: Property<T>,
+        value: T,
+        registry: &PropertyRegistry,
+    ) -> Result<ChannelSet, ValidationError<T>> {
         let metadata = registry.get_metadata(property);
         let old_effective = metadata.map(|_| {
             self.property_store()
                 .get_effective_local(property, registry)
         });
 
-        // 1. Coerce the value
-        let value = match metadata {
-            Some(m) => m.coerce(value),
-            None => value,
-        };
+        // 1. Validate the raw value, then coerce it (with context).
+        let value = self
+            .property_store()
+            .validate_and_coerce(property, value, registry)?;
 
         // 2. Store the value
         self.property_store_mut().set_local(property, value);
@@ -450,11 +481,11 @@ pub trait DependencyObjectExt<K: Copy + Eq>: DependencyObject<K> {
                 .get_effective_local(property, registry);
             if old_effective != new_effective {
                 m.on_changed(Some(&old_effective), &new_effective);
-                return m.affects_channels();
+                return Ok(m.affects_channels());
             }
         }
 
-        ChannelSet::empty()
+        Ok(ChannelSet::empty())
     }
 
     /// Writes a value into the slot for `source`.
@@ -474,13 +505,21 @@ pub trait DependencyObjectExt<K: Copy + Eq>: DependencyObject<K> {
             .set_local_with_source(property, value, source);
     }
 
-    /// Sets the source-tagged value with coercion and notification.
+    /// Sets the source-tagged value with validation, coercion, and notification.
     ///
-    /// Mirrors [`DependencyObjectExt::set_local_notifying`]: coerces the value,
-    /// writes it to `source`'s slot, then fires the changed callback and
-    /// returns affected channels only if the effective local value actually
-    /// changed. A write that lands in a slot shadowed by a higher-precedence
-    /// source returns an empty `ChannelSet` (the effective value didn't move).
+    /// Mirrors [`DependencyObjectExt::set_local_notifying`]: validates the raw
+    /// value, coerces it, writes it to `source`'s slot, then fires the changed
+    /// callback and returns affected channels only if the effective local
+    /// value actually changed. A write that lands in a slot shadowed by a
+    /// higher-precedence source returns an empty `ChannelSet` (the effective
+    /// value didn't move).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the property has a validate callback and it rejects `value`.
+    /// Use
+    /// [`try_set_local_with_source_notifying`](Self::try_set_local_with_source_notifying)
+    /// for a fallible variant.
     fn set_local_with_source_notifying<T: Clone + PartialEq + 'static>(
         &mut self,
         property: Property<T>,
@@ -488,16 +527,37 @@ pub trait DependencyObjectExt<K: Copy + Eq>: DependencyObject<K> {
         source: LocalValueSource,
         registry: &PropertyRegistry,
     ) -> ChannelSet {
+        match self.try_set_local_with_source_notifying(property, value, source, registry) {
+            Ok(channels) => channels,
+            Err(err) => panic!(
+                "Value for property '{}' was rejected by its validate callback",
+                registry.name(err.property).unwrap_or("<unregistered>")
+            ),
+        }
+    }
+
+    /// Fallible variant of
+    /// [`set_local_with_source_notifying`](Self::set_local_with_source_notifying).
+    ///
+    /// When the property's validate callback rejects the raw value, the write
+    /// does not happen and the rejected value is returned in
+    /// [`ValidationError`].
+    fn try_set_local_with_source_notifying<T: Clone + PartialEq + 'static>(
+        &mut self,
+        property: Property<T>,
+        value: T,
+        source: LocalValueSource,
+        registry: &PropertyRegistry,
+    ) -> Result<ChannelSet, ValidationError<T>> {
         let metadata = registry.get_metadata(property);
         let old_effective = metadata.map(|_| {
             self.property_store()
                 .get_effective_local(property, registry)
         });
 
-        let value = match metadata {
-            Some(m) => m.coerce(value),
-            None => value,
-        };
+        let value = self
+            .property_store()
+            .validate_and_coerce(property, value, registry)?;
 
         self.property_store_mut()
             .set_local_with_source(property, value, source);
@@ -508,11 +568,85 @@ pub trait DependencyObjectExt<K: Copy + Eq>: DependencyObject<K> {
                 .get_effective_local(property, registry);
             if old_effective != new_effective {
                 m.on_changed(Some(&old_effective), &new_effective);
-                return m.affects_channels();
+                return Ok(m.affects_channels());
             }
         }
 
-        ChannelSet::empty()
+        Ok(ChannelSet::empty())
+    }
+
+    /// Re-runs coercion on `property`'s stored values and notifies if the
+    /// effective local value changed.
+    ///
+    /// This is the explicit re-coercion hook for cross-property coercion:
+    /// when a coercion *input* changes (e.g. a Slider's `Minimum` was raised
+    /// above the stored `Value`), the host calls this on each property it
+    /// knows depends on that input. This crate deliberately does not track
+    /// coercion dependencies automatically — which properties to re-coerce,
+    /// and when, is host policy.
+    ///
+    /// Wraps [`PropertyStore::coerce_value`] (see it for the slot-by-slot
+    /// contract and the note that re-coercion replaces stored values rather
+    /// than retaining pre-coercion "desired" values), firing the `on_changed`
+    /// callback and returning `affects_channels` when the effective local
+    /// value moved. Returns an empty `ChannelSet` otherwise.
+    ///
+    /// ```rust
+    /// use understory_property::{
+    ///     CoerceContext, DependencyObject, DependencyObjectExt, PropertyMetadataBuilder,
+    ///     PropertyRegistry, PropertyStore,
+    /// };
+    ///
+    /// let mut registry = PropertyRegistry::new();
+    /// let minimum = registry.register("Minimum", PropertyMetadataBuilder::new(0.0_f64).build());
+    /// let value = registry.register(
+    ///     "Value",
+    ///     PropertyMetadataBuilder::new(0.0_f64)
+    ///         .coerce_with(move |cx: &CoerceContext<'_>, v: f64| v.max(cx.get(minimum)))
+    ///         .build(),
+    /// );
+    ///
+    /// struct Element { key: u32, store: PropertyStore<u32> }
+    /// impl DependencyObject<u32> for Element {
+    ///     fn property_store(&self) -> &PropertyStore<u32> { &self.store }
+    ///     fn property_store_mut(&mut self) -> &mut PropertyStore<u32> { &mut self.store }
+    ///     fn key(&self) -> u32 { self.key }
+    ///     fn parent_key(&self) -> Option<u32> { None }
+    /// }
+    ///
+    /// let mut element = Element { key: 1, store: PropertyStore::new(1) };
+    /// element.set_local_notifying(value, 30.0, &registry);
+    ///
+    /// // The host knows Value coerces against Minimum, so after changing
+    /// // Minimum it re-coerces Value and routes any returned channels into
+    /// // its invalidation coordinator.
+    /// element.set_local_notifying(minimum, 50.0, &registry);
+    /// let channels = element.coerce_value_notifying(value, &registry);
+    /// assert_eq!(element.get_effective_local(value, &registry), 50.0);
+    /// ```
+    fn coerce_value_notifying<T: Clone + PartialEq + 'static>(
+        &mut self,
+        property: Property<T>,
+        registry: &PropertyRegistry,
+    ) -> ChannelSet {
+        let Some(metadata) = registry.get_metadata(property) else {
+            return ChannelSet::empty();
+        };
+
+        let old_effective = self
+            .property_store()
+            .get_effective_local(property, registry);
+        let changed = self.property_store_mut().coerce_value(property, registry);
+
+        if changed {
+            let new_effective = self
+                .property_store()
+                .get_effective_local(property, registry);
+            metadata.on_changed(Some(&old_effective), &new_effective);
+            metadata.affects_channels()
+        } else {
+            ChannelSet::empty()
+        }
     }
 
     /// Returns the [`LocalValueSource`] currently winning the local-layer
@@ -1868,6 +2002,164 @@ mod tests {
             element.get_local_source(width),
             Some(LocalValueSource::TemplateDefault)
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // Validation + cross-property coercion — Slider Min/Max/Value scenario
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn ext_slider_scenario_cross_property_coercion_and_re_coercion() {
+        use alloc::sync::Arc;
+        use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+        use invalidation::Channel;
+
+        const PAINT: Channel = Channel::new(1);
+
+        let mut registry = PropertyRegistry::new();
+        let minimum = registry.register("Minimum", PropertyMetadataBuilder::new(0.0_f64).build());
+        let maximum = registry.register("Maximum", PropertyMetadataBuilder::new(100.0_f64).build());
+
+        let callback_count = Arc::new(AtomicUsize::new(0));
+        let last_new = Arc::new(AtomicU64::new(f64::NAN.to_bits()));
+        let value = registry.register(
+            "Value",
+            PropertyMetadataBuilder::new(0.0_f64)
+                .affects_channels(PAINT.into_set())
+                .validate(|v| v.is_finite())
+                .coerce_with(move |cx, v: f64| v.max(cx.get(minimum)).min(cx.get(maximum)))
+                .on_changed({
+                    let callback_count = Arc::clone(&callback_count);
+                    let last_new = Arc::clone(&last_new);
+                    move |_, new| {
+                        callback_count.fetch_add(1, Ordering::Relaxed);
+                        last_new.store(new.to_bits(), Ordering::Relaxed);
+                    }
+                })
+                .build(),
+        );
+
+        let mut element = TestElement::new(1, None);
+
+        // Writes coerce against the current Minimum/Maximum.
+        let channels = element.set_local_notifying(value, 150.0, &registry);
+        assert!(channels.contains(PAINT));
+        assert_eq!(element.get_local_value(value), Some(&100.0));
+        assert_eq!(callback_count.load(Ordering::Relaxed), 1);
+
+        element.set_local_notifying(value, 30.0, &registry);
+        assert_eq!(callback_count.load(Ordering::Relaxed), 2);
+
+        // Raise Minimum above the stored Value. The host (the Slider) knows
+        // Value coerces against Minimum, so it re-coerces explicitly.
+        element.set_local_notifying(minimum, 50.0, &registry);
+        let channels = element.coerce_value_notifying(value, &registry);
+
+        assert!(channels.contains(PAINT));
+        assert_eq!(element.get_effective_local(value, &registry), 50.0);
+        assert_eq!(callback_count.load(Ordering::Relaxed), 3);
+        assert_eq!(f64::from_bits(last_new.load(Ordering::Relaxed)), 50.0);
+
+        // Already coerced: re-coercion is a no-op with empty channels.
+        let channels = element.coerce_value_notifying(value, &registry);
+        assert!(channels.is_empty());
+        assert_eq!(callback_count.load(Ordering::Relaxed), 3);
+    }
+
+    #[test]
+    fn ext_try_set_local_notifying_rejects_and_keeps_prior_value() {
+        use alloc::sync::Arc;
+        use core::sync::atomic::{AtomicUsize, Ordering};
+
+        let mut registry = PropertyRegistry::new();
+        let callback_count = Arc::new(AtomicUsize::new(0));
+        let width = registry.register(
+            "Width",
+            PropertyMetadataBuilder::new(0.0_f64)
+                .validate(|v| v.is_finite())
+                .on_changed({
+                    let callback_count = Arc::clone(&callback_count);
+                    move |_, _| {
+                        callback_count.fetch_add(1, Ordering::Relaxed);
+                    }
+                })
+                .build(),
+        );
+
+        let mut element = TestElement::new(1, None);
+        element
+            .try_set_local_notifying(width, 10.0, &registry)
+            .unwrap();
+        assert_eq!(callback_count.load(Ordering::Relaxed), 1);
+
+        let err = element
+            .try_set_local_notifying(width, f64::NAN, &registry)
+            .unwrap_err();
+        assert_eq!(err.property, width.id());
+        assert!(err.rejected.is_nan());
+        // The write did not happen and no callback fired.
+        assert_eq!(element.get_local_value(width), Some(&10.0));
+        assert_eq!(callback_count.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "Value for property 'Width' was rejected")]
+    fn ext_set_local_notifying_panics_on_invalid_value() {
+        let mut registry = PropertyRegistry::new();
+        let width = registry.register(
+            "Width",
+            PropertyMetadataBuilder::new(0.0_f64)
+                .validate(|v| v.is_finite())
+                .build(),
+        );
+
+        let mut element = TestElement::new(1, None);
+        element.set_local_notifying(width, f64::NAN, &registry);
+    }
+
+    #[test]
+    fn ext_try_set_local_with_source_notifying_validates_and_coerces() {
+        use invalidation::Channel;
+
+        const LAYOUT: Channel = Channel::new(0);
+
+        let mut registry = PropertyRegistry::new();
+        let width = registry.register(
+            "Width",
+            PropertyMetadataBuilder::new(0.0_f64)
+                .affects_channels(LAYOUT.into_set())
+                .validate(|v| v.is_finite())
+                .coerce(|v| v.max(0.0))
+                .build(),
+        );
+
+        let mut element = TestElement::new(1, None);
+        let channels = element
+            .try_set_local_with_source_notifying(
+                width,
+                -5.0,
+                LocalValueSource::TemplateDefault,
+                &registry,
+            )
+            .unwrap();
+        // Coerced to 0.0, equal to the default: effective value didn't move.
+        assert!(channels.is_empty());
+        assert_eq!(
+            element
+                .property_store()
+                .get_local_at_source(width, LocalValueSource::TemplateDefault),
+            Some(&0.0)
+        );
+
+        let err = element
+            .try_set_local_with_source_notifying(
+                width,
+                f64::NAN,
+                LocalValueSource::TemplateDefault,
+                &registry,
+            )
+            .unwrap_err();
+        assert_eq!(err.property, width.id());
     }
 
     // -------------------------------------------------------------------------
