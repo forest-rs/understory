@@ -8,8 +8,8 @@
 //!
 //! # Implementation
 //!
-//! Following the `WinUI` approach, we use a sorted vector with binary search rather
-//! than a hash map. This provides:
+//! This store uses a sorted vector with binary search rather than a hash map.
+//! This provides:
 //!
 //! - Better cache locality (contiguous memory)
 //! - Lower memory overhead (no hash buckets)
@@ -45,7 +45,9 @@ use core::any::TypeId;
 use invalidation::ChannelSet;
 use smallvec::SmallVec;
 
+use crate::coerce::CoerceContext;
 use crate::id::{Property, PropertyId};
+use crate::metadata::{ErasedValidationError, ValidationError};
 use crate::registry::PropertyRegistry;
 use crate::value::ErasedValue;
 
@@ -107,11 +109,69 @@ type Entry = (PropertyId, ErasedValue);
 /// Type-id mismatch reported by checked type-erased setters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ErasedTypeMismatch {
+    /// The property being written.
+    pub property: PropertyId,
     /// The value type registered for the property.
     pub expected: TypeId,
     /// The value type carried by the supplied [`ErasedValue`].
     pub actual: TypeId,
 }
+
+impl core::fmt::Display for ErasedTypeMismatch {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "value for property {} had type {:?}, expected {:?}",
+            self.property, self.actual, self.expected
+        )
+    }
+}
+
+impl core::error::Error for ErasedTypeMismatch {}
+
+/// Error returned by checked type-erased setters.
+#[derive(Debug, Clone)]
+pub enum ErasedWriteError {
+    /// The supplied erased value's type did not match the property's
+    /// registration.
+    TypeMismatch(ErasedTypeMismatch),
+    /// The property's validate callback rejected the raw erased value.
+    Validation(ErasedValidationError),
+}
+
+impl ErasedWriteError {
+    /// Returns the property whose write failed.
+    #[must_use]
+    pub fn property(&self) -> PropertyId {
+        match self {
+            Self::TypeMismatch(err) => err.property,
+            Self::Validation(err) => err.property,
+        }
+    }
+}
+
+impl From<ErasedTypeMismatch> for ErasedWriteError {
+    fn from(value: ErasedTypeMismatch) -> Self {
+        Self::TypeMismatch(value)
+    }
+}
+
+impl From<ErasedValidationError> for ErasedWriteError {
+    fn from(value: ErasedValidationError) -> Self {
+        Self::Validation(value)
+    }
+}
+
+impl core::fmt::Display for ErasedWriteError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::TypeMismatch(err) => err.fmt(f),
+            Self::Validation(err) => err.fmt(f),
+        }
+    }
+}
+
+impl core::error::Error for ErasedWriteError {}
 
 /// Shared helpers for the sorted sparse layouts of [`Entry`] used by every
 /// source's slot. Both `Vec<Entry>` and `SmallVec<[Entry; _]>` get the same
@@ -170,10 +230,9 @@ impl_entry_store!(SmallVec<[Entry; INLINE_CAPACITY]>);
 ///
 /// # Storage Strategy
 ///
-/// Uses sorted sparse stores with binary search, following the `WinUI`
-/// `vector_map` approach. This provides O(log n) lookup with excellent cache
-/// locality. Each store is independent so a write to one source slot does not
-/// touch any other.
+/// Uses sorted sparse stores with binary search. This provides O(log n) lookup
+/// with excellent cache locality. Each store is independent so a write to one
+/// source slot does not touch any other.
 ///
 /// # Precedence
 ///
@@ -449,6 +508,51 @@ impl<K: Copy + Eq> PropertyStore<K> {
         self.get_local(property).unwrap()
     }
 
+    /// Runs the checked-write pipeline (validate the raw value, then coerce
+    /// it against this store's current effective values) without storing.
+    ///
+    /// Properties not present in `registry` pass through unchanged, matching
+    /// the notifying setters' tolerance for unregistered properties.
+    pub(crate) fn validate_and_coerce<T: Clone + 'static>(
+        &self,
+        property: Property<T>,
+        value: T,
+        registry: &PropertyRegistry,
+    ) -> Result<T, ValidationError<T>> {
+        let Some(metadata) = registry.get_metadata(property) else {
+            return Ok(value);
+        };
+        if !metadata.validate(&value) {
+            return Err(ValidationError {
+                property: property.id(),
+                rejected: value,
+            });
+        }
+        let cx = CoerceContext::new(self, registry);
+        Ok(metadata.coerce(&cx, value))
+    }
+
+    /// Sets the local value through the checked pipeline: **validate** the raw
+    /// value, then **coerce** it (with cross-property read access via
+    /// [`CoerceContext`]), then store it at [`LocalValueSource::Local`].
+    ///
+    /// If the property's validate callback rejects the raw value, nothing is
+    /// stored and the rejected value is returned in the error. Unlike the raw
+    /// [`set_local`](Self::set_local), which bypasses both callbacks, this is
+    /// the store-level entry point that upholds the "stored values are already
+    /// validated and coerced" invariant.
+    ///
+    /// Returns a reference to the stored (coerced) value on success.
+    pub fn try_set_local<T: Clone + 'static>(
+        &mut self,
+        property: Property<T>,
+        value: T,
+        registry: &PropertyRegistry,
+    ) -> Result<&T, ValidationError<T>> {
+        let value = self.validate_and_coerce(property, value, registry)?;
+        Ok(self.set_local(property, value))
+    }
+
     /// Writes a value to the slot for `source`.
     ///
     /// Each source has its own sparse slot, so this write never overwrites a
@@ -491,6 +595,24 @@ impl<K: Copy + Eq> PropertyStore<K> {
         self.slot_write(property.id(), source, ErasedValue::new(value));
     }
 
+    /// Writes a value to the slot for `source` through the checked pipeline:
+    /// **validate** the raw value, then **coerce** it, then store it.
+    ///
+    /// This is the checked twin of
+    /// [`set_local_with_source`](Self::set_local_with_source); see
+    /// [`try_set_local`](Self::try_set_local) for the pipeline contract.
+    pub fn try_set_local_with_source<T: Clone + 'static>(
+        &mut self,
+        property: Property<T>,
+        value: T,
+        source: LocalValueSource,
+        registry: &PropertyRegistry,
+    ) -> Result<(), ValidationError<T>> {
+        let value = self.validate_and_coerce(property, value, registry)?;
+        self.set_local_with_source(property, value, source);
+        Ok(())
+    }
+
     /// Writes an erased value to the slot for `source`.
     ///
     /// # Type Contract
@@ -510,11 +632,13 @@ impl<K: Copy + Eq> PropertyStore<K> {
         self.slot_write(id, source, value);
     }
 
-    /// Writes an erased value to the slot for `source` after checking its type.
+    /// Writes an erased value to the slot for `source` through the checked
+    /// write pipeline.
     ///
-    /// The value's [`TypeId`] is compared with the type registered for `id` in
-    /// `registry`. On mismatch the store is left unchanged and
-    /// [`ErasedTypeMismatch`] is returned.
+    /// The value's [`TypeId`] is compared with the type registered for `id`,
+    /// then the raw value is validated and coerced through the property's
+    /// metadata before storage. On type mismatch or validation failure the
+    /// store is left unchanged and [`ErasedWriteError`] is returned.
     ///
     /// # Panics
     ///
@@ -525,23 +649,32 @@ impl<K: Copy + Eq> PropertyStore<K> {
         value: ErasedValue,
         source: LocalValueSource,
         registry: &PropertyRegistry,
-    ) -> Result<(), ErasedTypeMismatch> {
-        let expected = registry
+    ) -> Result<(), ErasedWriteError> {
+        let registration = registry
             .get(id)
-            .unwrap_or_else(|| panic!("Property {id:?} not found in registry"))
-            .type_id();
+            .unwrap_or_else(|| panic!("Property {id:?} not found in registry"));
+        let expected = registration.type_id();
         let actual = value.type_id();
         if actual != expected {
-            return Err(ErasedTypeMismatch { expected, actual });
+            return Err(ErasedTypeMismatch {
+                property: id,
+                expected,
+                actual,
+            }
+            .into());
         }
 
+        let value = {
+            let cx = CoerceContext::new(&*self, registry);
+            registration.validate_and_coerce_erased(id, value, &cx)?
+        };
         self.set_local_erased_with_source(id, value, source);
         Ok(())
     }
 
     /// Writes an erased source-tagged local value and returns affected channels.
     ///
-    /// This uses the same type check as
+    /// This uses the same checked write pipeline as
     /// [`set_local_erased_with_source_checked`](Self::set_local_erased_with_source_checked).
     /// After a successful write it conservatively returns the full
     /// `affects_channels` set for `id`: the erased path cannot compare the old
@@ -558,7 +691,7 @@ impl<K: Copy + Eq> PropertyStore<K> {
         value: ErasedValue,
         source: LocalValueSource,
         registry: &PropertyRegistry,
-    ) -> Result<ChannelSet, ErasedTypeMismatch> {
+    ) -> Result<ChannelSet, ErasedWriteError> {
         self.set_local_erased_with_source_checked(id, value, source, registry)?;
         Ok(registry.affects_channels(id))
     }
@@ -743,6 +876,25 @@ impl<K: Copy + Eq> PropertyStore<K> {
         self.get_animation(property).unwrap()
     }
 
+    /// Sets the animation value through the checked pipeline: **validate**
+    /// the raw value, then **coerce** it, then store it in the animation slot.
+    ///
+    /// Animation writes go through the same validate-then-coerce pipeline as
+    /// local writes so the animation slot cannot smuggle in values the
+    /// property would otherwise reject or adjust. The raw
+    /// [`set_animation`](Self::set_animation) bypasses both callbacks.
+    ///
+    /// Returns a reference to the stored (coerced) value on success.
+    pub fn try_set_animation<T: Clone + 'static>(
+        &mut self,
+        property: Property<T>,
+        value: T,
+        registry: &PropertyRegistry,
+    ) -> Result<&T, ValidationError<T>> {
+        let value = self.validate_and_coerce(property, value, registry)?;
+        Ok(self.set_animation(property, value))
+    }
+
     /// Clears the animation value.
     ///
     /// Returns `true` if a value was removed.
@@ -819,6 +971,107 @@ impl<K: Copy + Eq> PropertyStore<K> {
             return metadata.default_value();
         }
         panic!("Property {:?} not found in registry", property.id());
+    }
+
+    /// Re-runs coercion on every stored value for `property` and reports
+    /// whether the effective local value changed.
+    ///
+    /// Coercion normally runs once, at write time, against the object's state
+    /// at that moment. When a *coercion input* changes later (e.g. a Slider's
+    /// `Minimum` is raised above the stored `Value`), the stored value is
+    /// stale with respect to its own coerce callback. This crate deliberately
+    /// does **not** track coercion dependencies automatically — that is host
+    /// policy. Instead, the host calls this method for each property it knows
+    /// depends on the changed input, and invalidates if it returns `true`
+    /// (or uses [`DependencyObjectExt::coerce_value_notifying`] to get
+    /// channels and `on_changed` in one step).
+    ///
+    /// Every stored slot (each [`LocalValueSource`] plus animation) is
+    /// re-coerced in place, preserving the invariant that stored values are
+    /// already coerced. Note that re-coercion **replaces** the stored value:
+    /// the pre-coercion "desired" value is not retained, so relaxing a
+    /// constraint later does not restore it. Hosts that need
+    /// restore-on-relax semantics should remember desired values themselves
+    /// and re-set them when constraints change.
+    ///
+    /// Properties with no coerce callback, no stored values, or no
+    /// registration return `false` without side effects.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use understory_property::{
+    ///     CoerceContext, PropertyMetadataBuilder, PropertyRegistry, PropertyStore,
+    /// };
+    ///
+    /// let mut registry = PropertyRegistry::new();
+    /// let minimum = registry.register("Minimum", PropertyMetadataBuilder::new(0.0_f64).build());
+    /// let value = registry.register(
+    ///     "Value",
+    ///     PropertyMetadataBuilder::new(0.0_f64)
+    ///         .coerce_with(move |cx: &CoerceContext<'_>, v: f64| v.max(cx.get(minimum)))
+    ///         .build(),
+    /// );
+    ///
+    /// let mut store = PropertyStore::<u32>::new(1);
+    /// store.try_set_local(value, 30.0, &registry).unwrap();
+    ///
+    /// // Raising Minimum invalidates Value's earlier coercion; the host
+    /// // knows Value depends on Minimum and re-coerces explicitly.
+    /// store.set_local(minimum, 50.0);
+    /// assert!(store.coerce_value(value, &registry));
+    /// assert_eq!(store.get_local(value), Some(&50.0));
+    ///
+    /// // Already coerced: nothing changes.
+    /// assert!(!store.coerce_value(value, &registry));
+    /// ```
+    ///
+    /// [`DependencyObjectExt::coerce_value_notifying`]:
+    /// crate::DependencyObjectExt::coerce_value_notifying
+    pub fn coerce_value<T: Clone + PartialEq + 'static>(
+        &mut self,
+        property: Property<T>,
+        registry: &PropertyRegistry,
+    ) -> bool {
+        let Some(metadata) = registry.get_metadata(property) else {
+            return false;
+        };
+        if !metadata.has_coerce_callback() {
+            return false;
+        }
+
+        let old_effective = self.get_effective_local(property, registry);
+
+        for source in [
+            LocalValueSource::Local,
+            LocalValueSource::TemplateBinding,
+            LocalValueSource::TemplateDefault,
+        ] {
+            let Some(current) = self.get_local_at_source(property, source) else {
+                continue;
+            };
+            let current = current.clone();
+            let coerced = {
+                let cx = CoerceContext::new(&*self, registry);
+                metadata.coerce(&cx, current.clone())
+            };
+            if coerced != current {
+                self.set_local_with_source(property, coerced, source);
+            }
+        }
+
+        if let Some(current) = self.get_animation(property) {
+            let current = current.clone();
+            let coerced = {
+                let cx = CoerceContext::new(&*self, registry);
+                metadata.coerce(&cx, current.clone())
+            };
+            if coerced != current {
+                self.set_animation(property, coerced);
+            }
+        }
+
+        self.get_effective_local(property, registry) != old_effective
     }
 
     /// Returns `true` if any local-layer source or the animation slot has a
@@ -1518,6 +1771,10 @@ mod tests {
             )
             .unwrap_err();
 
+        let ErasedWriteError::TypeMismatch(err) = err else {
+            panic!("expected type mismatch");
+        };
+        assert_eq!(err.property, width.id());
         assert_eq!(err.expected, TypeId::of::<f64>());
         assert_eq!(err.actual, TypeId::of::<i32>());
         assert_eq!(store.get_local(width), Some(&10.0));
@@ -1576,6 +1833,250 @@ mod tests {
         assert_eq!(store.get_local(width), Some(&10.0));
     }
 
+    // -------------------------------------------------------------------------
+    // Validation + coercion — checked write paths and re-coercion
+    // -------------------------------------------------------------------------
+
+    /// Registers a Slider-style trio: `Value` validates finiteness and
+    /// coerces against the current effective `Minimum`/`Maximum`.
+    fn setup_slider() -> (
+        PropertyRegistry,
+        Property<f64>,
+        Property<f64>,
+        Property<f64>,
+    ) {
+        let mut registry = PropertyRegistry::new();
+        let minimum = registry.register("Minimum", PropertyMetadataBuilder::new(0.0_f64).build());
+        let maximum = registry.register("Maximum", PropertyMetadataBuilder::new(100.0_f64).build());
+        let value = registry.register(
+            "Value",
+            PropertyMetadataBuilder::new(0.0_f64)
+                .validate(|v| v.is_finite())
+                .coerce_with(move |cx, v: f64| v.max(cx.get(minimum)).min(cx.get(maximum)))
+                .build(),
+        );
+        (registry, minimum, maximum, value)
+    }
+
+    #[test]
+    fn try_set_local_coerces_against_current_properties() {
+        let (registry, minimum, _maximum, value) = setup_slider();
+        let mut store = PropertyStore::<u32>::new(1);
+
+        // Coerces against the default Minimum (0) / Maximum (100).
+        assert_eq!(store.try_set_local(value, 150.0, &registry), Ok(&100.0));
+        assert_eq!(store.get_local(value), Some(&100.0));
+
+        // Coercion reads the *current* Minimum.
+        store.set_local(minimum, 40.0);
+        assert_eq!(store.try_set_local(value, 10.0, &registry), Ok(&40.0));
+    }
+
+    #[test]
+    fn try_set_local_rejects_and_leaves_prior_value_intact() {
+        let (registry, _minimum, _maximum, value) = setup_slider();
+        let mut store = PropertyStore::<u32>::new(1);
+
+        store.try_set_local(value, 30.0, &registry).unwrap();
+
+        let err = store.try_set_local(value, f64::NAN, &registry).unwrap_err();
+        assert_eq!(err.property, value.id());
+        assert!(err.rejected.is_nan());
+        assert_eq!(store.get_local(value), Some(&30.0));
+    }
+
+    #[test]
+    fn try_set_validates_before_coercing() {
+        // A validator that rejects negatives paired with a coercion that
+        // would clamp them away: validation must see the RAW value first,
+        // so a negative write fails even though coercion would have fixed it.
+        let mut registry = PropertyRegistry::new();
+        let width = registry.register(
+            "Width",
+            PropertyMetadataBuilder::new(1.0_f64)
+                .validate(|v| *v >= 0.0)
+                .coerce(|v| v.max(0.0))
+                .build(),
+        );
+
+        let mut store = PropertyStore::<u32>::new(1);
+        let err = store.try_set_local(width, -5.0, &registry).unwrap_err();
+        assert_eq!(err.rejected, -5.0);
+        assert!(store.get_local(width).is_none());
+    }
+
+    #[test]
+    fn try_set_local_with_source_validates_and_coerces() {
+        let (registry, _minimum, _maximum, value) = setup_slider();
+        let mut store = PropertyStore::<u32>::new(1);
+
+        store
+            .try_set_local_with_source(value, 150.0, LocalValueSource::TemplateDefault, &registry)
+            .unwrap();
+        assert_eq!(
+            store.get_local_at_source(value, LocalValueSource::TemplateDefault),
+            Some(&100.0)
+        );
+
+        let err = store
+            .try_set_local_with_source(
+                value,
+                f64::INFINITY,
+                LocalValueSource::TemplateDefault,
+                &registry,
+            )
+            .unwrap_err();
+        assert_eq!(err.property, value.id());
+        assert_eq!(
+            store.get_local_at_source(value, LocalValueSource::TemplateDefault),
+            Some(&100.0)
+        );
+    }
+
+    #[test]
+    fn set_local_erased_with_source_checked_validates_and_coerces() {
+        let (registry, minimum, _maximum, value) = setup_slider();
+        let mut store = PropertyStore::<u32>::new(1);
+
+        store.set_local(minimum, 40.0);
+        store
+            .set_local_erased_with_source_checked(
+                value.id(),
+                ErasedValue::new(10.0_f64),
+                LocalValueSource::TemplateBinding,
+                &registry,
+            )
+            .unwrap();
+
+        assert_eq!(
+            store.get_local_at_source(value, LocalValueSource::TemplateBinding),
+            Some(&40.0)
+        );
+    }
+
+    #[test]
+    fn set_local_erased_with_source_checked_rejects_invalid_and_leaves_prior_value() {
+        let (registry, _minimum, _maximum, value) = setup_slider();
+        let mut store = PropertyStore::<u32>::new(1);
+
+        store
+            .set_local_erased_with_source_checked(
+                value.id(),
+                ErasedValue::new(20.0_f64),
+                LocalValueSource::TemplateBinding,
+                &registry,
+            )
+            .unwrap();
+
+        let err = store
+            .set_local_erased_with_source_checked(
+                value.id(),
+                ErasedValue::new(f64::NAN),
+                LocalValueSource::TemplateBinding,
+                &registry,
+            )
+            .unwrap_err();
+
+        let ErasedWriteError::Validation(err) = err else {
+            panic!("expected validation error");
+        };
+        assert_eq!(err.property, value.id());
+        assert!(err.rejected.downcast_ref::<f64>().unwrap().is_nan());
+        assert_eq!(
+            store.get_local_at_source(value, LocalValueSource::TemplateBinding),
+            Some(&20.0)
+        );
+    }
+
+    #[test]
+    fn try_set_animation_validates_and_coerces() {
+        let (registry, _minimum, _maximum, value) = setup_slider();
+        let mut store = PropertyStore::<u32>::new(1);
+
+        // Animation writes run the same validate-then-coerce pipeline.
+        assert_eq!(store.try_set_animation(value, 150.0, &registry), Ok(&100.0));
+        assert_eq!(store.get_animation(value), Some(&100.0));
+
+        let err = store
+            .try_set_animation(value, f64::NAN, &registry)
+            .unwrap_err();
+        assert_eq!(err.property, value.id());
+        assert_eq!(store.get_animation(value), Some(&100.0));
+    }
+
+    #[test]
+    fn try_set_unregistered_property_passes_through() {
+        let registry = PropertyRegistry::new();
+        let width: Property<f64> = Property::from_id(PropertyId::new(9));
+        let mut store = PropertyStore::<u32>::new(1);
+
+        // Matches the notifying setters' tolerance for unregistered
+        // properties: no metadata means no validation and no coercion.
+        assert_eq!(store.try_set_local(width, -3.0, &registry), Ok(&-3.0));
+    }
+
+    #[test]
+    fn coerce_value_reclamps_after_dependency_change() {
+        let (registry, minimum, _maximum, value) = setup_slider();
+        let mut store = PropertyStore::<u32>::new(1);
+
+        store.try_set_local(value, 30.0, &registry).unwrap();
+
+        // Raise Minimum above the stored Value; the stored Value is now
+        // stale. The host re-coerces explicitly.
+        store.set_local(minimum, 50.0);
+        assert!(store.coerce_value(value, &registry));
+        assert_eq!(store.get_local(value), Some(&50.0));
+
+        // Idempotent: a second re-coercion reports no change.
+        assert!(!store.coerce_value(value, &registry));
+    }
+
+    #[test]
+    fn coerce_value_covers_all_slots() {
+        let (registry, minimum, _maximum, value) = setup_slider();
+        let mut store = PropertyStore::<u32>::new(1);
+
+        store
+            .try_set_local_with_source(value, 10.0, LocalValueSource::TemplateDefault, &registry)
+            .unwrap();
+        store.try_set_local(value, 30.0, &registry).unwrap();
+        store.try_set_animation(value, 20.0, &registry).unwrap();
+
+        store.set_local(minimum, 50.0);
+        assert!(store.coerce_value(value, &registry));
+
+        assert_eq!(
+            store.get_local_at_source(value, LocalValueSource::TemplateDefault),
+            Some(&50.0)
+        );
+        assert_eq!(
+            store.get_local_at_source(value, LocalValueSource::Local),
+            Some(&50.0)
+        );
+        assert_eq!(store.get_animation(value), Some(&50.0));
+    }
+
+    #[test]
+    fn coerce_value_without_coerce_callback_is_noop() {
+        let (registry, width, _) = setup_registry();
+        let mut store = PropertyStore::<u32>::new(1);
+        store.set_local(width, 10.0);
+
+        assert!(!store.coerce_value(width, &registry));
+        assert_eq!(store.get_local(width), Some(&10.0));
+    }
+
+    #[test]
+    fn coerce_value_with_no_stored_values_reports_no_change() {
+        let (registry, _minimum, _maximum, value) = setup_slider();
+        let mut store = PropertyStore::<u32>::new(1);
+
+        // Nothing stored: nothing to re-coerce, effective (default) unchanged.
+        assert!(!store.coerce_value(value, &registry));
+        assert!(!store.has_value(value));
+    }
+
     #[test]
     fn set_local_erased_with_source_notifying_mismatch_leaves_store_untouched() {
         let (registry, width, _) = setup_registry();
@@ -1591,6 +2092,10 @@ mod tests {
             )
             .unwrap_err();
 
+        let ErasedWriteError::TypeMismatch(err) = err else {
+            panic!("expected type mismatch");
+        };
+        assert_eq!(err.property, width.id());
         assert_eq!(err.expected, TypeId::of::<f64>());
         assert_eq!(err.actual, TypeId::of::<i32>());
         assert!(!store.has_local_at_source(width, LocalValueSource::Local));
