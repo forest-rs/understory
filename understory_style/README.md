@@ -35,7 +35,11 @@ Resolution follows this precedence chain:
 
 The resource fallback stage is present only when a configured
 [`ResolveQuery`] supplies one. Theme values are also consulted when a winning
-style entry or expression token points at a [`ResourceKey`].
+style entry or expression token points at a [`ResourceKey`]. Every theme
+lookup flows through the same [`ThemeResolveOptions`] entry point, so an
+active [`ThemeVariant`] (variant table → base table) and a subtree
+[`ThemeScope`] chain (innermost scope → outward to the root app theme) apply
+uniformly across all of those stages.
 
 ## Start Here
 
@@ -52,15 +56,17 @@ The crate owns:
 - selector matching over child and descendant paths;
 - optional style vocabulary interning from author-facing names to compact ids;
 - style values, style expressions, and theme resources for dependency properties;
-- expression-aware resolution through animation, local, style, inheritance,
-  expression defaults, and registry defaults;
+- theme variants (light, dark, high-contrast, custom) and subtree-scoped
+  theme overrides carried by the embedder;
+- expression-aware resolution through animation, local, style, resource
+  fallback, inheritance, expression defaults, and registry defaults;
 - conservative style invalidation facts through `invalidation` channels;
 - inspection hooks for matched rules and style source provenance.
 
 The crate does not own widgets, templates, bindings, animation sampling,
 layout, rendering, event dispatch, caching, dirty queues, frame scheduling,
-sibling relationships, parent queries, or structural selectors such as
-`nth-*`, `odd`, or `even`.
+theme persistence or serialization, color math, sibling relationships,
+parent queries, or structural selectors such as `nth-*`, `odd`, or `even`.
 
 ### Glossary
 
@@ -269,6 +275,134 @@ let dark_theme = ThemeBuilder::new()
 
 assert_eq!(light_theme.get::<u32>(ACCENT_COLOR), Some(&0x0078D4));
 ```
+
+### Theme Variants
+
+[`VariantTheme`] makes light/dark/high-contrast (and custom) a first-class
+dimension instead of swapping whole theme tables. A variant theme holds a
+base [`Theme`] plus per-[`ThemeVariant`] override tables; lookup takes the
+active variant and falls back variant → base, so an unknown variant falls
+back cleanly to the base table.
+
+```rust
+use understory_style::{ResourceKey, ThemeBuilder, ThemeVariant, VariantThemeBuilder};
+
+const ACCENT_COLOR: ResourceKey = ResourceKey::new(0);
+const FONT_SIZE: ResourceKey = ResourceKey::new(1);
+
+let theme = VariantThemeBuilder::new()
+    .base(
+        ThemeBuilder::new()
+            .set(ACCENT_COLOR, 0x0078D4_u32)
+            .set(FONT_SIZE, 14.0_f64)
+            .build(),
+    )
+    .variant(
+        ThemeVariant::DARK,
+        ThemeBuilder::new().set(ACCENT_COLOR, 0x4CC2FF_u32).build(),
+    )
+    .build();
+
+let dark = Some(ThemeVariant::DARK);
+assert_eq!(theme.get::<u32>(dark, ACCENT_COLOR), Some(&0x4CC2FF));
+// Resources without a dark override fall back to the base table.
+assert_eq!(theme.get::<f64>(dark, FONT_SIZE), Some(&14.0));
+```
+
+### Theme Scopes
+
+[`ThemeScope`] scopes theme overrides to a subtree, following the same
+embedding philosophy as [`MatchState`]: this crate does not store the app
+tree. The embedder walks its own tree and carries a cheap scope handle from
+parent to child; a popup or themed island pushes a child scope that
+overrides some resources. Lookup consults the innermost scope first and
+falls back outward to the root scope (normally the app theme), applying the
+same variant fallback at each level.
+
+Resolution picks scoped values up automatically: pass the scope (and active
+variant) to [`ResolveCx::new`] through [`ThemeResolveOptions`], and style
+resource entries, resource fallbacks, and [`expr::token`] references all
+observe the scoped, variant-aware values.
+
+```rust
+use understory_property::{
+    DependencyObject, PropertyMetadataBuilder, PropertyRegistry, PropertyStore,
+};
+use understory_style::{
+    ExpressionLayer, NoResolveParentLookup, ResolveCx, ResourceKey, StyleBuilder,
+    StyleCascadeBuilder, StyleOrigin, ThemeBuilder, ThemeResolveOptions, ThemeScope,
+    ThemeVariant, VariantThemeBuilder,
+};
+
+const ACCENT_COLOR: ResourceKey = ResourceKey::new(0);
+
+struct Element {
+    key: u32,
+    parent: Option<u32>,
+    store: PropertyStore<u32>,
+}
+
+impl DependencyObject<u32> for Element {
+    fn property_store(&self) -> &PropertyStore<u32> { &self.store }
+    fn property_store_mut(&mut self) -> &mut PropertyStore<u32> { &mut self.store }
+    fn key(&self) -> u32 { self.key }
+    fn parent_key(&self) -> Option<u32> { self.parent }
+}
+
+let mut registry = PropertyRegistry::new();
+let background = registry.register("Background", PropertyMetadataBuilder::new(0_u32).build());
+
+// The style dereferences a theme resource.
+let style = StyleBuilder::new().set_resource(background, ACCENT_COLOR).build();
+let cascade = StyleCascadeBuilder::new()
+    .push_style(StyleOrigin::Base, style)
+    .build();
+
+// App theme with a dark variant; the popup shadows the accent color.
+let app = ThemeScope::new(
+    VariantThemeBuilder::new()
+        .base(ThemeBuilder::new().set(ACCENT_COLOR, 0x0078D4_u32).build())
+        .variant(
+            ThemeVariant::DARK,
+            ThemeBuilder::new().set(ACCENT_COLOR, 0x4CC2FF_u32).build(),
+        )
+        .build(),
+);
+let popup = app.child(ThemeBuilder::new().set(ACCENT_COLOR, 0xE81123_u32).build());
+
+let expressions = ExpressionLayer::new();
+let element = Element { key: 1, parent: None, store: PropertyStore::new(1) };
+
+// Dark app subtree: the variant table wins.
+let dark_app = ThemeResolveOptions::from(&app).with_variant(ThemeVariant::DARK);
+let cx = ResolveCx::new(&registry, dark_app, &expressions, NoResolveParentLookup);
+let value = cx.get_value(&element, background, Some((&cascade, cascade.root_state())));
+assert_eq!(value, 0x4CC2FF);
+
+// Popup subtree: the inner scope shadows the app theme.
+let dark_popup = ThemeResolveOptions::from(&popup).with_variant(ThemeVariant::DARK);
+let cx = ResolveCx::new(&registry, dark_popup, &expressions, NoResolveParentLookup);
+let value = cx.get_value(&element, background, Some((&cascade, cascade.root_state())));
+assert_eq!(value, 0xE81123);
+```
+
+#### Theme Change Invalidation
+
+Themes, variant themes, and scopes are immutable; the host switches themes
+by carrying a different scope, theme, or active variant into the next
+resolution pass. When that happens, resource-derived values may have
+changed. The conservative fact for normal style resolution is
+[`StyleCascade::resource_dependent_properties_with_defaults`]: it reports
+every property that any cascade source or expression default can derive from
+theme resources, and [`StyleChangeSet::affected_channels`] converts that to
+`invalidation` channels. Hosts that build finer-grained resource indexes can
+use [`StyleCascade::resource_dependent_properties`],
+[`Style::resource_entries`], [`StyleCascade::expression_entries`], and
+[`ExpressionLayer::resource_dependent_properties`] directly. Property-level
+resource fallbacks supplied through [`ResolveQuery::resource_fallback`] are
+caller-owned. The crate reports these facts; scheduling, dirty queues, and
+subtree walks stay with the host, which knows which subtrees carried the
+changed scope.
 
 ### Expression Defaults
 
@@ -480,8 +614,8 @@ assert_eq!(value, 80.0);
 ### Resolution Context
 
 [`ResolveCx`] bundles everything needed to resolve property values through
-animation, local, style, inheritance, and default stages. This avoids passing
-many parameters to resolution functions.
+animation, local, style, resource fallback, inheritance, and default stages.
+This avoids passing many parameters to resolution functions.
 
 ```rust
 use understory_style::{
@@ -672,6 +806,10 @@ This crate is `no_std` and uses `alloc`. It does not depend on `std`.
 [`ResolveCx`]: https://docs.rs/understory_style/latest/understory_style/struct.ResolveCx.html
 [`Style`]: https://docs.rs/understory_style/latest/understory_style/struct.Style.html
 [`Theme`]: https://docs.rs/understory_style/latest/understory_style/struct.Theme.html
+[`ThemeResolveOptions`]: https://docs.rs/understory_style/latest/understory_style/struct.ThemeResolveOptions.html
+[`ThemeScope`]: https://docs.rs/understory_style/latest/understory_style/struct.ThemeScope.html
+[`ThemeVariant`]: https://docs.rs/understory_style/latest/understory_style/struct.ThemeVariant.html
+[`VariantTheme`]: https://docs.rs/understory_style/latest/understory_style/struct.VariantTheme.html
 
 ## Minimum supported Rust Version (MSRV)
 

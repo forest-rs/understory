@@ -44,6 +44,7 @@
 //! let deps = expressions.defaults().expression_deps(padding.id()).unwrap();
 //! assert_eq!(deps.properties.as_slice(), &[scale.id()]);
 //! assert_eq!(deps.resources.as_slice(), &[]);
+//! assert_eq!(expressions.resource_dependent_properties().count(), 0);
 //! ```
 
 #![no_std]
@@ -313,6 +314,17 @@ mod tests {
         assert_eq!(entries[1].deps().properties.as_slice(), &[]);
         assert_eq!(entries[1].deps().resources.as_slice(), &[ACCENT]);
         assert_eq!(entries[1].expression().type_id(), TypeId::of::<f64>());
+    }
+
+    #[test]
+    fn expression_defaults_report_resource_dependent_properties() {
+        let mut defaults = ExpressionDefaults::new();
+
+        defaults.set(HEIGHT, expr::token(ACCENT));
+        defaults.set(WIDTH, expr::prop(HEIGHT) + 1.0);
+
+        let properties = defaults.resource_dependent_properties().collect::<Vec<_>>();
+        assert_eq!(properties, &[HEIGHT.id()]);
     }
 
     #[test]

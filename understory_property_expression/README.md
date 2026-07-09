@@ -64,6 +64,7 @@ expressions.set_default(padding, expr::prop(scale) * 2.0 + 4.0);
 let deps = expressions.defaults().expression_deps(padding.id()).unwrap();
 assert_eq!(deps.properties.as_slice(), &[scale.id()]);
 assert_eq!(deps.resources.as_slice(), &[]);
+assert_eq!(expressions.resource_dependent_properties().count(), 0);
 ```
 
 <!-- cargo-rdme end -->

@@ -317,6 +317,22 @@ impl Style {
         }
     }
 
+    /// Returns this style's theme resource entries in property-id order.
+    ///
+    /// Each item pairs the target property with the [`ResourceKey`] its entry
+    /// dereferences. Expression entries that mention resources are not
+    /// included here; inspect them through [`Self::expression_entries`] and
+    /// [`StyleExpressionRef::deps`].
+    pub fn resource_entries(&self) -> impl Iterator<Item = (PropertyId, ResourceKey)> + '_ {
+        self.inner.entries.iter().filter_map(|(property, entry)| {
+            if let StyleEntryValue::Resource(key) = entry {
+                Some((*property, *key))
+            } else {
+                None
+            }
+        })
+    }
+
     /// Returns this style's expression entries in property-id order.
     pub fn expression_entries(&self) -> impl Iterator<Item = StyleExpressionRef<'_>> {
         self.inner.entries.iter().filter_map(|(property, entry)| {
@@ -545,6 +561,20 @@ mod tests {
             style.value_ref(width),
             Some(StyleValueRef::Resource(resource))
         );
+    }
+
+    #[test]
+    fn style_resource_entries_report_only_resource_entries() {
+        let (_, width, count) = setup_registry();
+        let resource = ResourceKey::new(42);
+
+        let style = StyleBuilder::new()
+            .set_resource(width, resource)
+            .set(count, 40)
+            .build();
+
+        let entries: Vec<_> = style.resource_entries().collect();
+        assert_eq!(entries, alloc::vec![(width.id(), resource)]);
     }
 
     #[test]

@@ -85,6 +85,20 @@ impl ExpressionDefaults {
             })
     }
 
+    /// Returns default-expression targets that may derive from theme resources.
+    ///
+    /// This is a conservative theme-change invalidation fact for hosts. When a
+    /// resource table, active theme variant, or subtree theme scope changes, the
+    /// returned properties may resolve to different values because their default
+    /// expressions mention at least one resource token. Results are yielded in
+    /// property-id order and are unique because this registry stores at most one
+    /// default expression per property.
+    pub fn resource_dependent_properties(&self) -> impl Iterator<Item = PropertyId> + '_ {
+        self.expression_entries()
+            .filter(|entry| !entry.deps().resources.is_empty())
+            .map(ExpressionDefaultRef::property)
+    }
+
     /// Returns `true` if no expression defaults are registered.
     #[must_use]
     pub fn is_empty(&self) -> bool {
