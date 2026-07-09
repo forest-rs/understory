@@ -78,9 +78,18 @@ where
 
 /// Registered one-way bindings, write contexts, and dirty state.
 ///
-/// The set stores bindings, endpoint indexes, and a binding-local invalidation
-/// graph. It does not store property values; values are read from and written to
-/// a host passed to [`Self::drain`].
+/// Use `BindingSet` directly when an integration only needs one-way propagation:
+/// construct it with [`BindingSet::new`], register bindings with
+/// [`BindingSet::bind`] or [`BindingSet::bind_map`], mark changed source
+/// endpoints, then call [`BindingSet::drain`]. The set stores bindings,
+/// endpoint indexes, and a binding-local invalidation graph. It does not store
+/// property values; values are read from and written to a host passed to
+/// [`Self::drain`].
+///
+/// `BindingSet` owns the one-way dependency graph; it explicitly does not own
+/// two-way reverse write-back policy. Hosts that need two-way bindings should
+/// construct a [`crate::BindingGraph`] instead, so registration, write
+/// reporting, draining, and teardown all go through one lifecycle object.
 ///
 /// `C` is binding-owned write context. Each binding stores one `C` and passes it
 /// to [`BindingHost::set_erased`] whenever the binding writes its target. The
@@ -309,6 +318,23 @@ where
     /// Marks all bindings that read `source` as dirty using an untyped endpoint key.
     pub fn mark_endpoint_changed(&mut self, source: EndpointKey<K>) -> bool {
         self.mark_endpoint_changed_skipping(source, None)
+    }
+
+    /// Marks all bindings that read `source` as dirty, except one binding.
+    ///
+    /// This is the provenance hook used by [`crate::two_way`] reverse
+    /// propagation: a reverse write to a two-way binding's source must dirty
+    /// every other reader of that source, but must not re-dirty the pair's own
+    /// forward binding, or the value would echo back to the endpoint that
+    /// initiated it.
+    pub(crate) fn mark_endpoint_changed_except(
+        &mut self,
+        source: EndpointKey<K>,
+        skip: BindingId,
+    ) -> bool {
+        let mut skip_set = HashSet::with_capacity(1);
+        skip_set.insert(skip.get());
+        self.mark_endpoint_changed_skipping(source, Some(&skip_set))
     }
 
     /// Marks a specific binding as dirty.
