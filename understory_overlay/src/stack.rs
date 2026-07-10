@@ -347,6 +347,36 @@ pub enum OverlayError {
     DuplicateOverlayId,
 }
 
+/// Summary of the state removed by one successful [`OverlayStack::apply`].
+///
+/// Removed overlay ids are reported in the stack order that existed before
+/// the operation. The list is empty for operations that do not close an
+/// overlay.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OverlayMutationReport {
+    removed: Vec<OverlayId>,
+}
+
+impl OverlayMutationReport {
+    /// Returns the ids removed by the operation in pre-mutation stack order.
+    #[must_use]
+    pub fn removed(&self) -> &[OverlayId] {
+        &self.removed
+    }
+
+    /// Consumes the report and returns the removed ids.
+    #[must_use]
+    pub fn into_removed(self) -> Vec<OverlayId> {
+        self.removed
+    }
+
+    /// Returns whether the operation removed no overlays.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.removed.is_empty()
+    }
+}
+
 /// Deterministic collection of currently open overlays.
 ///
 /// Hosts mutate the stack with [`OverlayOp`] values and derive render/event
@@ -456,20 +486,31 @@ impl OverlayStack {
         false
     }
 
-    /// Applies one operation and advances the revision on success.
-    pub fn apply(&mut self, op: OverlayOp) -> Result<(), OverlayError> {
+    /// Applies one operation, reports removed overlays, and advances the
+    /// revision on success.
+    pub fn apply(&mut self, op: OverlayOp) -> Result<OverlayMutationReport, OverlayError> {
+        let mut report = OverlayMutationReport::default();
         match op {
             OverlayOp::Open { entry } => self.open(entry)?,
-            OverlayOp::Close { overlay } => self.close(overlay)?,
-            OverlayOp::CloseSubtree { overlay } => self.close_subtree(overlay)?,
-            OverlayOp::CloseDescendants { overlay } => self.close_descendants(overlay)?,
-            OverlayOp::CloseLayer { layer } => self.close_layer(layer),
-            OverlayOp::CloseAll => self.entries.clear(),
+            OverlayOp::Close { overlay } => self.close(overlay, &mut report)?,
+            OverlayOp::CloseSubtree { overlay } => self.close_subtree(overlay, &mut report)?,
+            OverlayOp::CloseDescendants { overlay } => {
+                self.close_descendants(overlay, &mut report)?;
+            }
+            OverlayOp::CloseLayer { layer } => self.close_layer(layer, &mut report),
+            OverlayOp::CloseAll => {
+                report
+                    .removed
+                    .extend(self.entries.iter().map(|entry| entry.id));
+                self.entries.clear();
+            }
             OverlayOp::BringToFront { overlay } => self.bring_to_front(overlay)?,
-            OverlayOp::SetParent { overlay, parent } => self.set_parent(overlay, parent)?,
+            OverlayOp::SetParent { overlay, parent } => {
+                self.set_parent(overlay, parent)?;
+            }
         }
         self.revision.advance();
-        Ok(())
+        Ok(report)
     }
 
     /// Resolves an event, applies the produced operations, and returns them.
@@ -499,7 +540,11 @@ impl OverlayStack {
         Ok(())
     }
 
-    fn close(&mut self, overlay: OverlayId) -> Result<(), OverlayError> {
+    fn close(
+        &mut self,
+        overlay: OverlayId,
+        report: &mut OverlayMutationReport,
+    ) -> Result<(), OverlayError> {
         let Some(index) = self.index_of(overlay) else {
             return Err(OverlayError::InvalidOverlayId);
         };
@@ -507,9 +552,10 @@ impl OverlayStack {
             .dismiss
             .close_descendants_on_parent_close
         {
-            self.close_subtree(overlay)
+            self.close_subtree(overlay, report)
         } else {
             self.entries.remove(index);
+            report.removed.push(overlay);
             for entry in &mut self.entries {
                 if entry.parent == Some(overlay) {
                     entry.parent = None;
@@ -519,38 +565,58 @@ impl OverlayStack {
         }
     }
 
-    fn close_subtree(&mut self, overlay: OverlayId) -> Result<(), OverlayError> {
+    fn close_subtree(
+        &mut self,
+        overlay: OverlayId,
+        report: &mut OverlayMutationReport,
+    ) -> Result<(), OverlayError> {
         if self.entry(overlay).is_none() {
             return Err(OverlayError::InvalidOverlayId);
         }
-        let mut removed = self.descendants_of(overlay);
-        removed.push(overlay);
-        self.entries.retain(|entry| !removed.contains(&entry.id));
+        report.removed.extend(
+            self.entries
+                .iter()
+                .filter(|entry| entry.id == overlay || self.is_descendant_of(entry.id, overlay))
+                .map(|entry| entry.id),
+        );
+        self.entries
+            .retain(|entry| !report.removed.contains(&entry.id));
         Ok(())
     }
 
-    fn close_descendants(&mut self, overlay: OverlayId) -> Result<(), OverlayError> {
+    fn close_descendants(
+        &mut self,
+        overlay: OverlayId,
+        report: &mut OverlayMutationReport,
+    ) -> Result<(), OverlayError> {
         if self.entry(overlay).is_none() {
             return Err(OverlayError::InvalidOverlayId);
         }
-        let removed = self.descendants_of(overlay);
-        self.entries.retain(|entry| !removed.contains(&entry.id));
+        report.removed.extend(self.descendants_of(overlay));
+        self.entries
+            .retain(|entry| !report.removed.contains(&entry.id));
         Ok(())
     }
 
-    fn close_layer(&mut self, layer: OverlayLayer) {
+    fn close_layer(&mut self, layer: OverlayLayer, report: &mut OverlayMutationReport) {
         let roots: Vec<_> = self
             .entries
             .iter()
             .filter(|entry| entry.layer == layer)
             .map(|entry| entry.id)
             .collect();
-        let mut removed = Vec::new();
-        for root in roots {
-            removed.push(root);
-            removed.extend(self.descendants_of(root));
-        }
-        self.entries.retain(|entry| !removed.contains(&entry.id));
+        report.removed.extend(
+            self.entries
+                .iter()
+                .filter(|entry| {
+                    roots
+                        .iter()
+                        .any(|root| entry.id == *root || self.is_descendant_of(entry.id, *root))
+                })
+                .map(|entry| entry.id),
+        );
+        self.entries
+            .retain(|entry| !report.removed.contains(&entry.id));
     }
 
     fn bring_to_front(&mut self, overlay: OverlayId) -> Result<(), OverlayError> {
@@ -683,12 +749,17 @@ mod tests {
             })
             .expect("grandchild should open");
 
-        stack
+        let report = stack
             .apply(OverlayOp::CloseSubtree {
                 overlay: OverlayId(1),
             })
             .expect("subtree close should succeed");
 
+        assert_eq!(
+            report.removed(),
+            &[OverlayId(1), OverlayId(2), OverlayId(3)],
+            "subtree close should report the root and every descendant",
+        );
         assert!(
             stack.entries().is_empty(),
             "subtree close should remove all descendants",
@@ -712,18 +783,116 @@ mod tests {
             })
             .expect("child should open");
 
-        stack
+        let report = stack
             .apply(OverlayOp::Close {
                 overlay: OverlayId(1),
             })
             .expect("close should succeed");
 
+        assert_eq!(
+            report.removed(),
+            &[OverlayId(1)],
+            "close should report the removed parent",
+        );
         assert_eq!(stack.entries().len(), 1, "child should remain open");
         assert_eq!(
             stack.entries()[0].parent,
             None,
             "remaining child should be detached",
         );
+    }
+
+    #[test]
+    fn close_descendants_reports_removed_ids_in_stack_order() {
+        let mut stack = OverlayStack::new();
+        stack
+            .apply(OverlayOp::Open { entry: entry(1) })
+            .expect("parent should open");
+        stack
+            .apply(OverlayOp::Open {
+                entry: entry(2).with_parent(OverlayId(1)),
+            })
+            .expect("child should open");
+        stack
+            .apply(OverlayOp::Open {
+                entry: entry(3).with_parent(OverlayId(2)),
+            })
+            .expect("grandchild should open");
+
+        let report = stack
+            .apply(OverlayOp::CloseDescendants {
+                overlay: OverlayId(1),
+            })
+            .expect("descendant close should succeed");
+
+        assert_eq!(report.removed(), &[OverlayId(2), OverlayId(3)]);
+        assert_eq!(
+            stack
+                .entries()
+                .iter()
+                .map(|entry| entry.id)
+                .collect::<Vec<_>>(),
+            alloc::vec![OverlayId(1)],
+        );
+    }
+
+    #[test]
+    fn layer_and_all_closes_report_every_removed_id() {
+        let mut stack = OverlayStack::new();
+        stack
+            .apply(OverlayOp::Open {
+                entry: OverlayEntry::new(OverlayId(1), OverlayLayer::Menu, OverlayBehavior::Menu),
+            })
+            .expect("menu should open");
+        stack
+            .apply(OverlayOp::Open {
+                entry: entry(2).with_parent(OverlayId(1)),
+            })
+            .expect("cross-layer child should open");
+        stack
+            .apply(OverlayOp::Open { entry: entry(3) })
+            .expect("unrelated popover should open");
+        stack
+            .apply(OverlayOp::Open {
+                entry: OverlayEntry::new(OverlayId(4), OverlayLayer::Menu, OverlayBehavior::Menu),
+            })
+            .expect("second menu should open");
+
+        let layer_report = stack
+            .apply(OverlayOp::CloseLayer {
+                layer: OverlayLayer::Menu,
+            })
+            .expect("layer close should succeed");
+
+        assert_eq!(
+            layer_report.removed(),
+            &[OverlayId(1), OverlayId(2), OverlayId(4)],
+            "layer close should include cross-layer descendants in stack order",
+        );
+
+        stack
+            .apply(OverlayOp::Open { entry: entry(5) })
+            .expect("another popover should open");
+        let all_report = stack
+            .apply(OverlayOp::CloseAll)
+            .expect("all close should succeed");
+
+        assert_eq!(
+            all_report.into_removed(),
+            alloc::vec![OverlayId(3), OverlayId(5)]
+        );
+        assert!(stack.entries().is_empty());
+    }
+
+    #[test]
+    fn non_closing_operation_returns_empty_report() {
+        let mut stack = OverlayStack::new();
+
+        let report = stack
+            .apply(OverlayOp::Open { entry: entry(1) })
+            .expect("overlay should open");
+
+        assert!(report.is_empty());
     }
 
     #[test]

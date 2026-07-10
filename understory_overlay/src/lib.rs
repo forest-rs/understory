@@ -77,6 +77,8 @@
 //! [`build_overlay_frame`]. Each input event can then be passed to
 //! [`resolve_event`] or [`OverlayStack::handle_event`] to produce close and
 //! z-order operations.
+//! [`OverlayStack::apply`] returns an [`OverlayMutationReport`] whose removed
+//! ids let the host synchronize retained elements and other sidecar state.
 //!
 //! Hover grace is current-frame geometry. Hosts configure it through
 //! [`OverlayFrameInput::with_grace_policy`]; this crate does not keep timers or
@@ -121,5 +123,5 @@ pub use ids::{AnchorId, FocusScopeId, OverlayId, Revision};
 pub use kurbo::{Point, Rect};
 pub use stack::{
     DismissPolicy, FocusPolicy, Modality, OverlayBehavior, OverlayEntry, OverlayError,
-    OverlayLayer, OverlayOp, OverlayStack,
+    OverlayLayer, OverlayMutationReport, OverlayOp, OverlayStack,
 };
