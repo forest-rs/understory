@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use alloc::vec::Vec;
+use core::fmt;
 
 use crate::{Axis, PaneId, Point, Rect, Revision, TabBarPlacement, TileId};
 
@@ -34,6 +35,305 @@ pub struct LayoutFrame {
     pub focus_order: Vec<PaneId>,
     /// Paint order hints for renderers.
     pub paint_order: Vec<FrameItemId>,
+}
+
+impl LayoutFrame {
+    /// Replaces provisional tab geometry with presentation-resolved geometry.
+    ///
+    /// The supplied geometry must describe every semantic tab in each named
+    /// visible group exactly once. All coordinates are frame-local. Validation
+    /// completes before the frame is changed, so an error leaves it untouched.
+    /// Pane, split, overlay, paint-order, and revision data are preserved.
+    ///
+    /// Preview frames produced during an interaction may contain provisional
+    /// geometry; hosts should call this method on a compatible preview before
+    /// presenting it. An active interaction continues to use the geometry in
+    /// the frame passed to it, so hosts should cancel and restart an interaction
+    /// if tab-strip scrolling changes that geometry.
+    ///
+    /// Projected frames (currently zoom projections) do not retain visible tab
+    /// bars, so geometry cannot be applied to them. Their
+    /// [`FrameProjection::hidden_items`] records retain the provisional tab
+    /// rectangles produced before projection.
+    pub fn apply_tab_group_geometry(
+        &mut self,
+        groups: &[TabGroupGeometry],
+    ) -> Result<(), TabGeometryError> {
+        self.validate_tab_group_geometry(groups)?;
+
+        for geometry in groups {
+            self.tab_bars
+                .iter_mut()
+                .find(|bar| bar.group == geometry.group)
+                .expect("validated tab geometry must name a visible group")
+                .viewport = geometry.viewport;
+            for tab in &mut self.tabs {
+                if tab.group == geometry.group {
+                    let resolved = geometry
+                        .tabs
+                        .iter()
+                        .find(|candidate| candidate.pane == tab.pane)
+                        .expect("validated tab geometry must contain every pane");
+                    tab.rect = resolved.rect;
+                }
+            }
+        }
+
+        self.hit_regions.retain(|region| {
+            !groups.iter().any(|geometry| match region.kind {
+                HitKind::Tab { group, .. } | HitKind::TabBar { group } => group == geometry.group,
+                _ => false,
+            })
+        });
+        for geometry in groups {
+            let mut semantic_tabs: Vec<_> = self
+                .tabs
+                .iter()
+                .filter(|tab| tab.group == geometry.group)
+                .copied()
+                .collect();
+            semantic_tabs.sort_by_key(|tab| tab.index);
+            for semantic_tab in semantic_tabs {
+                let resolved = geometry
+                    .tabs
+                    .iter()
+                    .find(|tab| tab.pane == semantic_tab.pane)
+                    .expect("validated tab geometry must contain every pane");
+                for rect in &resolved.interaction_regions {
+                    self.hit_regions.push(HitRegion {
+                        rect: *rect,
+                        z: 10,
+                        kind: HitKind::Tab {
+                            group: geometry.group,
+                            pane: semantic_tab.pane,
+                        },
+                    });
+                }
+            }
+            for rect in &geometry.bar_drag_regions {
+                self.hit_regions.push(HitRegion {
+                    rect: *rect,
+                    z: 5,
+                    kind: HitKind::TabBar {
+                        group: geometry.group,
+                    },
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_tab_group_geometry(
+        &self,
+        groups: &[TabGroupGeometry],
+    ) -> Result<(), TabGeometryError> {
+        for (group_index, geometry) in groups.iter().enumerate() {
+            if groups[..group_index]
+                .iter()
+                .any(|candidate| candidate.group == geometry.group)
+            {
+                return Err(TabGeometryError::DuplicateGroup(geometry.group));
+            }
+            let Some(bar) = self.tab_bars.iter().find(|bar| bar.group == geometry.group) else {
+                return Err(TabGeometryError::UnknownGroup(geometry.group));
+            };
+            if !valid_rect(geometry.viewport) || !rect_contains(bar.rect, geometry.viewport) {
+                return Err(TabGeometryError::InvalidRect {
+                    group: geometry.group,
+                    pane: None,
+                });
+            }
+
+            let semantic_tabs: Vec<_> = self
+                .tabs
+                .iter()
+                .filter(|tab| tab.group == geometry.group)
+                .collect();
+            for (tab_index, tab) in geometry.tabs.iter().enumerate() {
+                if geometry.tabs[..tab_index]
+                    .iter()
+                    .any(|candidate| candidate.pane == tab.pane)
+                {
+                    return Err(TabGeometryError::DuplicatePane {
+                        group: geometry.group,
+                        pane: tab.pane,
+                    });
+                }
+                if !semantic_tabs
+                    .iter()
+                    .any(|candidate| candidate.pane == tab.pane)
+                {
+                    return Err(TabGeometryError::UnknownPane {
+                        group: geometry.group,
+                        pane: tab.pane,
+                    });
+                }
+                if !valid_rect(tab.rect) {
+                    return Err(TabGeometryError::InvalidRect {
+                        group: geometry.group,
+                        pane: Some(tab.pane),
+                    });
+                }
+                for region in &tab.interaction_regions {
+                    if !valid_rect(*region)
+                        || !rect_contains(bar.rect, *region)
+                        || !rect_contains(geometry.viewport, *region)
+                        || !rect_contains(tab.rect, *region)
+                    {
+                        return Err(TabGeometryError::InvalidInteractionRegion {
+                            group: geometry.group,
+                            pane: Some(tab.pane),
+                        });
+                    }
+                }
+            }
+            for semantic in semantic_tabs {
+                if !geometry.tabs.iter().any(|tab| tab.pane == semantic.pane) {
+                    return Err(TabGeometryError::MissingPane {
+                        group: geometry.group,
+                        pane: semantic.pane,
+                    });
+                }
+            }
+            for region in &geometry.bar_drag_regions {
+                if !valid_rect(*region) || !rect_contains(bar.rect, *region) {
+                    return Err(TabGeometryError::InvalidInteractionRegion {
+                        group: geometry.group,
+                        pane: None,
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Presentation-resolved geometry for one visible semantic tab group.
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct TabGroupGeometry {
+    /// Tab group tile id.
+    pub group: TileId,
+    /// Visible tab-strip viewport in frame coordinates.
+    ///
+    /// A finite, normalized zero-area viewport is valid.
+    pub viewport: Rect,
+    /// Geometry for every semantic pane, in any input order.
+    pub tabs: Vec<TabGeometry>,
+    /// Bar-background regions that may initiate a tab-group drag.
+    pub bar_drag_regions: Vec<Rect>,
+}
+
+/// Presentation-resolved geometry for one semantic tab.
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct TabGeometry {
+    /// Pane represented by this tab.
+    pub pane: PaneId,
+    /// Full arranged rectangle in frame coordinates.
+    ///
+    /// This may extend outside the group's viewport when the strip is scrolled.
+    /// Finite, normalized zero-area rectangles are valid.
+    pub rect: Rect,
+    /// Visible regions that may activate or initiate dragging this tab.
+    ///
+    /// Hosts omit embedded controls such as close buttons from these regions.
+    /// When regions from different tabs overlap, hit testing resolves them in
+    /// semantic [`TabFrame::index`] order, independent of the order supplied in
+    /// [`TabGroupGeometry::tabs`].
+    /// Finite, normalized zero-area regions are accepted; hosts normally omit
+    /// them because they provide no useful interaction area.
+    pub interaction_regions: Vec<Rect>,
+}
+
+/// Failure returned while validating presentation-resolved tab geometry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum TabGeometryError {
+    /// The frame has no visible tab bar for this group.
+    UnknownGroup(TileId),
+    /// The same group was supplied more than once.
+    DuplicateGroup(TileId),
+    /// A semantic pane was omitted.
+    MissingPane {
+        /// Tab group tile id.
+        group: TileId,
+        /// Missing pane id.
+        pane: PaneId,
+    },
+    /// A pane was supplied more than once.
+    DuplicatePane {
+        /// Tab group tile id.
+        group: TileId,
+        /// Duplicate pane id.
+        pane: PaneId,
+    },
+    /// The pane does not belong to this visible semantic group.
+    UnknownPane {
+        /// Tab group tile id.
+        group: TileId,
+        /// Unknown pane id.
+        pane: PaneId,
+    },
+    /// A viewport or full tab rectangle is non-finite, reversed, or misplaced.
+    InvalidRect {
+        /// Tab group tile id.
+        group: TileId,
+        /// Pane id for a tab rectangle, or `None` for the viewport.
+        pane: Option<PaneId>,
+    },
+    /// A tab or bar interaction region is invalid or outside its allowed bounds.
+    InvalidInteractionRegion {
+        /// Tab group tile id.
+        group: TileId,
+        /// Pane id for a tab region, or `None` for a bar region.
+        pane: Option<PaneId>,
+    },
+}
+
+impl fmt::Display for TabGeometryError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownGroup(group) => write!(formatter, "unknown tab group {group}"),
+            Self::DuplicateGroup(group) => write!(formatter, "duplicate tab group {group}"),
+            Self::MissingPane { group, pane } => {
+                write!(formatter, "tab group {group} is missing {pane}")
+            }
+            Self::DuplicatePane { group, pane } => {
+                write!(formatter, "tab group {group} contains duplicate {pane}")
+            }
+            Self::UnknownPane { group, pane } => {
+                write!(formatter, "tab group {group} contains unknown {pane}")
+            }
+            Self::InvalidRect { group, pane } => match pane {
+                Some(pane) => write!(
+                    formatter,
+                    "tab group {group} has an invalid rect for {pane}"
+                ),
+                None => write!(formatter, "tab group {group} has an invalid viewport"),
+            },
+            Self::InvalidInteractionRegion { group, pane } => match pane {
+                Some(pane) => write!(
+                    formatter,
+                    "tab group {group} has an invalid interaction region for {pane}"
+                ),
+                None => write!(
+                    formatter,
+                    "tab group {group} has an invalid bar interaction region"
+                ),
+            },
+        }
+    }
+}
+
+impl core::error::Error for TabGeometryError {}
+
+fn valid_rect(rect: Rect) -> bool {
+    rect.is_finite() && rect.width() >= 0.0 && rect.height() >= 0.0
+}
+
+fn rect_contains(outer: Rect, inner: Rect) -> bool {
+    inner.x0 >= outer.x0 && inner.y0 >= outer.y0 && inner.x1 <= outer.x1 && inner.y1 <= outer.y1
 }
 
 /// Kind of presentation projection that collapsed a frame onto one pane.
@@ -123,6 +423,11 @@ pub struct TabBarFrame {
     pub group: TileId,
     /// Tab bar rectangle.
     pub rect: Rect,
+    /// Visible tab-strip viewport inside the reserved bar rectangle.
+    ///
+    /// Provisional layout sets this to [`Self::rect`]. Presentation-resolved
+    /// geometry may shrink it to exclude leading or trailing controls.
+    pub viewport: Rect,
     /// Tab bar placement.
     pub placement: TabBarPlacement,
     /// Active pane in this group, if any.
