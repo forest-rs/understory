@@ -10,20 +10,20 @@ use crate::{
     Proposal, ResizeOptions, ResizeProposal, Revision, TileError, TileNode, TileOp, TileTree,
 };
 
-/// Pane behavior capabilities.
+/// Global permissions for docking operations.
 ///
-/// Store this in [`DockPolicyData`] when validating proposals. Current
-/// validation uses the move, tab, split, edge, and zone fields for supported
-/// dock proposals.
+/// Store this in [`DockPolicy`] when validating proposals. These permissions
+/// apply uniformly to proposals; application-specific
+/// per-pane policy remains outside the renderer-independent core.
 #[derive(Clone, Copy, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct PaneCapabilities {
-    /// Whether pane move operations are allowed.
-    pub movable: bool,
-    /// Whether the pane may join tab groups.
-    pub tabbable: bool,
-    /// Whether the pane may be used as a split target.
-    pub split_target: bool,
+pub struct DockPermissions {
+    /// Whether move operations are allowed.
+    pub allow_move: bool,
+    /// Whether tab insertion and reordering are allowed.
+    pub allow_tab: bool,
+    /// Whether split docking is allowed.
+    pub allow_split: bool,
     /// Edges allowed for edge docking.
     pub allowed_edges: EdgeSet,
     /// Zones allowed for docking.
@@ -32,7 +32,7 @@ pub struct PaneCapabilities {
 
 /// Bitset of allowed dock edges.
 ///
-/// Use these constants in [`PaneCapabilities::allowed_edges`] to describe which
+/// Use these constants in [`DockPermissions::allowed_edges`] to describe which
 /// edge split targets a pane may dock into.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -43,7 +43,7 @@ pub struct EdgeSet(
 
 /// Bitset of allowed dock zones.
 ///
-/// Use these constants in [`PaneCapabilities::allowed_zones`] to describe which
+/// Use these constants in [`DockPermissions::allowed_zones`] to describe which
 /// broad docking zones a pane may use.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -59,12 +59,9 @@ pub struct ZoneSet(
 /// callbacks so validation remains deterministic and testable.
 #[derive(Clone, Debug, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct DockPolicyData {
-    /// Default capabilities used by proposal validation.
-    ///
-    /// Per-pane policy data is not modeled yet, so these capabilities apply to
-    /// every validated proposal.
-    pub default_pane_capabilities: PaneCapabilities,
+pub struct DockPolicy {
+    /// Global permissions used by proposal validation.
+    pub permissions: DockPermissions,
     /// Whether the layout is locked against mutation.
     pub locked_layout: bool,
 }
@@ -74,12 +71,34 @@ pub struct DockPolicyData {
 /// Returned by [`validate_proposal`]. Pass it to [`commit_proposal`] to apply
 /// the already-validated operation without re-lowering the proposal.
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct ValidatedProposal {
     /// Original proposal.
-    pub proposal: Proposal,
+    proposal: Proposal,
     /// Operation to commit.
-    pub op: TileOp,
+    op: TileOp,
+    /// Exact tree revision against which this proposal was validated.
+    revision: Revision,
+}
+
+impl ValidatedProposal {
+    /// Returns the original validated proposal.
+    #[must_use]
+    pub const fn proposal(&self) -> &Proposal {
+        &self.proposal
+    }
+
+    /// Returns the semantic operation that will be committed.
+    #[must_use]
+    pub const fn operation(&self) -> &TileOp {
+        &self.op
+    }
+
+    /// Returns the exact tree revision against which validation ran.
+    #[must_use]
+    pub const fn revision(&self) -> Revision {
+        self.revision
+    }
 }
 
 /// Inputs for proposal validation.
@@ -87,7 +106,7 @@ pub struct ValidatedProposal {
 /// Construct this with [`ProposalValidationInput::new`] before passing it to
 /// [`validate_proposal`]. Dock proposals only need a tree and policy. Resize
 /// proposals should additionally use [`ProposalValidationInput::with_frame`] so
-/// validation can check the proposed shares against the solved split geometry
+/// validation can check proposed major lengths against solved split geometry
 /// that produced the active resize interaction. Pointer-generated proposals can
 /// also use [`ProposalValidationInput::with_base_revision`] so validation
 /// rejects stale interactions.
@@ -98,7 +117,7 @@ pub struct ProposalValidationInput<'a> {
     /// Proposal to validate.
     pub proposal: Proposal,
     /// Policy data used for capability checks.
-    pub policy: &'a DockPolicyData,
+    pub policy: &'a DockPolicy,
     /// Solved frame for geometry-sensitive validation.
     pub frame: Option<&'a LayoutFrame>,
     /// Resize geometry constraints.
@@ -107,12 +126,12 @@ pub struct ProposalValidationInput<'a> {
     pub base_revision: Option<Revision>,
 }
 
-impl Default for PaneCapabilities {
+impl Default for DockPermissions {
     fn default() -> Self {
         Self {
-            movable: true,
-            tabbable: true,
-            split_target: true,
+            allow_move: true,
+            allow_tab: true,
+            allow_split: true,
             allowed_edges: EdgeSet::ALL,
             allowed_zones: ZoneSet::ALL,
         }
@@ -125,7 +144,7 @@ impl<'a> ProposalValidationInput<'a> {
     /// Use [`ProposalValidationInput::with_frame`] before validating resize
     /// proposals that came from pointer interaction.
     #[must_use]
-    pub fn new(tree: &'a TileTree, proposal: Proposal, policy: &'a DockPolicyData) -> Self {
+    pub fn new(tree: &'a TileTree, proposal: Proposal, policy: &'a DockPolicy) -> Self {
         Self {
             tree,
             proposal,
@@ -146,7 +165,7 @@ impl<'a> ProposalValidationInput<'a> {
     pub fn from_interaction_update(
         tree: &'a TileTree,
         update: &InteractionUpdate,
-        policy: &'a DockPolicyData,
+        policy: &'a DockPolicy,
     ) -> Option<Self> {
         Some(Self {
             tree,
@@ -215,7 +234,7 @@ impl EdgeSet {
     /// Returns whether every edge in `other` is present.
     ///
     /// Use this when validating generated [`DockTarget::Split`] targets against
-    /// [`PaneCapabilities::allowed_edges`].
+    /// [`DockPermissions::allowed_edges`].
     #[must_use]
     pub const fn contains(self, other: Self) -> bool {
         self.0 & other.0 == other.0
@@ -233,7 +252,7 @@ impl ZoneSet {
     /// Returns whether every zone in `other` is present.
     ///
     /// Use this when validating a proposal against
-    /// [`PaneCapabilities::allowed_zones`].
+    /// [`DockPermissions::allowed_zones`].
     #[must_use]
     pub const fn contains(self, other: Self) -> bool {
         self.0 & other.0 == other.0
@@ -275,14 +294,18 @@ pub fn validate_proposal(
             validate_resize_geometry(tree, frame, &resize, &resize_options)?;
             TileOp::SetSplitShares {
                 split: resize.split,
-                shares: resize.new_shares,
+                shares: resize.new_major_lengths,
             }
         }
     };
     let mut probe = tree.clone();
     probe.apply(op.clone())?;
     validate_policy(&proposal, policy)?;
-    Ok(ValidatedProposal { proposal, op })
+    Ok(ValidatedProposal {
+        proposal,
+        op,
+        revision: tree.revision(),
+    })
 }
 
 /// Validates a unified interaction update.
@@ -295,7 +318,7 @@ pub fn validate_interaction_update(
     tree: &TileTree,
     frame: &LayoutFrame,
     update: &InteractionUpdate,
-    policy: &DockPolicyData,
+    policy: &DockPolicy,
     options: &InteractionOptions,
 ) -> Result<ValidatedProposal, TileError> {
     let input = ProposalValidationInput::from_interaction_update(tree, update, policy)
@@ -307,62 +330,68 @@ pub fn validate_interaction_update(
 
 /// Commits a validated proposal.
 ///
-/// Pass the value returned by [`validate_proposal`] here when the tree is still
-/// expected to accept the operation. Policy is not re-run; the tree may still
-/// reject the operation if the caller changed it after validation.
+/// Pass the value returned by [`validate_proposal`] here to apply it to the
+/// exact tree revision against which it was validated. Policy is not re-run;
+/// if the tree changed after validation, commit returns
+/// [`TileError::StaleInteraction`].
 pub fn commit_proposal(
     tree: &mut TileTree,
     proposal: ValidatedProposal,
 ) -> Result<TileOp, TileError> {
+    if tree.revision() != proposal.revision {
+        return Err(TileError::StaleInteraction);
+    }
     tree.apply(proposal.op.clone())?;
     Ok(proposal.op)
 }
 
-fn validate_policy(proposal: &Proposal, policy: &DockPolicyData) -> Result<(), TileError> {
+fn validate_policy(proposal: &Proposal, policy: &DockPolicy) -> Result<(), TileError> {
     match proposal {
-        Proposal::Dock(dock) => validate_dock_policy(dock, &policy.default_pane_capabilities),
+        Proposal::Dock(dock) => validate_dock_policy(dock, &policy.permissions),
         Proposal::Resize(_) => Ok(()),
     }
 }
 
 fn validate_dock_policy(
     proposal: &DockProposal,
-    capabilities: &PaneCapabilities,
+    capabilities: &DockPermissions,
 ) -> Result<(), TileError> {
     match proposal {
         DockProposal::MovePane { target, .. } => {
-            require(capabilities.movable)?;
+            require(capabilities.allow_move)?;
             validate_target_policy(*target, capabilities)
         }
         DockProposal::MoveTabGroup { target, .. } => {
-            require(capabilities.movable)?;
+            require(capabilities.allow_move)?;
             validate_target_policy(*target, capabilities)
         }
-        DockProposal::ReorderTab { .. } => require(capabilities.movable && capabilities.tabbable),
+        DockProposal::ReorderTab { .. } => {
+            require(capabilities.allow_move && capabilities.allow_tab)
+        }
     }
 }
 
 fn validate_target_policy(
     target: DockTarget,
-    capabilities: &PaneCapabilities,
+    capabilities: &DockPermissions,
 ) -> Result<(), TileError> {
     match target {
         DockTarget::Root => {
-            require(capabilities.movable && capabilities.allowed_zones.contains(ZoneSet::SPLIT))
+            require(capabilities.allow_move && capabilities.allowed_zones.contains(ZoneSet::SPLIT))
         }
         DockTarget::Split {
             axis, placement, ..
         } => require(
-            capabilities.movable
-                && capabilities.split_target
+            capabilities.allow_move
+                && capabilities.allow_split
                 && capabilities.allowed_zones.contains(ZoneSet::SPLIT)
                 && capabilities
                     .allowed_edges
                     .contains(edge_for_split(axis, placement)),
         ),
         DockTarget::TabInto { .. } => require(
-            capabilities.movable
-                && capabilities.tabbable
+            capabilities.allow_move
+                && capabilities.allow_tab
                 && capabilities.allowed_zones.contains(ZoneSet::TAB),
         ),
     }
@@ -391,13 +420,16 @@ fn validate_resize_geometry(
     proposal: &ResizeProposal,
     options: &ResizeOptions,
 ) -> Result<(), TileError> {
+    if frame.revision() != tree.revision() {
+        return Err(TileError::StaleInteraction);
+    }
     let Some(TileNode::Split(split)) = tree.node(proposal.split) else {
         return Err(TileError::InvalidTileId);
     };
     if proposal.handle + 1 >= split.children.len()
-        || proposal.new_shares.len() != split.children.len()
+        || proposal.new_major_lengths.len() != split.children.len()
         || proposal
-            .new_shares
+            .new_major_lengths
             .iter()
             .any(|share| !share.is_finite() || *share <= 0.0)
         || !proposal.delta.is_finite()
@@ -430,7 +462,7 @@ fn validate_resize_geometry(
     let mut new_total = 0.0;
     for child in &children {
         let old = major_length(child.rect, split.axis);
-        let new = proposal.new_shares[child.index];
+        let new = proposal.new_major_lengths[child.index];
         if !old.is_finite() || old <= 0.0 || new + VALIDATION_EPSILON < min_major[child.index] {
             return Err(TileError::InvalidOperation);
         }
@@ -446,8 +478,8 @@ fn validate_resize_geometry(
     }
     let old_left = major_length(children[proposal.handle].rect, split.axis);
     let old_right = major_length(children[proposal.handle + 1].rect, split.axis);
-    let new_left = proposal.new_shares[proposal.handle];
-    let new_right = proposal.new_shares[proposal.handle + 1];
+    let new_left = proposal.new_major_lengths[proposal.handle];
+    let new_right = proposal.new_major_lengths[proposal.handle + 1];
     if !near(new_left - old_left, proposal.delta) || !near(old_right - new_right, proposal.delta) {
         return Err(TileError::InvalidOperation);
     }
