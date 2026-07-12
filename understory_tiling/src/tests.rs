@@ -3,6 +3,7 @@
 
 use alloc::vec;
 
+use crate::snapshot::RepairAction;
 use crate::*;
 
 fn input() -> LayoutInput {
@@ -11,8 +12,22 @@ fn input() -> LayoutInput {
         tab_bar_thickness: 20.0,
         split_handle_thickness: 10.0,
         min_pane_size: Size::new(20.0, 20.0),
-        zoom: None,
     }
+}
+
+fn tab_tree(panes: impl IntoIterator<Item = PaneId>) -> TileTree {
+    TileTree::from_spec(TileSpec::tabs(panes)).unwrap()
+}
+
+fn projected(tree: &TileTree, pane: PaneId) -> LayoutFrame {
+    let mut frame = tree.layout(input());
+    frame
+        .apply_projection(FrameProjectionInput::Zoom {
+            focus: pane,
+            projected_rect: input().bounds,
+        })
+        .unwrap();
+    frame
 }
 
 fn interaction_options() -> InteractionOptions {
@@ -74,35 +89,16 @@ fn semantic_panes_include_leaves_and_inactive_tabs() {
     let single = TileTree::single_pane(PaneId(1));
     assert_eq!(single.panes().collect::<Vec<_>>(), vec![PaneId(1)]);
 
-    let tabs = TileTree::new(TileNode::Tabs(TabNode {
-        panes: vec![PaneId(2), PaneId(3), PaneId(4)],
-        active: 1,
-        placement: TabBarPlacement::Top,
-    }));
+    let tabs = TileTree::from_spec(TileSpec::tabs_with(
+        [PaneId(2), PaneId(3), PaneId(4)],
+        1,
+        TabBarPlacement::Top,
+    ))
+    .unwrap();
     assert_eq!(
         tabs.panes().collect::<Vec<_>>(),
         vec![PaneId(2), PaneId(3), PaneId(4)]
     );
-}
-
-#[test]
-fn semantic_panes_bound_malformed_cycles_and_duplicates() {
-    let tree = TileTree::from_raw_parts_for_test(
-        TileId(0),
-        Revision(0),
-        vec![
-            Some(TileNode::Split(SplitNode {
-                axis: Axis::Horizontal,
-                children: vec![TileId(0), TileId(1), TileId(2)],
-                shares: vec![1.0, 1.0, 1.0],
-                constraints: SplitConstraints::default(),
-            })),
-            Some(TileNode::tabs(vec![PaneId(1), PaneId(1)])),
-            Some(TileNode::pane(PaneId(2))),
-        ],
-    );
-
-    assert_eq!(tree.panes().collect::<Vec<_>>(), vec![PaneId(1), PaneId(2)]);
 }
 
 fn representative_spec() -> TileSpec {
@@ -246,18 +242,10 @@ fn tree_spec_rejects_invalid_split_data() {
 fn snapshot_restore_preserves_semantic_panes() {
     let tree = TileTree::from_spec(representative_spec()).unwrap();
     let expected = tree.panes().collect::<Vec<_>>();
-    let restored = restore_snapshot(
-        LayoutSnapshot {
-            schema_version: 1,
-            tree,
-            active_pane: Some(PaneId(3)),
-            closed_panes: vec![],
-        },
-        RestoreOptions { normalize: true },
-    )
-    .unwrap();
+    let restored = restore_snapshot(LayoutSnapshot::new(tree)).unwrap();
 
-    assert_eq!(restored.panes().collect::<Vec<_>>(), expected);
+    assert_eq!(restored.tree.panes().collect::<Vec<_>>(), expected);
+    assert!(restored.repairs.is_empty());
 }
 
 #[test]
@@ -444,10 +432,7 @@ fn zoomed_layout_projects_visible_pane_to_bounds() {
         .find(|pane| pane.pane == PaneId(2))
         .copied()
         .expect("pane 2 should be visible before zoom");
-    let zoomed = tree.layout(LayoutInput {
-        zoom: Some(PaneId(2)),
-        ..input()
-    });
+    let zoomed = projected(&tree, PaneId(2));
 
     let projection = zoomed.projection.as_ref().expect("projection metadata");
     assert_eq!(projection.kind, ProjectionKind::Zoom);
@@ -482,7 +467,7 @@ fn zoomed_layout_projects_visible_pane_to_bounds() {
 }
 
 #[test]
-fn invalid_zoom_request_leaves_layout_unzoomed() {
+fn invalid_projection_is_transactional() {
     let mut tree = TileTree::single_pane(PaneId(1));
     tree.apply(TileOp::SplitPane {
         pane: PaneId(1),
@@ -493,14 +478,45 @@ fn invalid_zoom_request_leaves_layout_unzoomed() {
     })
     .unwrap();
 
-    let frame = tree.layout(LayoutInput {
-        zoom: Some(PaneId(99)),
-        ..input()
-    });
+    let mut frame = tree.layout(input());
+    let original = frame.clone();
+    assert_eq!(
+        frame.apply_projection(FrameProjectionInput::Zoom {
+            focus: PaneId(99),
+            projected_rect: input().bounds,
+        }),
+        Err(FrameProjectionError::UnknownPane(PaneId(99)))
+    );
 
     assert!(frame.projection.is_none());
-    assert_eq!(frame.panes.len(), 2);
-    assert_eq!(frame.split_handles.len(), 1);
+    assert_eq!(frame.panes, original.panes);
+    assert_eq!(frame.split_handles, original.split_handles);
+}
+
+#[test]
+fn projection_records_resolved_tab_geometry() {
+    let tree = tab_tree([PaneId(1), PaneId(2)]);
+    let group = tree.root();
+    let mut frame = tree.layout(input());
+    frame
+        .apply_tab_group_geometry(&[resolved_tabs(group)])
+        .unwrap();
+    frame
+        .apply_projection(FrameProjectionInput::Zoom {
+            focus: PaneId(1),
+            projected_rect: input().bounds,
+        })
+        .unwrap();
+
+    let projection = frame.projection().unwrap();
+    assert!(projection.hidden_items.iter().any(|hidden| {
+        hidden.item
+            == FrameItemId::Tab {
+                group,
+                pane: PaneId(1),
+            }
+            && hidden.rect == Rect::new(0.0, 0.0, 200.0, 20.0)
+    }));
 }
 
 #[test]
@@ -516,10 +532,7 @@ fn frame_diff_reports_zoom_and_restore_hints() {
     .unwrap();
 
     let normal = tree.layout(input());
-    let zoomed = tree.layout(LayoutInput {
-        zoom: Some(PaneId(2)),
-        ..input()
-    });
+    let zoomed = projected(&tree, PaneId(2));
     let source = zoomed
         .projection
         .as_ref()
@@ -620,10 +633,7 @@ fn restore_diff_does_not_mark_new_items_as_revealed_by_restore() {
         share: 0.5,
     })
     .unwrap();
-    let zoomed = tree.layout(LayoutInput {
-        zoom: Some(PaneId(2)),
-        ..input()
-    });
+    let zoomed = projected(&tree, PaneId(2));
 
     tree.apply(TileOp::SplitPane {
         pane: PaneId(1),
@@ -669,10 +679,7 @@ fn zoom_diff_does_not_mark_unrelated_removals_as_hidden_by_zoom() {
     let normal = tree.layout(input());
 
     tree.apply(TileOp::ClosePane { pane: PaneId(3) }).unwrap();
-    let zoomed_after_removal = tree.layout(LayoutInput {
-        zoom: Some(PaneId(2)),
-        ..input()
-    });
+    let zoomed_after_removal = projected(&tree, PaneId(2));
     let diff = diff_frames(&normal, &zoomed_after_removal);
 
     assert!(matches!(
@@ -698,14 +705,8 @@ fn zoom_switch_uses_each_pane_normal_rect() {
     })
     .unwrap();
 
-    let zoomed_one = tree.layout(LayoutInput {
-        zoom: Some(PaneId(1)),
-        ..input()
-    });
-    let zoomed_two = tree.layout(LayoutInput {
-        zoom: Some(PaneId(2)),
-        ..input()
-    });
+    let zoomed_one = projected(&tree, PaneId(1));
+    let zoomed_two = projected(&tree, PaneId(2));
     let one_source = zoomed_one
         .projection
         .as_ref()
@@ -750,7 +751,7 @@ fn zoom_switch_uses_each_pane_normal_rect() {
 
 #[test]
 fn frame_diff_tracks_tab_reorder_by_stable_tab_identity() {
-    let mut tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2), PaneId(3)]));
+    let mut tree = tab_tree([PaneId(1), PaneId(2), PaneId(3)]);
     let group = tree.root();
     let before = tree.layout(input());
 
@@ -775,7 +776,7 @@ fn frame_diff_tracks_tab_reorder_by_stable_tab_identity() {
 
 #[test]
 fn frame_diff_tracks_pane_moved_into_tab_group() {
-    let mut tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
+    let mut tree = tab_tree([PaneId(1), PaneId(2)]);
     let group = tree.root();
     tree.apply(TileOp::SplitPane {
         pane: PaneId(1),
@@ -833,7 +834,7 @@ fn ids_and_errors_display_human_readable_labels() {
 
 #[test]
 fn tabs_emit_bar_tabs_and_active_pane() {
-    let tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
+    let tree = tab_tree([PaneId(1), PaneId(2)]);
     let frame = tree.layout(input());
     assert_eq!(frame.tab_bars.len(), 1);
     assert_eq!(frame.tab_bars[0].viewport, frame.tab_bars[0].rect);
@@ -865,7 +866,7 @@ fn resolved_tabs(group: TileId) -> TabGroupGeometry {
 
 #[test]
 fn resolved_tab_geometry_replaces_tabs_and_tab_hits_only() {
-    let tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
+    let tree = tab_tree([PaneId(1), PaneId(2)]);
     let group = tree.root();
     let revision = tree.revision();
     let mut frame = tree.layout(input());
@@ -897,7 +898,7 @@ fn resolved_tab_geometry_replaces_tabs_and_tab_hits_only() {
 
 #[test]
 fn resolved_tab_hit_precedence_uses_semantic_order() {
-    let tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
+    let tree = tab_tree([PaneId(1), PaneId(2)]);
     let group = tree.root();
     let mut geometry = resolved_tabs(group);
     geometry.tabs[0].rect = Rect::new(0.0, 0.0, 200.0, 20.0);
@@ -932,7 +933,7 @@ fn resolved_tab_hit_precedence_uses_semantic_order() {
 
 #[test]
 fn resolved_scrolled_tab_only_hits_its_visible_regions() {
-    let tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
+    let tree = tab_tree([PaneId(1), PaneId(2)]);
     let group = tree.root();
     let mut frame = tree.layout(input());
     let geometry = TabGroupGeometry {
@@ -980,7 +981,7 @@ fn resolved_scrolled_tab_only_hits_its_visible_regions() {
 
 #[test]
 fn invalid_resolved_tab_geometry_is_atomic() {
-    let tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
+    let tree = tab_tree([PaneId(1), PaneId(2)]);
     let group = tree.root();
     let mut frame = tree.layout(input());
     let original = frame.clone();
@@ -1090,7 +1091,7 @@ fn resolved_tab_geometry_validation_is_atomic_across_groups() {
 
 #[test]
 fn resolved_tab_geometry_reapplication_removes_old_hits() {
-    let tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
+    let tree = tab_tree([PaneId(1), PaneId(2)]);
     let group = tree.root();
     let mut frame = tree.layout(input());
     frame
@@ -1114,7 +1115,7 @@ fn resolved_tab_geometry_reapplication_removes_old_hits() {
 
 #[test]
 fn resolved_tab_geometry_reports_group_and_region_errors() {
-    let tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
+    let tree = tab_tree([PaneId(1), PaneId(2)]);
     let group = tree.root();
     let frame = tree.layout(input());
 
@@ -1170,7 +1171,7 @@ fn tab_geometry_errors_have_human_readable_diagnostics() {
 
 #[test]
 fn frame_diff_observes_resolved_tab_geometry() {
-    let tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
+    let tree = tab_tree([PaneId(1), PaneId(2)]);
     let group = tree.root();
     let before = tree.layout(input());
     let mut after = before.clone();
@@ -1193,7 +1194,7 @@ fn frame_diff_observes_resolved_tab_geometry() {
 
 #[test]
 fn reorder_insertion_uses_resolved_widths() {
-    let tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
+    let tree = tab_tree([PaneId(1), PaneId(2)]);
     let group = tree.root();
     let mut frame = tree.layout(input());
     frame
@@ -1219,11 +1220,12 @@ fn reorder_insertion_uses_resolved_widths() {
 
 #[test]
 fn vertical_reorder_insertion_uses_bar_placement() {
-    let tree = TileTree::new(TileNode::Tabs(TabNode {
-        panes: vec![PaneId(1), PaneId(2)],
-        active: 0,
-        placement: TabBarPlacement::Left,
-    }));
+    let tree = TileTree::from_spec(TileSpec::tabs_with(
+        [PaneId(1), PaneId(2)],
+        0,
+        TabBarPlacement::Left,
+    ))
+    .unwrap();
     let group = tree.root();
     let mut frame = tree.layout(input());
     frame
@@ -1265,7 +1267,7 @@ fn vertical_reorder_insertion_uses_bar_placement() {
 
 #[test]
 fn activate_pane_changes_active_tab() {
-    let mut tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
+    let mut tree = tab_tree([PaneId(1), PaneId(2)]);
     tree.apply(TileOp::ActivatePane { pane: PaneId(2) })
         .unwrap();
     let frame = tree.layout(input());
@@ -1293,7 +1295,7 @@ fn hit_test_prefers_split_handle() {
 
 #[test]
 fn reorder_tab_moves_pane() {
-    let mut tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2), PaneId(3)]));
+    let mut tree = tab_tree([PaneId(1), PaneId(2), PaneId(3)]);
     let group = tree.root();
     tree.apply(TileOp::ReorderTab {
         group,
@@ -1309,7 +1311,7 @@ fn reorder_tab_moves_pane() {
 
 #[test]
 fn move_pane_into_tab_group() {
-    let mut tree = TileTree::new(TileNode::tabs(vec![PaneId(1)]));
+    let mut tree = tab_tree([PaneId(1)]);
     let group = tree.root();
     tree.apply(TileOp::SplitPane {
         pane: PaneId(1),
@@ -1334,7 +1336,7 @@ fn move_pane_into_tab_group() {
 }
 
 #[test]
-fn set_split_shares_repairs_bad_input() {
+fn set_split_shares_rejects_bad_input() {
     let mut tree = TileTree::single_pane(PaneId(1));
     tree.apply(TileOp::SplitPane {
         pane: PaneId(1),
@@ -1345,15 +1347,19 @@ fn set_split_shares_repairs_bad_input() {
     })
     .unwrap();
     let split = tree.root();
-    tree.apply(TileOp::SetSplitShares {
-        split,
-        shares: vec![f64::NAN],
-    })
-    .unwrap();
+    let revision = tree.revision();
+    assert!(matches!(
+        tree.apply(TileOp::SetSplitShares {
+            split,
+            shares: vec![f64::NAN],
+        }),
+        Err(TileError::InvalidOperation)
+    ));
     let Some(TileNode::Split(node)) = tree.node(split) else {
         panic!("root should be split");
     };
-    assert_eq!(node.shares, vec![1.0, 1.0]);
+    assert_eq!(node.shares, vec![0.5, 0.5]);
+    assert_eq!(tree.revision(), revision);
 }
 
 #[test]
@@ -1380,6 +1386,25 @@ fn split_pane_rejects_invalid_share() {
         }),
         Err(TileError::InvalidOperation)
     ));
+}
+
+#[test]
+fn split_pane_rejects_duplicate_pane_atomically() {
+    let mut tree = tab_tree([PaneId(1), PaneId(2)]);
+    let revision = tree.revision();
+
+    assert_eq!(
+        tree.apply(TileOp::SplitPane {
+            pane: PaneId(1),
+            axis: Axis::Horizontal,
+            new_pane: PaneId(2),
+            placement: Placement::After,
+            share: 0.5,
+        }),
+        Err(TileError::DuplicatePane(PaneId(2)))
+    );
+    assert_eq!(tree.revision(), revision);
+    assert_eq!(tree.panes().collect::<Vec<_>>(), vec![PaneId(1), PaneId(2)]);
 }
 
 #[test]
@@ -1446,10 +1471,7 @@ fn drag_update_returns_preview_layout_when_layout_input_is_provided() {
     })
     .unwrap();
     let frame = tree.layout(input());
-    let options = interaction_options_with_drag(DragOptions {
-        preview_layout: Some(input()),
-        ..DragOptions::default()
-    });
+    let options = interaction_options_with_drag(DragOptions::default());
 
     let update = pointer_update(
         &tree,
@@ -1480,10 +1502,7 @@ fn drag_preview_can_diff_to_committed_frame() {
     })
     .unwrap();
     let frame = tree.layout(input());
-    let options = interaction_options_with_drag(DragOptions {
-        preview_layout: Some(input()),
-        ..DragOptions::default()
-    });
+    let options = interaction_options_with_drag(DragOptions::default());
     let update = pointer_update(
         &tree,
         &frame,
@@ -1493,7 +1512,7 @@ fn drag_preview_can_diff_to_committed_frame() {
     );
     let preview = update.preview.as_ref().unwrap();
 
-    let policy = DockPolicyData::default();
+    let policy = DockPolicy::default();
     let validated = validate_interaction_update(&tree, &frame, &update, &policy, &options).unwrap();
     commit_proposal(&mut tree, validated).unwrap();
     let committed = tree.layout(input());
@@ -1584,7 +1603,7 @@ fn interaction_update_promotes_pending_drag_after_threshold() {
 fn interaction_options_derive_preview_and_resize_inputs_from_layout() {
     let layout = input();
     let options = InteractionOptions::from_layout_input(layout);
-    let preview_layout = options.drag.preview_layout.unwrap();
+    let preview_layout = options.preview_layout.unwrap();
 
     assert_eq!(preview_layout.bounds, layout.bounds);
     assert_eq!(
@@ -1592,7 +1611,6 @@ fn interaction_options_derive_preview_and_resize_inputs_from_layout() {
         layout.split_handle_thickness
     );
     assert_eq!(options.resize.min_pane_size, layout.min_pane_size);
-    assert_eq!(options.resize.preview_layout.unwrap().bounds, layout.bounds);
     assert_eq!(options.drag_intent, DragIntent::Move);
     assert_eq!(options.drag_threshold, 5.0);
 }
@@ -1724,7 +1742,7 @@ fn dragging_pane_to_its_own_edge_is_invalid() {
 
 #[test]
 fn dragging_active_pane_from_tab_group_can_split_group() {
-    let tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
+    let tree = tab_tree([PaneId(1), PaneId(2)]);
     let frame = tree.layout(input());
 
     let update = pointer_update(
@@ -1751,7 +1769,7 @@ fn dragging_active_pane_from_tab_group_can_split_group() {
 
 #[test]
 fn drag_over_tab_group_body_proposes_tab_into_group() {
-    let mut tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
+    let mut tree = tab_tree([PaneId(1), PaneId(2)]);
     let group = tree.root();
     tree.apply(TileOp::SplitPane {
         pane: PaneId(1),
@@ -1782,7 +1800,7 @@ fn drag_over_tab_group_body_proposes_tab_into_group() {
 
 #[test]
 fn tab_group_drag_validates_and_commits_split_move() {
-    let mut tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
+    let mut tree = tab_tree([PaneId(1), PaneId(2)]);
     let group = tree.root();
     tree.apply(TileOp::ActivatePane { pane: PaneId(2) })
         .unwrap();
@@ -1839,11 +1857,11 @@ fn tab_group_drag_validates_and_commits_split_move() {
         }]
     );
 
-    let policy = DockPolicyData::default();
+    let policy = DockPolicy::default();
     let proposal =
         validate_interaction_update(&tree, &frame, &update, &policy, &interaction_options())
             .unwrap();
-    assert!(matches!(proposal.op, TileOp::MoveTabGroup { .. }));
+    assert!(matches!(proposal.operation(), TileOp::MoveTabGroup { .. }));
     commit_proposal(&mut tree, proposal).unwrap();
 
     let Some(TileNode::Tabs(tabs)) = tree.node(group) else {
@@ -1877,7 +1895,7 @@ fn resize_update_uses_solved_geometry_and_returns_preview() {
 
     let proposal = resize_proposal(&update).unwrap();
     assert_eq!(proposal.delta, 50.0);
-    assert_eq!(proposal.new_shares, vec![195.0, 95.0]);
+    assert_eq!(proposal.new_major_lengths, vec![195.0, 95.0]);
 
     let preview = update.preview.unwrap();
     assert_eq!(preview.panes[0].rect.width(), 195.0);
@@ -1909,7 +1927,7 @@ fn resize_update_clamps_to_min_pane_size() {
 
     let proposal = resize_proposal(&update).unwrap();
     assert_eq!(proposal.delta, 125.0);
-    assert_eq!(proposal.new_shares, vec![270.0, 20.0]);
+    assert_eq!(proposal.new_major_lengths, vec![270.0, 20.0]);
 
     let preview = update.preview.unwrap();
     assert_eq!(preview.panes[0].rect.width(), 270.0);
@@ -1935,8 +1953,8 @@ fn resize_preview_uses_provided_layout_input() {
     let options = InteractionOptions {
         resize: ResizeOptions {
             min_pane_size: input().min_pane_size,
-            preview_layout: Some(preview_input),
         },
+        preview_layout: Some(preview_input),
         ..interaction_options()
     };
     let mut state = begin_interaction(&frame, Point::new(150.0, 100.0), &options);
@@ -1972,9 +1990,9 @@ fn validate_resize_requires_frame_context() {
             split: tree.root(),
             handle: 0,
             delta: 50.0,
-            new_shares: vec![195.0, 95.0],
+            new_major_lengths: vec![195.0, 95.0],
         }),
-        &DockPolicyData::default(),
+        &DockPolicy::default(),
     ));
 
     assert_eq!(result.unwrap_err(), TileError::InvalidOperation);
@@ -2000,9 +2018,9 @@ fn validate_resize_rejects_min_size_violation() {
                 split: tree.root(),
                 handle: 0,
                 delta: 135.0,
-                new_shares: vec![280.0, 10.0],
+                new_major_lengths: vec![280.0, 10.0],
             }),
-            &DockPolicyData::default(),
+            &DockPolicy::default(),
         )
         .with_frame(&frame),
     );
@@ -2035,18 +2053,21 @@ fn validate_resize_accepts_frame_checked_proposal() {
         ProposalValidationInput::new(
             &tree,
             update.proposal.clone().unwrap(),
-            &DockPolicyData::default(),
+            &DockPolicy::default(),
         )
         .with_frame(&frame),
     )
     .unwrap();
 
-    assert!(matches!(validated.op, TileOp::SetSplitShares { .. }));
+    assert!(matches!(
+        validated.operation(),
+        TileOp::SetSplitShares { .. }
+    ));
 }
 
 #[test]
 fn tab_insert_threshold_controls_reorder_index() {
-    let tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
+    let tree = tab_tree([PaneId(1), PaneId(2)]);
     let frame = tree.layout(input());
     let options = interaction_options_with_drag(DragOptions {
         allow_split: false,
@@ -2114,18 +2135,59 @@ fn stale_interaction_validation_is_rejected() {
     })
     .unwrap();
     assert!(matches!(
-        validate_interaction_update(&tree, &frame, &update, &DockPolicyData::default(), &options),
+        validate_interaction_update(&tree, &frame, &update, &DockPolicy::default(), &options),
         Err(TileError::StaleInteraction)
     ));
 }
 
 #[test]
+fn stale_frame_cancels_interaction_before_generating_preview() {
+    let mut tree = tab_tree([PaneId(1), PaneId(2)]);
+    let frame = tree.layout(input());
+    let mut state = begin_interaction(&frame, Point::new(20.0, 10.0), &interaction_options());
+    tree.apply(TileOp::ActivatePane { pane: PaneId(2) })
+        .unwrap();
+
+    let update = update_interaction(
+        &tree,
+        &frame,
+        &mut state,
+        Point::new(100.0, 10.0),
+        &interaction_options(),
+    );
+
+    assert!(matches!(state, InteractionState::None));
+    assert!(update.proposal.is_none());
+    assert!(update.preview.is_none());
+    assert!(update.candidates.is_empty());
+}
+
+#[test]
+fn exhausted_revision_rejects_mutation_atomically() {
+    let mut tree = TileTree::from_raw_parts_for_test(
+        TileId(0),
+        Revision(u64::MAX),
+        vec![Some(TileNode::tabs(vec![PaneId(1), PaneId(2)]))],
+    );
+
+    assert!(matches!(
+        tree.apply(TileOp::ActivatePane { pane: PaneId(2) }),
+        Err(TileError::RevisionExhausted)
+    ));
+    assert_eq!(tree.revision(), Revision(u64::MAX));
+    let Some(TileNode::Tabs(tabs)) = tree.node(tree.root()) else {
+        panic!("root should remain tabs");
+    };
+    assert_eq!(tabs.active, 0);
+}
+
+#[test]
 fn validate_proposal_rejects_locked_layout() {
-    let tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
+    let tree = tab_tree([PaneId(1), PaneId(2)]);
     let group = tree.root();
-    let policy = DockPolicyData {
+    let policy = DockPolicy {
         locked_layout: true,
-        ..DockPolicyData::default()
+        ..DockPolicy::default()
     };
 
     let result = validate_proposal(ProposalValidationInput::new(
@@ -2154,7 +2216,7 @@ fn validate_proposal_rejects_invalid_target() {
                 index: None,
             },
         }),
-        &DockPolicyData::default(),
+        &DockPolicy::default(),
     ));
 
     assert_eq!(result.unwrap_err(), TileError::InvalidTileId);
@@ -2162,7 +2224,7 @@ fn validate_proposal_rejects_invalid_target() {
 
 #[test]
 fn validate_proposal_rejects_disallowed_tab_zone() {
-    let mut tree = TileTree::new(TileNode::tabs(vec![PaneId(1)]));
+    let mut tree = tab_tree([PaneId(1)]);
     let group = tree.root();
     tree.apply(TileOp::SplitPane {
         pane: PaneId(1),
@@ -2172,12 +2234,12 @@ fn validate_proposal_rejects_disallowed_tab_zone() {
         share: 0.5,
     })
     .unwrap();
-    let policy = DockPolicyData {
-        default_pane_capabilities: PaneCapabilities {
+    let policy = DockPolicy {
+        permissions: DockPermissions {
             allowed_zones: ZoneSet::SPLIT,
-            ..PaneCapabilities::default()
+            ..DockPermissions::default()
         },
-        ..DockPolicyData::default()
+        ..DockPolicy::default()
     };
 
     let result = validate_proposal(ProposalValidationInput::new(
@@ -2194,14 +2256,14 @@ fn validate_proposal_rejects_disallowed_tab_zone() {
 
 #[test]
 fn validate_proposal_rejects_disallowed_split_edge() {
-    let tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
+    let tree = tab_tree([PaneId(1), PaneId(2)]);
     let group = tree.root();
-    let policy = DockPolicyData {
-        default_pane_capabilities: PaneCapabilities {
+    let policy = DockPolicy {
+        permissions: DockPermissions {
             allowed_edges: EdgeSet::RIGHT,
-            ..PaneCapabilities::default()
+            ..DockPermissions::default()
         },
-        ..DockPolicyData::default()
+        ..DockPolicy::default()
     };
 
     let result = validate_proposal(ProposalValidationInput::new(
@@ -2223,7 +2285,7 @@ fn validate_proposal_rejects_disallowed_split_edge() {
 
 #[test]
 fn commit_proposal_applies_validated_operation() {
-    let mut tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
+    let mut tree = tab_tree([PaneId(1), PaneId(2)]);
     let group = tree.root();
 
     let proposal = validate_proposal(ProposalValidationInput::new(
@@ -2233,7 +2295,7 @@ fn commit_proposal_applies_validated_operation() {
             pane: PaneId(2),
             index: 0,
         }),
-        &DockPolicyData::default(),
+        &DockPolicy::default(),
     ))
     .unwrap();
     let Some(TileNode::Tabs(tabs)) = tree.node(group) else {
@@ -2248,6 +2310,35 @@ fn commit_proposal_applies_validated_operation() {
         panic!("group should remain tabs");
     };
     assert_eq!(tabs.panes, vec![PaneId(2), PaneId(1)]);
+}
+
+#[test]
+fn commit_proposal_rejects_tree_changed_after_validation() {
+    let mut tree = tab_tree([PaneId(1), PaneId(2)]);
+    let group = tree.root();
+    let proposal = validate_proposal(ProposalValidationInput::new(
+        &tree,
+        Proposal::Dock(DockProposal::ReorderTab {
+            group,
+            pane: PaneId(2),
+            index: 0,
+        }),
+        &DockPolicy::default(),
+    ))
+    .unwrap();
+    tree.apply(TileOp::ActivatePane { pane: PaneId(2) })
+        .unwrap();
+    let panes_before = tree.panes().collect::<Vec<_>>();
+
+    assert!(matches!(
+        commit_proposal(&mut tree, proposal),
+        Err(TileError::StaleInteraction)
+    ));
+    assert_eq!(tree.panes().collect::<Vec<_>>(), panes_before);
+    let Some(TileNode::Tabs(tabs)) = tree.node(group) else {
+        panic!("root should remain tabs");
+    };
+    assert_eq!(tabs.panes, vec![PaneId(1), PaneId(2)]);
 }
 
 #[test]
@@ -2275,7 +2366,7 @@ fn interaction_update_validates_and_commits_resize_proposal() {
     assert!(matches!(update.proposal, Some(Proposal::Resize(_))));
     assert!(update.preview.is_some());
 
-    let policy = DockPolicyData::default();
+    let policy = DockPolicy::default();
     let proposal = validate_interaction_update(&tree, &frame, &update, &policy, &options).unwrap();
     let op = commit_proposal(&mut tree, proposal).unwrap();
 
@@ -2293,7 +2384,7 @@ fn validate_proposal_rejects_stale_interaction_revision() {
                 pane: PaneId(1),
                 target: DockTarget::Root,
             }),
-            &DockPolicyData::default(),
+            &DockPolicy::default(),
         )
         .with_base_revision(Revision(99)),
     );
@@ -2330,7 +2421,7 @@ fn repair_reports_and_applies_persisted_layout_fixes() {
     );
 
     let report = tree.repair();
-    let actions = &report.actions;
+    let actions = &report;
 
     assert!(actions.contains(&RepairAction::RepairedShares(TileId(0))));
     assert!(actions.contains(&RepairAction::RepairedActiveTab(TileId(1))));
@@ -2377,7 +2468,7 @@ fn repair_reports_same_axis_split_merges() {
     );
 
     let report = tree.repair();
-    let actions = &report.actions;
+    let actions = &report;
 
     assert!(actions.contains(&RepairAction::CollapsedSplit(TileId(1))));
     assert!(actions.contains(&RepairAction::RepairedShares(TileId(0))));
@@ -2391,33 +2482,240 @@ fn repair_reports_same_axis_split_merges() {
 }
 
 #[test]
-fn restore_snapshot_repairs_only_when_requested() {
-    let snapshot = LayoutSnapshot {
-        schema_version: 1,
-        tree: TileTree::from_raw_parts_for_test(
-            TileId(0),
-            Revision(0),
-            vec![Some(TileNode::Tabs(TabNode {
-                panes: vec![PaneId(1)],
-                active: 99,
-                placement: TabBarPlacement::Top,
-            }))],
-        ),
-        active_pane: Some(PaneId(1)),
-        closed_panes: Vec::new(),
-    };
+fn restore_snapshot_always_repairs_before_returning() {
+    let snapshot = LayoutSnapshot::new(TileTree::from_raw_parts_for_test(
+        TileId(0),
+        Revision(0),
+        vec![Some(TileNode::Tabs(TabNode {
+            panes: vec![PaneId(1), PaneId(1)],
+            active: 99,
+            placement: TabBarPlacement::Top,
+        }))],
+    ));
 
-    let restored = restore_snapshot(snapshot.clone(), RestoreOptions { normalize: false }).unwrap();
-    let Some(TileNode::Tabs(tabs)) = restored.node(TileId(0)) else {
-        panic!("root should remain tabs");
-    };
-    assert_eq!(tabs.active, 99);
-
-    let restored = restore_snapshot(snapshot, RestoreOptions { normalize: true }).unwrap();
-    let Some(TileNode::Tabs(tabs)) = restored.node(TileId(0)) else {
+    let restored = restore_snapshot(snapshot).unwrap();
+    let Some(TileNode::Tabs(tabs)) = restored.tree.node(TileId(0)) else {
         panic!("root should remain tabs");
     };
     assert_eq!(tabs.active, 0);
+    assert_eq!(tabs.panes, vec![PaneId(1)]);
+    assert!(
+        restored
+            .repairs
+            .contains(&RepairAction::RepairedActiveTab(TileId(0)))
+    );
+    assert!(
+        restored
+            .repairs
+            .contains(&RepairAction::RemovedDuplicatePane {
+                pane: PaneId(1),
+                tile: TileId(0),
+            })
+    );
+}
+
+#[test]
+fn restore_snapshot_bounds_cycles_and_rejects_empty_trees() {
+    let cyclic = LayoutSnapshot::new(TileTree::from_raw_parts_for_test(
+        TileId(0),
+        Revision(0),
+        vec![
+            Some(TileNode::Split(SplitNode {
+                axis: Axis::Horizontal,
+                children: vec![TileId(0), TileId(1)],
+                shares: vec![1.0, 1.0],
+                constraints: SplitConstraints::default(),
+            })),
+            Some(TileNode::pane(PaneId(1))),
+        ],
+    ));
+    let restored = restore_snapshot(cyclic).unwrap();
+    assert_eq!(restored.tree.panes().collect::<Vec<_>>(), vec![PaneId(1)]);
+    assert!(!restored.repairs.is_empty());
+
+    let empty = LayoutSnapshot::new(TileTree::from_raw_parts_for_test(
+        TileId(0),
+        Revision(0),
+        vec![Some(TileNode::tabs(vec![]))],
+    ));
+    assert!(matches!(
+        restore_snapshot(empty),
+        Err(TileError::InvalidTree)
+    ));
+}
+
+#[test]
+fn restore_snapshot_rejects_unknown_schema_version() {
+    let snapshot = LayoutSnapshot::unsupported_for_test();
+
+    assert!(matches!(
+        restore_snapshot(snapshot),
+        Err(TileError::UnsupportedSnapshotVersion)
+    ));
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn snapshot_wire_rejects_version_before_decoding_tree_payload() {
+    use serde::de::value::{Error, MapDeserializer};
+    use serde::de::{Deserializer, IntoDeserializer, Visitor};
+
+    enum WireValue {
+        Text(&'static str),
+        Unit,
+    }
+
+    impl<'de> Deserializer<'de> for WireValue {
+        type Error = Error;
+
+        fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+        where
+            V: Visitor<'de>,
+        {
+            match self {
+                Self::Text(value) => visitor.visit_borrowed_str(value),
+                Self::Unit => visitor.visit_unit(),
+            }
+        }
+
+        fn deserialize_enum<V>(
+            self,
+            name: &'static str,
+            variants: &'static [&'static str],
+            visitor: V,
+        ) -> Result<V::Value, Self::Error>
+        where
+            V: Visitor<'de>,
+        {
+            match self {
+                Self::Text(value) => serde::de::value::BorrowedStrDeserializer::<Error>::new(value)
+                    .deserialize_enum(name, variants, visitor),
+                Self::Unit => visitor.visit_unit(),
+            }
+        }
+
+        serde::forward_to_deserialize_any! {
+            bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string
+            bytes byte_buf option unit unit_struct newtype_struct seq tuple tuple_struct
+            map struct identifier ignored_any
+        }
+    }
+
+    impl<'de> IntoDeserializer<'de, Error> for WireValue {
+        type Deserializer = Self;
+
+        fn into_deserializer(self) -> Self::Deserializer {
+            self
+        }
+    }
+
+    let wire = [
+        ("layout", WireValue::Unit),
+        ("schema_version", WireValue::Text("99")),
+    ];
+    let deserializer = MapDeserializer::<_, Error>::new(wire.into_iter());
+    let snapshot = <LayoutSnapshot as serde::Deserialize>::deserialize(deserializer).unwrap();
+
+    assert!(matches!(
+        restore_snapshot(snapshot),
+        Err(TileError::UnsupportedSnapshotVersion)
+    ));
+}
+
+#[test]
+fn normalization_preserves_active_pane_while_removing_duplicates() {
+    let mut tree = TileTree::from_raw_parts_for_test(
+        TileId(0),
+        Revision(0),
+        vec![Some(TileNode::Tabs(TabNode {
+            panes: vec![PaneId(1), PaneId(1), PaneId(2)],
+            active: 2,
+            placement: TabBarPlacement::Top,
+        }))],
+    );
+
+    let report = tree.repair();
+
+    let Some(TileNode::Tabs(tabs)) = tree.node(TileId(0)) else {
+        panic!("root should remain tabs");
+    };
+    assert_eq!(tabs.panes, vec![PaneId(1), PaneId(2)]);
+    assert_eq!(tabs.active, 1);
+    assert!(report.contains(&RepairAction::RemovedDuplicatePane {
+        pane: PaneId(1),
+        tile: TileId(0),
+    }));
+}
+
+#[test]
+fn split_constraints_follow_children_through_edits() {
+    let mut tree = TileTree::from_spec(TileSpec::Split {
+        axis: Axis::Horizontal,
+        children: vec![TileSpec::pane(PaneId(1)), TileSpec::pane(PaneId(2))],
+        shares: vec![1.0, 1.0],
+        constraints: SplitConstraints {
+            min_major: vec![100.0, 200.0],
+        },
+    })
+    .unwrap();
+    tree.apply(TileOp::SplitPane {
+        pane: PaneId(1),
+        axis: Axis::Horizontal,
+        new_pane: PaneId(3),
+        placement: Placement::Before,
+        share: 0.5,
+    })
+    .unwrap();
+    let Some(TileNode::Split(split)) = tree.node(tree.root()) else {
+        panic!("root should remain a split");
+    };
+    assert_eq!(split.constraints.min_major, vec![0.0, 100.0, 200.0]);
+
+    tree.apply(TileOp::ClosePane { pane: PaneId(1) }).unwrap();
+    let Some(TileNode::Split(split)) = tree.node(tree.root()) else {
+        panic!("root should remain a split");
+    };
+    assert_eq!(split.constraints.min_major, vec![0.0, 200.0]);
+}
+
+#[test]
+fn normalization_flattens_constraints_only_when_semantics_are_preserved() {
+    let nested = TileSpec::Split {
+        axis: Axis::Horizontal,
+        children: vec![TileSpec::pane(PaneId(1)), TileSpec::pane(PaneId(2))],
+        shares: vec![1.0, 1.0],
+        constraints: SplitConstraints {
+            min_major: vec![10.0, 20.0],
+        },
+    };
+    let flattened = TileTree::from_spec(TileSpec::equal_split(
+        Axis::Horizontal,
+        [nested.clone(), TileSpec::pane(PaneId(3))],
+    ))
+    .unwrap();
+    let Some(TileNode::Split(split)) = flattened.node(flattened.root()) else {
+        panic!("root should be a split");
+    };
+    assert_eq!(split.children.len(), 3);
+    assert_eq!(split.constraints.min_major, vec![10.0, 20.0]);
+
+    let preserved = TileTree::from_spec(TileSpec::Split {
+        axis: Axis::Horizontal,
+        children: vec![nested, TileSpec::pane(PaneId(3))],
+        shares: vec![1.0, 1.0],
+        constraints: SplitConstraints {
+            min_major: vec![300.0],
+        },
+    })
+    .unwrap();
+    let Some(TileNode::Split(split)) = preserved.node(preserved.root()) else {
+        panic!("root should be a split");
+    };
+    assert_eq!(split.children.len(), 2);
+    assert!(matches!(
+        preserved.node(split.children[0]),
+        Some(TileNode::Split(_))
+    ));
 }
 
 #[cfg(feature = "serde")]
@@ -2428,6 +2726,8 @@ fn serde_covers_public_data_types() {
         T: serde::Serialize + for<'de> serde::Deserialize<'de>,
     {
     }
+
+    fn assert_serialize<T: serde::Serialize>() {}
 
     assert_serde::<TileId>();
     assert_serde::<PaneId>();
@@ -2446,7 +2746,10 @@ fn serde_covers_public_data_types() {
     assert_serde::<TileSpec>();
     assert_serde::<TileSpecError>();
 
-    assert_serde::<LayoutFrame>();
+    assert_serialize::<LayoutFrame>();
+    assert_serialize::<InteractionUpdate>();
+    assert_serialize::<ValidatedProposal>();
+
     assert_serde::<FrameDiff>();
     assert_serde::<FrameItemDiff>();
     assert_serde::<FrameChange>();
@@ -2472,19 +2775,15 @@ fn serde_covers_public_data_types() {
     assert_serde::<TileOp>();
     assert_serde::<TileError>();
     assert_serde::<LayoutSnapshot>();
-    assert_serde::<RestoreOptions>();
-    assert_serde::<RepairReport>();
     assert_serde::<RepairAction>();
 
-    assert_serde::<PaneCapabilities>();
+    assert_serde::<DockPermissions>();
     assert_serde::<EdgeSet>();
     assert_serde::<ZoneSet>();
-    assert_serde::<DockPolicyData>();
-    assert_serde::<ValidatedProposal>();
+    assert_serde::<DockPolicy>();
 
     assert_serde::<DragIntent>();
     assert_serde::<InteractionState>();
-    assert_serde::<InteractionUpdate>();
     assert_serde::<DragSession>();
     assert_serde::<PendingDrag>();
     assert_serde::<DragSubject>();

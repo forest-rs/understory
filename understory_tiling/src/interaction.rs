@@ -365,10 +365,11 @@ pub enum DockProposal {
 
 /// Uncommitted resize proposal.
 ///
-/// Stored in [`ResizeSession`] by [`update_interaction`]. The proposed shares
-/// are computed from the solved split child geometry in the current
+/// Stored in [`ResizeSession`] by [`update_interaction`]. The proposed major
+/// lengths are computed from solved split-child geometry in the current
 /// [`LayoutFrame`], then clamped against [`ResizeOptions::min_pane_size`] and
-/// per-split minimum constraints. Commit it through
+/// per-split minimum constraints. Validation converts these proportional
+/// lengths directly into the split's relative weights. Commit it through
 /// [`validate_interaction_update`](crate::validate_interaction_update) and
 /// [`commit_proposal`](crate::commit_proposal).
 #[derive(Clone, Debug, PartialEq)]
@@ -382,8 +383,8 @@ pub struct ResizeProposal {
     ///
     /// Expected to be finite.
     pub delta: f64,
-    /// Proposed replacement shares.
-    pub new_shares: Vec<f64>,
+    /// Proposed major-axis length for each split child.
+    pub new_major_lengths: Vec<f64>,
 }
 
 /// Result of updating any interaction state.
@@ -392,7 +393,7 @@ pub struct ResizeProposal {
 /// in the host renderer state, then validate and commit `proposal` on
 /// pointer-up if one is present.
 #[derive(Clone, Debug, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct InteractionUpdate {
     /// Current proposal.
     pub proposal: Option<Proposal>,
@@ -423,20 +424,12 @@ pub struct ResizeOptions {
     ///
     /// Expected to be finite and non-negative.
     pub min_pane_size: Size,
-    /// Layout input used to produce full resize preview frames.
-    ///
-    /// Set this to the same geometry input used to create the current
-    /// [`LayoutFrame`] when the host wants [`InteractionUpdate::preview`] to
-    /// contain a solved preview layout. Leave it as `None` to skip full resize
-    /// previews.
-    pub preview_layout: Option<LayoutInput>,
 }
 
 impl Default for ResizeOptions {
     fn default() -> Self {
         Self {
             min_pane_size: Size::new(20.0, 20.0),
-            preview_layout: None,
         }
     }
 }
@@ -465,13 +458,6 @@ pub struct DragOptions {
     pub allow_split: bool,
     /// Whether tab-into targets are allowed.
     pub allow_tab_into: bool,
-    /// Layout input used to produce full drag preview frames.
-    ///
-    /// Set this to the same geometry input used to create the current
-    /// [`LayoutFrame`] when the host wants [`InteractionUpdate::preview`] to
-    /// contain a solved preview layout. Leave it as `None` to use only overlay
-    /// ghosts.
-    pub preview_layout: Option<LayoutInput>,
 }
 
 impl Default for DragOptions {
@@ -482,7 +468,6 @@ impl Default for DragOptions {
             allow_reorder_tabs: true,
             allow_split: true,
             allow_tab_into: true,
-            preview_layout: None,
         }
     }
 }
@@ -500,6 +485,12 @@ pub struct InteractionOptions {
     pub drag: DragOptions,
     /// Resize options.
     pub resize: ResizeOptions,
+    /// Layout input used to solve drag and resize preview frames.
+    ///
+    /// Preview frames contain base tiling geometry. Hosts apply the same
+    /// presentation transforms used for the current frame before displaying a
+    /// preview.
+    pub preview_layout: Option<LayoutInput>,
     /// Drag intent used by [`begin_interaction`].
     pub drag_intent: DragIntent,
     /// Pointer movement required before a pending drag becomes active.
@@ -513,6 +504,7 @@ impl Default for InteractionOptions {
         Self {
             drag: DragOptions::default(),
             resize: ResizeOptions::default(),
+            preview_layout: None,
             drag_intent: DragIntent::Move,
             drag_threshold: 5.0,
         }
@@ -527,19 +519,14 @@ impl InteractionOptions {
     /// will use `input.min_pane_size` for solved-geometry clamping.
     #[must_use]
     pub fn from_layout_input(input: LayoutInput) -> Self {
-        let drag = DragOptions {
-            preview_layout: Some(input),
-            ..DragOptions::default()
-        };
-
         let resize = ResizeOptions {
             min_pane_size: input.min_pane_size,
-            preview_layout: Some(input),
         };
 
         Self {
-            drag,
+            drag: DragOptions::default(),
             resize,
+            preview_layout: Some(input),
             ..Self::default()
         }
     }
@@ -643,20 +630,43 @@ pub fn update_interaction(
     point: Point,
     options: &InteractionOptions,
 ) -> InteractionUpdate {
+    if frame.revision() != tree.revision() {
+        *state = InteractionState::None;
+        return InteractionUpdate::default();
+    }
     match state {
         InteractionState::None => InteractionUpdate::default(),
         InteractionState::PendingDrag(pending) => {
             let Some(mut drag) = pending.update(point) else {
                 return InteractionUpdate::default();
             };
-            let update = update_drag(tree, frame, &mut drag, point, &options.drag);
+            let update = update_drag(
+                tree,
+                frame,
+                &mut drag,
+                point,
+                &options.drag,
+                options.preview_layout,
+            );
             *state = InteractionState::Drag(drag);
             update
         }
-        InteractionState::Drag(drag) => update_drag(tree, frame, drag, point, &options.drag),
-        InteractionState::Resize(resize) => {
-            update_resize(tree, frame, resize, point, &options.resize)
-        }
+        InteractionState::Drag(drag) => update_drag(
+            tree,
+            frame,
+            drag,
+            point,
+            &options.drag,
+            options.preview_layout,
+        ),
+        InteractionState::Resize(resize) => update_resize(
+            tree,
+            frame,
+            resize,
+            point,
+            &options.resize,
+            options.preview_layout,
+        ),
     }
 }
 
@@ -667,6 +677,7 @@ fn update_drag(
     drag: &mut DragSession,
     point: Point,
     options: &DragOptions,
+    preview_layout: Option<LayoutInput>,
 ) -> InteractionUpdate {
     debug_assert!(point.is_finite(), "point must be finite");
     drag.current = point;
@@ -679,7 +690,7 @@ fn update_drag(
         None
     };
     let proposal = active_frame.and_then(|target| proposal_for_drag(drag, &target, options));
-    let preview = options.preview_layout.and_then(|input| {
+    let preview = preview_layout.and_then(|input| {
         proposal
             .as_ref()
             .and_then(|proposal| preview_for_dock_proposal(tree, proposal, input))
@@ -746,6 +757,7 @@ fn update_resize(
     resize: &mut ResizeSession,
     point: Point,
     options: &ResizeOptions,
+    preview_layout: Option<LayoutInput>,
 ) -> InteractionUpdate {
     debug_assert!(point.is_finite(), "point must be finite");
     debug_assert!(
@@ -758,7 +770,7 @@ fn update_resize(
     let proposal = resize_proposal_from_frame(tree, frame, resize, point, options);
     let preview = proposal
         .as_ref()
-        .and_then(|proposal| preview_for_resize(tree, proposal, options));
+        .and_then(|proposal| preview_for_resize(tree, proposal, preview_layout));
     resize.proposal = proposal.clone();
     InteractionUpdate {
         proposal: proposal.map(Proposal::Resize),
@@ -783,6 +795,9 @@ pub fn drop_targets_for_drag(
     drag: &DragSession,
     options: &DragOptions,
 ) -> Vec<DropTargetFrame> {
+    if frame.revision() != tree.revision() || drag.base_revision != tree.revision() {
+        return Vec::new();
+    }
     let mut targets = Vec::new();
     debug_assert!(
         (0.0..=0.5).contains(&options.edge_zone_fraction),
@@ -1289,7 +1304,7 @@ fn resize_proposal_from_frame(
         return None;
     }
 
-    let mut new_shares = Vec::with_capacity(children.len());
+    let mut new_major_lengths = Vec::with_capacity(children.len());
     for child in &children {
         let mut length = major_length(child.rect, resize.axis);
         if child.index == resize.handle {
@@ -1300,28 +1315,28 @@ fn resize_proposal_from_frame(
         if length <= 0.0 {
             return None;
         }
-        new_shares.push(length);
+        new_major_lengths.push(length);
     }
 
     Some(ResizeProposal {
         split: resize.split,
         handle: resize.handle,
         delta,
-        new_shares,
+        new_major_lengths,
     })
 }
 
 fn preview_for_resize(
     tree: &TileTree,
     proposal: &ResizeProposal,
-    options: &ResizeOptions,
+    input: Option<LayoutInput>,
 ) -> Option<LayoutFrame> {
-    let input = options.preview_layout?;
+    let input = input?;
     let mut preview_tree = tree.clone();
     preview_tree
         .apply(TileOp::SetSplitShares {
             split: proposal.split,
-            shares: proposal.new_shares.clone(),
+            shares: proposal.new_major_lengths.clone(),
         })
         .ok()?;
     Some(preview_tree.layout(input))
