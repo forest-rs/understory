@@ -4,27 +4,26 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::RepairAction;
-use crate::frame::frame_item_rects;
+use crate::frame::{HIT_Z_PANE, HIT_Z_SPLIT_HANDLE, HIT_Z_TAB, HIT_Z_TAB_BAR};
+use crate::snapshot::{RepairAction, RepairReport};
 use crate::util::{
     is_valid_split_fraction, repaired_shares, solve_lengths_with_min, split_min_major,
     split_tab_bar, tab_rects,
 };
 use crate::{
     Axis, DockTarget, FrameItemId, HitKind, HitRegion, LayoutFrame, LayoutInput, PaneFrame, PaneId,
-    Placement, Rect, RepairReport, Revision, SplitChildFrame, SplitConstraints, SplitHandleFrame,
-    SplitNode, TabBarFrame, TabBarPlacement, TabFrame, TabNode, TileError, TileId, TileNode,
-    TileOp, TileSpec, TileSpecError,
+    Placement, Rect, Revision, SplitChildFrame, SplitConstraints, SplitHandleFrame, SplitNode,
+    TabBarFrame, TabBarPlacement, TabFrame, TabNode, TileError, TileId, TileNode, TileOp, TileSpec,
+    TileSpecError,
 };
-use crate::{FrameProjection, ProjectionHiddenItem, ProjectionKind};
 
 /// Persistent semantic tree of splits, tab groups, and pane leaves.
 ///
-/// Create one with [`TileTree::new`] or [`TileTree::single_pane`], mutate it
-/// with [`TileTree::apply`], and call [`TileTree::layout`] whenever the host
+/// Create one with [`TileTree::from_spec`] or [`TileTree::single_pane`], mutate
+/// it with [`TileTree::apply`], and call [`TileTree::layout`] whenever the host
 /// needs a fresh [`LayoutFrame`] for rendering, hit testing, or interactions.
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct TileTree {
     root: TileId,
     revision: Revision,
@@ -35,6 +34,51 @@ pub struct TileTree {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 struct NodeSlot {
     node: Option<TileNode>,
+}
+
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub(crate) struct RawTileTree {
+    pub(crate) root: TileId,
+    pub(crate) revision: Revision,
+    nodes: Vec<NodeSlot>,
+}
+
+impl From<TileTree> for RawTileTree {
+    fn from(tree: TileTree) -> Self {
+        Self {
+            root: tree.root,
+            revision: tree.revision,
+            nodes: tree.nodes,
+        }
+    }
+}
+
+impl RawTileTree {
+    pub(crate) fn into_tree(self) -> TileTree {
+        TileTree {
+            root: self.root,
+            revision: self.revision,
+            nodes: self.nodes,
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for TileTree {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let mut tree = RawTileTree::deserialize(deserializer)?.into_tree();
+        let _ = tree.repair();
+        if tree.panes().next().is_none() {
+            return Err(serde::de::Error::custom(
+                "tile tree contains no semantic panes",
+            ));
+        }
+        Ok(tree)
+    }
 }
 
 struct RepairSink<'a> {
@@ -50,16 +94,13 @@ enum PaneLocation {
 /// Iterator over every semantic pane in a [`TileTree`].
 ///
 /// Split children are visited depth first in stored order, and tab groups yield
-/// panes in tab order, including inactive tabs. For a host-edited or malformed
-/// tree, missing and cyclic tile references are skipped and a duplicate pane is
-/// yielded only at its first semantic occurrence. Normalize or repair such a
-/// tree before relying on its structure for other operations.
+/// panes in tab order, including inactive tabs. Public construction,
+/// restoration, and mutation preserve the valid-tree invariant that each pane
+/// and tile has exactly one semantic occurrence.
 #[derive(Clone, Debug)]
 pub struct Panes<'a> {
     tree: &'a TileTree,
     pending: Vec<PaneTraversal>,
-    visited_tiles: Vec<TileId>,
-    yielded_panes: Vec<PaneId>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -74,28 +115,14 @@ impl Iterator for Panes<'_> {
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(item) = self.pending.pop() {
             match item {
-                PaneTraversal::Pane(pane) => {
-                    if !self.yielded_panes.contains(&pane) {
-                        self.yielded_panes.push(pane);
-                        return Some(pane);
-                    }
-                }
-                PaneTraversal::Tile(tile) if self.visited_tiles.contains(&tile) => {}
+                PaneTraversal::Pane(pane) => return Some(pane),
                 PaneTraversal::Tile(tile) => match self.tree.get_node(tile) {
-                    Some(TileNode::Pane(pane)) => {
-                        self.visited_tiles.push(tile);
-                        if !self.yielded_panes.contains(&pane.pane) {
-                            self.yielded_panes.push(pane.pane);
-                            return Some(pane.pane);
-                        }
-                    }
+                    Some(TileNode::Pane(pane)) => return Some(pane.pane),
                     Some(TileNode::Tabs(tabs)) => {
-                        self.visited_tiles.push(tile);
                         self.pending
                             .extend(tabs.panes.iter().rev().copied().map(PaneTraversal::Pane));
                     }
                     Some(TileNode::Split(split)) => {
-                        self.visited_tiles.push(tile);
                         self.pending.extend(
                             split
                                 .children
@@ -134,23 +161,16 @@ impl<'a> RepairSink<'a> {
 }
 
 impl TileTree {
-    /// Creates a tree from a root node.
-    #[must_use]
-    pub fn new(root: TileNode) -> Self {
-        let mut tree = Self {
-            root: TileId(0),
-            revision: Revision(0),
-            nodes: Vec::new(),
-        };
-        tree.root = tree.push_node(root);
-        tree.normalize();
-        tree
-    }
-
     /// Creates a tree containing one pane.
     #[must_use]
     pub fn single_pane(pane: PaneId) -> Self {
-        Self::new(TileNode::pane(pane))
+        Self {
+            root: TileId(0),
+            revision: Revision(0),
+            nodes: vec![NodeSlot {
+                node: Some(TileNode::pane(pane)),
+            }],
+        }
     }
 
     /// Constructs a normalized tree from an ID-free recursive specification.
@@ -160,7 +180,7 @@ impl TileTree {
     /// have at least two children with one finite positive share per child.
     /// Tile ids are assigned deterministically in preorder.
     pub fn from_spec(spec: TileSpec) -> Result<Self, TileSpecError> {
-        validate_spec(&spec, &mut Vec::new())?;
+        spec.validate()?;
         let mut tree = Self {
             root: TileId(0),
             revision: Revision(0),
@@ -180,8 +200,6 @@ impl TileTree {
         Panes {
             tree: self,
             pending: alloc::vec![PaneTraversal::Tile(self.root)],
-            visited_tiles: Vec::new(),
-            yielded_panes: Vec::new(),
         }
     }
 
@@ -208,7 +226,11 @@ impl TileTree {
         let mut next = self.clone();
         let changed = next.apply_inner(op)?;
         if changed {
-            next.revision.0 = next.revision.0.saturating_add(1);
+            next.revision.0 = next
+                .revision
+                .0
+                .checked_add(1)
+                .ok_or(TileError::RevisionExhausted)?;
             next.normalize();
             *self = next;
         }
@@ -216,7 +238,7 @@ impl TileTree {
     }
 
     /// Normalizes the tree in place.
-    pub fn normalize(&mut self) {
+    pub(crate) fn normalize(&mut self) {
         let mut sink = RepairSink::silent();
         self.normalize_with_report(&mut sink);
     }
@@ -233,7 +255,9 @@ impl TileTree {
         }
 
         let mut visiting = vec![false; self.nodes.len()];
-        let root = self.normalize_node(self.root, &mut visiting, sink);
+        let mut claimed = vec![false; self.nodes.len()];
+        let mut panes = Vec::new();
+        let root = self.normalize_node(self.root, &mut visiting, &mut claimed, &mut panes, sink);
         self.root = root.unwrap_or_else(|| {
             self.push_node(TileNode::Tabs(TabNode {
                 panes: Vec::new(),
@@ -257,11 +281,11 @@ impl TileTree {
     }
 
     /// Repairs a tree and reports high-level repair actions.
-    pub fn repair(&mut self) -> RepairReport {
+    pub(crate) fn repair(&mut self) -> RepairReport {
         let mut actions = Vec::new();
         let mut sink = RepairSink::recording(&mut actions);
         self.normalize_with_report(&mut sink);
-        RepairReport { actions }
+        actions
     }
 
     /// Solves layout and returns a flattened frame.
@@ -288,10 +312,7 @@ impl TileTree {
                 && input.min_pane_size.height >= 0.0,
             "LayoutInput::min_pane_size must be finite and non-negative",
         );
-        let mut frame = LayoutFrame {
-            revision: self.revision,
-            ..LayoutFrame::default()
-        };
+        let mut frame = LayoutFrame::new(self.revision);
         let mut visiting = vec![false; self.nodes.len()];
         self.layout_tile(
             self.root,
@@ -300,9 +321,6 @@ impl TileTree {
             &mut frame,
             &mut visiting,
         );
-        if let Some(pane) = input.zoom {
-            project_zoom(&mut frame, pane, input.bounds.abs());
-        }
         frame
     }
 
@@ -322,8 +340,10 @@ impl TileTree {
             TileOp::ReorderTab { group, pane, index } => self.reorder_tab(group, pane, index),
             TileOp::SetSplitShares { split, shares } => self.set_split_shares(split, shares),
             TileOp::RestoreLayout { snapshot } => {
-                *self = snapshot.tree;
-                self.normalize();
+                let revision = self.revision;
+                let mut restored = crate::restore_snapshot(snapshot)?.tree;
+                restored.revision = revision;
+                *self = restored;
                 Ok(true)
             }
         }
@@ -448,6 +468,9 @@ impl TileTree {
         if !is_valid_split_fraction(share) {
             return Err(TileError::InvalidOperation);
         }
+        if self.contains_pane(new_pane) {
+            return Err(TileError::DuplicatePane(new_pane));
+        }
         let location = self.find_pane(pane).ok_or(TileError::InvalidPaneId)?;
         let target = match location {
             PaneLocation::Tile { tile } => tile,
@@ -514,11 +537,17 @@ impl TileTree {
         let Some(TileNode::Split(node)) = self.get_node_mut(split) else {
             return Err(TileError::InvalidTileId);
         };
-        let repaired = repaired_shares(node.children.len(), &shares);
-        if node.shares == repaired {
+        if shares.len() != node.children.len()
+            || shares
+                .iter()
+                .any(|share| !share.is_finite() || *share <= 0.0)
+        {
+            return Err(TileError::InvalidOperation);
+        }
+        if node.shares == shares {
             return Ok(false);
         }
-        node.shares = repaired;
+        node.shares = shares;
         Ok(true)
     }
 
@@ -627,6 +656,8 @@ impl TileTree {
             };
             if parent_split.axis == axis {
                 let old_shares = repaired_shares(parent_split.children.len(), &parent_split.shares);
+                let mut constraints =
+                    aligned_constraints(parent_split.children.len(), &parent_split.constraints);
                 parent_split.shares = old_shares;
                 let old_share = parent_split.shares[child_index];
                 let inserted_share = (old_share * share).max(0.01);
@@ -638,6 +669,8 @@ impl TileTree {
                 };
                 parent_split.children.insert(insert_index, inserted);
                 parent_split.shares.insert(insert_index, inserted_share);
+                constraints.insert(insert_index, 0.0);
+                parent_split.constraints.min_major = compact_constraints(constraints);
                 return Ok(());
             }
         }
@@ -706,9 +739,12 @@ impl TileTree {
             return Err(TileError::InvalidOperation);
         };
         let mut shares = repaired_shares(parent.children.len(), &parent.shares);
+        let mut constraints = aligned_constraints(parent.children.len(), &parent.constraints);
         parent.children.remove(child_index);
         shares.remove(child_index);
+        constraints.remove(child_index);
         parent.shares = shares;
+        parent.constraints.min_major = compact_constraints(constraints);
         Ok(())
     }
 
@@ -716,12 +752,16 @@ impl TileTree {
         &mut self,
         id: TileId,
         visiting: &mut [bool],
+        claimed: &mut [bool],
+        panes: &mut Vec<PaneId>,
         sink: &mut RepairSink<'_>,
     ) -> Option<TileId> {
         let index = id.0 as usize;
-        if index >= self.nodes.len() || visiting.get(index).copied().unwrap_or(false) {
+        if index >= self.nodes.len()
+            || visiting.get(index).copied().unwrap_or(false)
+            || claimed.get(index).copied().unwrap_or(false)
+        {
             sink.record(RepairAction::RemovedInvalidNode(id));
-            self.clear_node(id);
             return None;
         }
         if self.get_node(id).is_none() {
@@ -729,25 +769,56 @@ impl TileTree {
             return None;
         }
 
+        claimed[index] = true;
         visiting[index] = true;
         let node = self.get_node(id).cloned()?;
         let result = match node {
-            TileNode::Pane(_) => Some(id),
+            TileNode::Pane(pane) => {
+                if panes.contains(&pane.pane) {
+                    sink.record(RepairAction::RemovedDuplicatePane {
+                        pane: pane.pane,
+                        tile: id,
+                    });
+                    self.clear_node(id);
+                    None
+                } else {
+                    panes.push(pane.pane);
+                    Some(id)
+                }
+            }
             TileNode::Tabs(mut tabs) => {
+                let active_pane = tabs.panes.get(tabs.active).copied();
+                tabs.panes.retain(|pane| {
+                    if panes.contains(pane) {
+                        sink.record(RepairAction::RemovedDuplicatePane {
+                            pane: *pane,
+                            tile: id,
+                        });
+                        false
+                    } else {
+                        panes.push(*pane);
+                        true
+                    }
+                });
                 if tabs.panes.is_empty() {
                     sink.record(RepairAction::RemovedInvalidNode(id));
                     self.clear_node(id);
                     None
                 } else {
-                    if tabs.active >= tabs.panes.len() {
-                        tabs.active = 0;
+                    let repaired_active = active_pane
+                        .and_then(|active| tabs.panes.iter().position(|pane| *pane == active))
+                        .unwrap_or(0);
+                    if tabs.active != repaired_active {
+                        tabs.active = repaired_active;
                         sink.record(RepairAction::RepairedActiveTab(id));
                     }
                     let _ = self.set_node(id, TileNode::Tabs(tabs));
                     Some(id)
                 }
             }
-            TileNode::Split(split) => self.normalize_split(id, split, visiting, sink),
+            TileNode::Split(split) => {
+                self.normalize_split(id, split, visiting, claimed, panes, sink)
+            }
         };
         visiting[index] = false;
         result
@@ -758,29 +829,41 @@ impl TileTree {
         id: TileId,
         split: SplitNode,
         visiting: &mut [bool],
+        claimed: &mut [bool],
+        panes: &mut Vec<PaneId>,
         sink: &mut RepairSink<'_>,
     ) -> Option<TileId> {
         let old_shares = repaired_shares(split.children.len(), &split.shares);
+        let old_constraints = aligned_constraints(split.children.len(), &split.constraints);
+        if compact_constraints(old_constraints.clone()) != split.constraints.min_major {
+            sink.record(RepairAction::RepairedConstraints(id));
+        }
         if old_shares != split.shares {
             sink.record(RepairAction::RepairedShares(id));
         }
         let mut children = Vec::new();
         let mut shares = Vec::new();
+        let mut constraints = Vec::new();
         let mut structure_changed = false;
 
         for (child_index, child) in split.children.iter().copied().enumerate() {
-            let Some(child) = self.normalize_node(child, visiting, sink) else {
+            let Some(child) = self.normalize_node(child, visiting, claimed, panes, sink) else {
                 structure_changed = true;
                 continue;
             };
             let share = old_shares.get(child_index).copied().unwrap_or(1.0);
+            let minimum = old_constraints.get(child_index).copied().unwrap_or(0.0);
             if let Some(TileNode::Split(child_split)) = self.get_node(child).cloned()
                 && child_split.axis == split.axis
+                && minimum == 0.0
             {
                 let child_shares = repaired_shares(child_split.children.len(), &child_split.shares);
+                let child_constraints =
+                    aligned_constraints(child_split.children.len(), &child_split.constraints);
                 for (grand_index, grandchild) in child_split.children.iter().copied().enumerate() {
                     children.push(grandchild);
                     shares.push(share * child_shares.get(grand_index).copied().unwrap_or(1.0));
+                    constraints.push(child_constraints.get(grand_index).copied().unwrap_or(0.0));
                 }
                 structure_changed = true;
                 sink.record(RepairAction::CollapsedSplit(child));
@@ -789,6 +872,7 @@ impl TileTree {
             }
             children.push(child);
             shares.push(share);
+            constraints.push(minimum);
         }
 
         match children.len() {
@@ -813,7 +897,9 @@ impl TileTree {
                         axis: split.axis,
                         children,
                         shares,
-                        constraints: split.constraints,
+                        constraints: SplitConstraints {
+                            min_major: compact_constraints(constraints),
+                        },
                     }),
                 );
                 Some(id)
@@ -862,7 +948,7 @@ impl TileTree {
                 });
                 frame.hit_regions.push(HitRegion {
                     rect,
-                    z: 0,
+                    z: HIT_Z_PANE,
                     kind: HitKind::Pane { pane: pane.pane },
                 });
                 frame.paint_order.push(FrameItemId::Pane(pane.pane));
@@ -902,7 +988,7 @@ impl TileTree {
             frame.tab_bars.push(bar);
             frame.hit_regions.push(HitRegion {
                 rect: bar_rect,
-                z: 5,
+                z: HIT_Z_TAB_BAR,
                 kind: HitKind::TabBar { group: id },
             });
             frame.paint_order.push(FrameItemId::TabBar(id));
@@ -919,7 +1005,7 @@ impl TileTree {
                 });
                 frame.hit_regions.push(HitRegion {
                     rect,
-                    z: 10,
+                    z: HIT_Z_TAB,
                     kind: HitKind::Tab { group: id, pane },
                 });
                 frame.paint_order.push(FrameItemId::Tab { group: id, pane });
@@ -935,7 +1021,7 @@ impl TileTree {
         });
         frame.hit_regions.push(HitRegion {
             rect: pane_rect,
-            z: 0,
+            z: HIT_Z_PANE,
             kind: HitKind::Pane { pane: active_pane },
         });
         frame.paint_order.push(FrameItemId::Pane(active_pane));
@@ -1010,7 +1096,7 @@ impl TileTree {
                 });
                 frame.hit_regions.push(HitRegion {
                     rect: handle_rect,
-                    z: 20,
+                    z: HIT_Z_SPLIT_HANDLE,
                     kind: HitKind::SplitHandle {
                         split: id,
                         handle: index,
@@ -1026,39 +1112,49 @@ impl TileTree {
     }
 
     fn find_pane(&self, pane: PaneId) -> Option<PaneLocation> {
-        self.find_pane_from(self.root, pane)
-    }
-
-    fn find_pane_from(&self, tile: TileId, pane: PaneId) -> Option<PaneLocation> {
-        match self.get_node(tile)? {
-            TileNode::Pane(node) => (node.pane == pane).then_some(PaneLocation::Tile { tile }),
-            TileNode::Tabs(tabs) => tabs
-                .panes
-                .iter()
-                .position(|candidate| *candidate == pane)
-                .map(|index| PaneLocation::InTabs { group: tile, index }),
-            TileNode::Split(split) => split
-                .children
-                .iter()
-                .find_map(|child| self.find_pane_from(*child, pane)),
+        let mut pending = vec![self.root];
+        let mut visited = Vec::new();
+        while let Some(tile) = pending.pop() {
+            if visited.contains(&tile) {
+                continue;
+            }
+            visited.push(tile);
+            match self.get_node(tile) {
+                Some(TileNode::Pane(node)) if node.pane == pane => {
+                    return Some(PaneLocation::Tile { tile });
+                }
+                Some(TileNode::Tabs(tabs)) => {
+                    if let Some(index) = tabs.panes.iter().position(|candidate| *candidate == pane)
+                    {
+                        return Some(PaneLocation::InTabs { group: tile, index });
+                    }
+                }
+                Some(TileNode::Split(split)) => {
+                    pending.extend(split.children.iter().rev().copied());
+                }
+                _ => {}
+            }
         }
+        None
     }
 
     fn find_parent(&self, target: TileId) -> Option<(TileId, usize)> {
-        self.find_parent_from(self.root, target)
-    }
-
-    fn find_parent_from(&self, tile: TileId, target: TileId) -> Option<(TileId, usize)> {
-        let TileNode::Split(split) = self.get_node(tile)? else {
-            return None;
-        };
-        for (index, child) in split.children.iter().copied().enumerate() {
-            if child == target {
-                return Some((tile, index));
+        let mut pending = vec![self.root];
+        let mut visited = Vec::new();
+        while let Some(tile) = pending.pop() {
+            if visited.contains(&tile) {
+                continue;
             }
-            if let Some(found) = self.find_parent_from(child, target) {
-                return Some(found);
+            visited.push(tile);
+            let Some(TileNode::Split(split)) = self.get_node(tile) else {
+                continue;
+            };
+            for (index, child) in split.children.iter().copied().enumerate() {
+                if child == target {
+                    return Some((tile, index));
+                }
             }
+            pending.extend(split.children.iter().rev().copied());
         }
         None
     }
@@ -1068,140 +1164,22 @@ impl TileTree {
     }
 
     fn count_panes(&self) -> usize {
-        self.count_panes_from(self.root)
-    }
-
-    fn count_panes_from(&self, tile: TileId) -> usize {
-        match self.get_node(tile) {
-            Some(TileNode::Pane(_)) => 1,
-            Some(TileNode::Tabs(tabs)) => tabs.panes.len(),
-            Some(TileNode::Split(split)) => split
-                .children
-                .iter()
-                .map(|child| self.count_panes_from(*child))
-                .sum(),
-            None => 0,
-        }
+        self.panes().count()
     }
 }
 
-fn validate_spec(spec: &TileSpec, panes: &mut Vec<PaneId>) -> Result<(), TileSpecError> {
-    match spec {
-        TileSpec::Pane(pane) => validate_spec_pane(*pane, panes),
-        TileSpec::Tabs {
-            panes: tab_panes,
-            active,
-            ..
-        } => {
-            if tab_panes.is_empty() {
-                return Err(TileSpecError::EmptyTabs);
-            }
-            if *active >= tab_panes.len() {
-                return Err(TileSpecError::InvalidActiveTab {
-                    active: *active,
-                    panes: tab_panes.len(),
-                });
-            }
-            for pane in tab_panes {
-                validate_spec_pane(*pane, panes)?;
-            }
-            Ok(())
-        }
-        TileSpec::Split {
-            children,
-            shares,
-            constraints,
-            ..
-        } => {
-            if children.len() < 2 {
-                return Err(TileSpecError::TooFewSplitChildren {
-                    children: children.len(),
-                });
-            }
-            if children.len() != shares.len() {
-                return Err(TileSpecError::ShareCountMismatch {
-                    children: children.len(),
-                    shares: shares.len(),
-                });
-            }
-            if let Some(index) = shares
-                .iter()
-                .position(|share| !share.is_finite() || *share <= 0.0)
-            {
-                return Err(TileSpecError::InvalidShare { index });
-            }
-            if constraints.min_major.len() > children.len() {
-                return Err(TileSpecError::TooManySplitConstraints {
-                    children: children.len(),
-                    constraints: constraints.min_major.len(),
-                });
-            }
-            if let Some(index) = constraints
-                .min_major
-                .iter()
-                .position(|minimum| !minimum.is_finite() || *minimum < 0.0)
-            {
-                return Err(TileSpecError::InvalidSplitConstraint { index });
-            }
-            for child in children {
-                validate_spec(child, panes)?;
-            }
-            Ok(())
-        }
-    }
+fn aligned_constraints(count: usize, constraints: &SplitConstraints) -> Vec<f64> {
+    (0..count)
+        .map(|index| match constraints.min_major.get(index).copied() {
+            Some(minimum) if minimum.is_finite() && minimum >= 0.0 => minimum,
+            _ => 0.0,
+        })
+        .collect()
 }
 
-fn validate_spec_pane(pane: PaneId, panes: &mut Vec<PaneId>) -> Result<(), TileSpecError> {
-    if panes.contains(&pane) {
-        return Err(TileSpecError::DuplicatePane(pane));
+fn compact_constraints(mut constraints: Vec<f64>) -> Vec<f64> {
+    while constraints.last() == Some(&0.0) {
+        constraints.pop();
     }
-    panes.push(pane);
-    Ok(())
-}
-
-fn project_zoom(frame: &mut LayoutFrame, pane: PaneId, zoom_rect: Rect) {
-    let Some(source) = frame
-        .panes
-        .iter()
-        .find(|candidate| candidate.pane == pane)
-        .copied()
-    else {
-        return;
-    };
-    let hidden_items = frame_item_rects(frame)
-        .into_iter()
-        .filter(|(item, _)| *item != FrameItemId::Pane(pane))
-        .map(|(item, rect)| ProjectionHiddenItem { item, rect })
-        .collect();
-
-    frame.projection = Some(FrameProjection {
-        kind: ProjectionKind::Zoom,
-        focus: pane,
-        focus_tile: source.tile,
-        source_rect: source.rect,
-        projected_rect: zoom_rect,
-        hidden_items,
-    });
-    frame.panes.clear();
-    frame.panes.push(PaneFrame {
-        pane,
-        tile: source.tile,
-        rect: zoom_rect,
-        clip: zoom_rect,
-        active: source.active,
-    });
-    frame.tab_bars.clear();
-    frame.tabs.clear();
-    frame.split_children.clear();
-    frame.split_handles.clear();
-    frame.hit_regions.clear();
-    frame.hit_regions.push(HitRegion {
-        rect: zoom_rect,
-        z: 0,
-        kind: HitKind::Pane { pane },
-    });
-    frame.focus_order.clear();
-    frame.focus_order.push(pane);
-    frame.paint_order.clear();
-    frame.paint_order.push(FrameItemId::Pane(pane));
+    constraints
 }

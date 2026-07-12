@@ -1,7 +1,6 @@
 // Copyright 2026 the Understory Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::{PaneId, Rect, Size, TileId};
@@ -60,9 +59,9 @@ pub enum TabBarPlacement {
 
 /// Per-child constraints for a split node.
 ///
-/// Store this inside [`SplitNode`] when building or restoring a tree. The MVP
-/// normalizes the data but mostly uses [`LayoutInput::min_pane_size`] while the
-/// per-child constraint solver matures.
+/// Store this in [`TileSpec::Split`](crate::TileSpec::Split) when a child needs
+/// a stronger major-axis minimum than [`LayoutInput::min_pane_size`]. Missing
+/// entries inherit the layout input minimum.
 #[derive(Clone, Debug, Default, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SplitConstraints {
@@ -72,8 +71,9 @@ pub struct SplitConstraints {
 
 /// A semantic tile node.
 ///
-/// Construct these when creating a tree with [`TileTree::new`](crate::TileTree::new)
-/// or when building tests. Query existing nodes with
+/// Returned by [`TileTree::node`](crate::TileTree::node) for semantic
+/// inspection. Construct initial trees with [`TileSpec`](crate::TileSpec), and
+/// use these node values directly only when building crate-internal tests. Query existing nodes with
 /// [`TileTree::node`](crate::TileTree::node); renderers normally use the
 /// flattened [`LayoutFrame`](crate::LayoutFrame) instead of walking `TileNode`
 /// recursively.
@@ -143,8 +143,9 @@ pub struct PaneNode {
 /// Construct this at render time and pass it to
 /// [`TileTree::layout`](crate::TileTree::layout). It is not stored in the tree;
 /// changing it produces a new [`LayoutFrame`](crate::LayoutFrame) without
-/// mutating semantic layout. `zoom` is presentation state: setting it projects
-/// the solved frame to one pane, but does not mutate the tree.
+/// mutating semantic layout. Apply presentation-only transforms such as zoom to
+/// the returned frame with
+/// [`LayoutFrame::apply_projection`](crate::LayoutFrame::apply_projection).
 #[derive(Clone, Copy, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LayoutInput {
@@ -165,42 +166,22 @@ pub struct LayoutInput {
     ///
     /// Expected to be finite and non-negative.
     pub min_pane_size: Size,
-    /// Pane to present as zoomed for this layout pass.
-    ///
-    /// When this names a visible pane, [`TileTree::layout`](crate::TileTree::layout)
-    /// returns a frame containing that pane expanded to `bounds` and records the
-    /// pane's normal rectangle in
-    /// [`LayoutFrame::projection`](crate::LayoutFrame::projection). Missing or
-    /// inactive panes leave the frame unprojected.
-    pub zoom: Option<PaneId>,
 }
 
 impl TileNode {
     /// Creates a pane leaf node.
     #[must_use]
-    pub const fn pane(pane: PaneId) -> Self {
+    pub(crate) const fn pane(pane: PaneId) -> Self {
         Self::Pane(PaneNode { pane })
     }
 
     /// Creates a tab group with the first pane active.
     #[must_use]
-    pub fn tabs(panes: Vec<PaneId>) -> Self {
+    pub(crate) fn tabs(panes: Vec<PaneId>) -> Self {
         Self::Tabs(TabNode {
             panes,
             active: 0,
             placement: TabBarPlacement::Top,
-        })
-    }
-
-    /// Creates a split node with equal shares.
-    #[must_use]
-    pub fn split(axis: Axis, children: Vec<TileId>) -> Self {
-        let len = children.len();
-        Self::Split(SplitNode {
-            axis,
-            children,
-            shares: vec![1.0; len],
-            constraints: SplitConstraints::default(),
         })
     }
 }
