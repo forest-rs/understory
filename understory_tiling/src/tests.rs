@@ -2515,6 +2515,29 @@ fn restore_snapshot_always_repairs_before_returning() {
 }
 
 #[test]
+fn tree_restore_reports_repairs_and_advances_the_live_revision() {
+    let snapshot = LayoutSnapshot::new(TileTree::from_raw_parts_for_test(
+        TileId(0),
+        Revision(99),
+        vec![Some(TileNode::Tabs(TabNode {
+            panes: vec![PaneId(1), PaneId(1)],
+            active: 0,
+            placement: TabBarPlacement::Top,
+        }))],
+    ));
+    let mut tree = TileTree::single_pane(PaneId(2));
+
+    let repairs = tree.restore(snapshot).unwrap();
+
+    assert_eq!(tree.revision(), Revision(1));
+    assert_eq!(tree.panes().collect::<Vec<_>>(), vec![PaneId(1)]);
+    assert!(repairs.contains(&RepairAction::RemovedDuplicatePane {
+        pane: PaneId(1),
+        tile: TileId(0),
+    }));
+}
+
+#[test]
 fn restore_snapshot_bounds_cycles_and_rejects_empty_trees() {
     let cyclic = LayoutSnapshot::new(TileTree::from_raw_parts_for_test(
         TileId(0),
@@ -2546,11 +2569,11 @@ fn restore_snapshot_bounds_cycles_and_rejects_empty_trees() {
 
 #[test]
 fn restore_snapshot_rejects_unknown_schema_version() {
-    let snapshot = LayoutSnapshot::unsupported_for_test();
+    let snapshot = LayoutSnapshot::unsupported_for_test(99);
 
     assert!(matches!(
         restore_snapshot(snapshot),
-        Err(TileError::UnsupportedSnapshotVersion)
+        Err(TileError::UnsupportedSnapshotVersion(99))
     ));
 }
 
@@ -2560,10 +2583,7 @@ fn snapshot_wire_rejects_version_before_decoding_tree_payload() {
     use serde::de::value::{Error, MapDeserializer};
     use serde::de::{Deserializer, IntoDeserializer, Visitor};
 
-    enum WireValue {
-        Text(&'static str),
-        Unit,
-    }
+    struct WireValue;
 
     impl<'de> Deserializer<'de> for WireValue {
         type Error = Error;
@@ -2572,26 +2592,19 @@ fn snapshot_wire_rejects_version_before_decoding_tree_payload() {
         where
             V: Visitor<'de>,
         {
-            match self {
-                Self::Text(value) => visitor.visit_borrowed_str(value),
-                Self::Unit => visitor.visit_unit(),
-            }
+            visitor.visit_unit()
         }
 
         fn deserialize_enum<V>(
             self,
-            name: &'static str,
-            variants: &'static [&'static str],
+            _name: &'static str,
+            _variants: &'static [&'static str],
             visitor: V,
         ) -> Result<V::Value, Self::Error>
         where
             V: Visitor<'de>,
         {
-            match self {
-                Self::Text(value) => serde::de::value::BorrowedStrDeserializer::<Error>::new(value)
-                    .deserialize_enum(name, variants, visitor),
-                Self::Unit => visitor.visit_unit(),
-            }
+            visitor.visit_unit()
         }
 
         serde::forward_to_deserialize_any! {
@@ -2609,17 +2622,28 @@ fn snapshot_wire_rejects_version_before_decoding_tree_payload() {
         }
     }
 
-    let wire = [
-        ("layout", WireValue::Unit),
-        ("schema_version", WireValue::Text("99")),
-    ];
+    let wire = [("99", WireValue)];
     let deserializer = MapDeserializer::<_, Error>::new(wire.into_iter());
     let snapshot = <LayoutSnapshot as serde::Deserialize>::deserialize(deserializer).unwrap();
 
     assert!(matches!(
         restore_snapshot(snapshot),
-        Err(TileError::UnsupportedSnapshotVersion)
+        Err(TileError::UnsupportedSnapshotVersion(99))
     ));
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn snapshot_wire_rejects_multiple_version_entries() {
+    use serde::de::value::{Error, MapDeserializer, UnitDeserializer};
+
+    let wire = [
+        ("99", UnitDeserializer::<Error>::new()),
+        ("100", UnitDeserializer::<Error>::new()),
+    ];
+    let deserializer = MapDeserializer::<_, Error>::new(wire.into_iter());
+
+    assert!(<LayoutSnapshot as serde::Deserialize>::deserialize(deserializer).is_err());
 }
 
 #[test]

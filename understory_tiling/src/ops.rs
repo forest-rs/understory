@@ -4,7 +4,7 @@
 use alloc::vec::Vec;
 use core::fmt;
 
-use crate::{Axis, LayoutSnapshot, PaneId, Placement, TileId};
+use crate::{Axis, PaneId, Placement, TileId};
 
 /// Target for a dock or move operation.
 ///
@@ -106,11 +106,6 @@ pub enum TileOp {
         /// Replacement shares.
         shares: Vec<f64>,
     },
-    /// Restore a saved layout snapshot.
-    RestoreLayout {
-        /// Snapshot to restore.
-        snapshot: LayoutSnapshot,
-    },
 }
 
 /// Error returned by mutation and commit APIs.
@@ -142,7 +137,7 @@ pub enum TileError {
     /// The monotonic tree revision cannot represent another mutation.
     RevisionExhausted,
     /// A snapshot uses an unsupported schema version.
-    UnsupportedSnapshotVersion,
+    UnsupportedSnapshotVersion(u64),
 }
 
 impl fmt::Display for TileError {
@@ -158,7 +153,9 @@ impl fmt::Display for TileError {
             Self::CannotCloseLastPane => f.write_str("cannot close last pane"),
             Self::InvalidTree => f.write_str("invalid tile tree"),
             Self::RevisionExhausted => f.write_str("tile tree revision exhausted"),
-            Self::UnsupportedSnapshotVersion => f.write_str("unsupported layout snapshot version"),
+            Self::UnsupportedSnapshotVersion(version) => {
+                write!(f, "unsupported layout snapshot version {version}")
+            }
         }
     }
 }
