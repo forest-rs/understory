@@ -757,6 +757,7 @@ impl TileTree {
             let bar = TabBarFrame {
                 group: id,
                 rect: bar_rect,
+                viewport: bar_rect,
                 placement: tabs.placement,
                 active_pane: Some(active_pane),
             };

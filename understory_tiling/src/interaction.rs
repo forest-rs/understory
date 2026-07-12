@@ -10,7 +10,7 @@ use crate::frame::hit_test;
 use crate::util::{major_length, major_size, rect_distance, split_min_major};
 use crate::{
     Axis, DockTarget, HitKind, LayoutFrame, LayoutInput, PaneId, Point, Rect, Revision, Size,
-    SplitChildFrame, TileError, TileId, TileNode, TileOp, TileTree,
+    SplitChildFrame, TabBarPlacement, TileError, TileId, TileNode, TileOp, TileTree,
 };
 
 /// High-level drag intent.
@@ -824,6 +824,9 @@ pub fn drop_targets_for_drag(
 
     if options.allow_tab_into {
         for bar in &frame.tab_bars {
+            if !bar.viewport.contains(drag.current) {
+                continue;
+            }
             let index = match drag.subject {
                 DragSubject::Tab { group, .. }
                     if group == bar.group && options.allow_reorder_tabs =>
@@ -840,11 +843,11 @@ pub fn drop_targets_for_drag(
             };
             targets.push(DropTargetFrame {
                 id,
-                rect: bar.rect,
+                rect: bar.viewport,
                 target,
-                preview_rect: bar.rect,
+                preview_rect: bar.viewport,
                 priority: 30,
-                distance: rect_distance(bar.rect, drag.current),
+                distance: rect_distance(bar.viewport, drag.current),
                 accepts: target_accepts(tree, frame, drag, target, options),
             });
         }
@@ -1211,8 +1214,17 @@ fn tab_insert_index(
     if tabs.is_empty() {
         return Some(0);
     }
+    let horizontal = frame
+        .tab_bars
+        .iter()
+        .find(|bar| bar.group == group)
+        .is_none_or(|bar| {
+            matches!(
+                bar.placement,
+                TabBarPlacement::Top | TabBarPlacement::Bottom
+            )
+        });
     for tab in &tabs {
-        let horizontal = tab.rect.width() >= tab.rect.height();
         let insert_before = if horizontal {
             tab.rect.x0 + tab.rect.width() * threshold
         } else {

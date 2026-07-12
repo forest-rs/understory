@@ -645,10 +645,431 @@ fn tabs_emit_bar_tabs_and_active_pane() {
     let tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
     let frame = tree.layout(input());
     assert_eq!(frame.tab_bars.len(), 1);
+    assert_eq!(frame.tab_bars[0].viewport, frame.tab_bars[0].rect);
     assert_eq!(frame.tabs.len(), 2);
     assert_eq!(frame.panes.len(), 1);
     assert_eq!(frame.panes[0].pane, PaneId(1));
     assert_eq!(frame.panes[0].rect.y0, 20.0);
+}
+
+fn resolved_tabs(group: TileId) -> TabGroupGeometry {
+    TabGroupGeometry {
+        group,
+        viewport: Rect::new(0.0, 0.0, 300.0, 20.0),
+        tabs: vec![
+            TabGeometry {
+                pane: PaneId(1),
+                rect: Rect::new(0.0, 0.0, 200.0, 20.0),
+                interaction_regions: vec![Rect::new(0.0, 0.0, 180.0, 20.0)],
+            },
+            TabGeometry {
+                pane: PaneId(2),
+                rect: Rect::new(200.0, 0.0, 300.0, 20.0),
+                interaction_regions: vec![Rect::new(200.0, 0.0, 280.0, 20.0)],
+            },
+        ],
+        bar_drag_regions: vec![Rect::new(280.0, 0.0, 300.0, 20.0)],
+    }
+}
+
+#[test]
+fn resolved_tab_geometry_replaces_tabs_and_tab_hits_only() {
+    let tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
+    let group = tree.root();
+    let revision = tree.revision();
+    let mut frame = tree.layout(input());
+    let pane_hit = hit_test(&frame, Point::new(10.0, 30.0));
+
+    frame
+        .apply_tab_group_geometry(&[resolved_tabs(group)])
+        .unwrap();
+
+    assert_eq!(frame.tabs[0].rect, Rect::new(0.0, 0.0, 200.0, 20.0));
+    assert_eq!(frame.tabs[1].rect, Rect::new(200.0, 0.0, 300.0, 20.0));
+    assert_eq!(frame.tab_bars[0].viewport, resolved_tabs(group).viewport);
+    assert_eq!(
+        hit_test(&frame, Point::new(170.0, 10.0)),
+        Some(HitKind::Tab {
+            group,
+            pane: PaneId(1)
+        })
+    );
+    assert_eq!(hit_test(&frame, Point::new(190.0, 10.0)), None);
+    assert_eq!(
+        hit_test(&frame, Point::new(290.0, 10.0)),
+        Some(HitKind::TabBar { group })
+    );
+    assert_eq!(hit_test(&frame, Point::new(10.0, 30.0)), pane_hit);
+    assert_eq!(frame.revision, revision);
+    assert_eq!(tree.revision(), revision);
+}
+
+#[test]
+fn resolved_tab_hit_precedence_uses_semantic_order() {
+    let tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
+    let group = tree.root();
+    let mut geometry = resolved_tabs(group);
+    geometry.tabs[0].rect = Rect::new(0.0, 0.0, 200.0, 20.0);
+    geometry.tabs[1].rect = Rect::new(100.0, 0.0, 300.0, 20.0);
+    geometry.tabs[0].interaction_regions = vec![Rect::new(100.0, 0.0, 180.0, 20.0)];
+    geometry.tabs[1].interaction_regions = vec![Rect::new(100.0, 0.0, 180.0, 20.0)];
+    let mut reversed = geometry.clone();
+    reversed.tabs.reverse();
+    let mut semantic_frame = tree.layout(input());
+    let mut reversed_frame = semantic_frame.clone();
+
+    semantic_frame
+        .apply_tab_group_geometry(&[geometry])
+        .unwrap();
+    reversed_frame
+        .apply_tab_group_geometry(&[reversed])
+        .unwrap();
+
+    let point = Point::new(120.0, 10.0);
+    assert_eq!(
+        hit_test(&semantic_frame, point),
+        hit_test(&reversed_frame, point)
+    );
+    assert_eq!(
+        hit_test(&reversed_frame, point),
+        Some(HitKind::Tab {
+            group,
+            pane: PaneId(1)
+        })
+    );
+}
+
+#[test]
+fn resolved_scrolled_tab_only_hits_its_visible_regions() {
+    let tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
+    let group = tree.root();
+    let mut frame = tree.layout(input());
+    let geometry = TabGroupGeometry {
+        group,
+        viewport: Rect::new(20.0, 0.0, 280.0, 20.0),
+        tabs: vec![
+            TabGeometry {
+                pane: PaneId(1),
+                rect: Rect::new(-40.0, 0.0, 80.0, 20.0),
+                interaction_regions: vec![Rect::new(20.0, 0.0, 80.0, 20.0)],
+            },
+            TabGeometry {
+                pane: PaneId(2),
+                rect: Rect::new(80.0, 0.0, 200.0, 20.0),
+                interaction_regions: vec![Rect::new(80.0, 0.0, 200.0, 20.0)],
+            },
+        ],
+        bar_drag_regions: vec![],
+    };
+
+    frame.apply_tab_group_geometry(&[geometry]).unwrap();
+
+    assert_eq!(hit_test(&frame, Point::new(10.0, 10.0)), None);
+    assert!(matches!(
+        hit_test(&frame, Point::new(30.0, 10.0)),
+        Some(HitKind::Tab {
+            pane: PaneId(1),
+            ..
+        })
+    ));
+
+    let options = interaction_options_with_drag(DragOptions {
+        allow_split: false,
+        ..DragOptions::default()
+    });
+    let update = pointer_update(
+        &tree,
+        &frame,
+        Point::new(100.0, 10.0),
+        Point::new(10.0, 10.0),
+        &options,
+    );
+    assert!(dock_proposal(&update).is_none());
+}
+
+#[test]
+fn invalid_resolved_tab_geometry_is_atomic() {
+    let tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
+    let group = tree.root();
+    let mut frame = tree.layout(input());
+    let original = frame.clone();
+    let mut geometry = resolved_tabs(group);
+    geometry.tabs[1].pane = PaneId(1);
+
+    assert_eq!(
+        frame.apply_tab_group_geometry(&[geometry]),
+        Err(TabGeometryError::DuplicatePane {
+            group,
+            pane: PaneId(1)
+        })
+    );
+    assert_eq!(frame.tabs, original.tabs);
+    assert_eq!(frame.hit_regions, original.hit_regions);
+
+    let mut geometry = resolved_tabs(group);
+    geometry.tabs.pop();
+    assert_eq!(
+        frame.apply_tab_group_geometry(&[geometry]),
+        Err(TabGeometryError::MissingPane {
+            group,
+            pane: PaneId(2)
+        })
+    );
+
+    let mut geometry = resolved_tabs(group);
+    geometry.tabs[1].pane = PaneId(99);
+    assert_eq!(
+        frame.apply_tab_group_geometry(&[geometry]),
+        Err(TabGeometryError::UnknownPane {
+            group,
+            pane: PaneId(99)
+        })
+    );
+}
+
+fn two_tab_groups() -> TileTree {
+    TileTree::from_raw_parts_for_test(
+        TileId(0),
+        Revision(0),
+        vec![
+            Some(TileNode::Split(SplitNode {
+                axis: Axis::Horizontal,
+                children: vec![TileId(1), TileId(2)],
+                shares: vec![1.0, 1.0],
+                constraints: SplitConstraints::default(),
+            })),
+            Some(TileNode::Tabs(TabNode {
+                panes: vec![PaneId(1), PaneId(2)],
+                active: 0,
+                placement: TabBarPlacement::Top,
+            })),
+            Some(TileNode::Tabs(TabNode {
+                panes: vec![PaneId(3), PaneId(4)],
+                active: 0,
+                placement: TabBarPlacement::Top,
+            })),
+        ],
+    )
+}
+
+fn geometry_for_bar(frame: &LayoutFrame, group: TileId) -> TabGroupGeometry {
+    let bar = frame
+        .tab_bars
+        .iter()
+        .find(|bar| bar.group == group)
+        .unwrap();
+    let tabs: Vec<_> = frame
+        .tabs
+        .iter()
+        .filter(|tab| tab.group == group)
+        .map(|tab| TabGeometry {
+            pane: tab.pane,
+            rect: tab.rect,
+            interaction_regions: vec![tab.rect],
+        })
+        .collect();
+    TabGroupGeometry {
+        group,
+        viewport: bar.rect,
+        tabs,
+        bar_drag_regions: vec![],
+    }
+}
+
+#[test]
+fn resolved_tab_geometry_validation_is_atomic_across_groups() {
+    let tree = two_tab_groups();
+    let mut frame = tree.layout(input());
+    let original = frame.clone();
+    let first = geometry_for_bar(&frame, TileId(1));
+    let mut second = geometry_for_bar(&frame, TileId(2));
+    second.tabs.pop();
+
+    assert_eq!(
+        frame.apply_tab_group_geometry(&[first, second]),
+        Err(TabGeometryError::MissingPane {
+            group: TileId(2),
+            pane: PaneId(4),
+        })
+    );
+    assert_eq!(frame.tabs, original.tabs);
+    assert_eq!(frame.tab_bars, original.tab_bars);
+    assert_eq!(frame.hit_regions, original.hit_regions);
+}
+
+#[test]
+fn resolved_tab_geometry_reapplication_removes_old_hits() {
+    let tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
+    let group = tree.root();
+    let mut frame = tree.layout(input());
+    frame
+        .apply_tab_group_geometry(&[resolved_tabs(group)])
+        .unwrap();
+    let mut shifted = resolved_tabs(group);
+    shifted.tabs[0].rect = Rect::new(20.0, 0.0, 220.0, 20.0);
+    shifted.tabs[0].interaction_regions = vec![Rect::new(20.0, 0.0, 180.0, 20.0)];
+
+    frame.apply_tab_group_geometry(&[shifted]).unwrap();
+
+    assert_eq!(hit_test(&frame, Point::new(10.0, 10.0)), None);
+    assert!(matches!(
+        hit_test(&frame, Point::new(30.0, 10.0)),
+        Some(HitKind::Tab {
+            pane: PaneId(1),
+            ..
+        })
+    ));
+}
+
+#[test]
+fn resolved_tab_geometry_reports_group_and_region_errors() {
+    let tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
+    let group = tree.root();
+    let frame = tree.layout(input());
+
+    assert_eq!(
+        frame
+            .clone()
+            .apply_tab_group_geometry(&[resolved_tabs(TileId(99))]),
+        Err(TabGeometryError::UnknownGroup(TileId(99)))
+    );
+    assert_eq!(
+        frame
+            .clone()
+            .apply_tab_group_geometry(&[resolved_tabs(group), resolved_tabs(group)]),
+        Err(TabGeometryError::DuplicateGroup(group))
+    );
+
+    let mut invalid_viewport = resolved_tabs(group);
+    invalid_viewport.viewport = Rect::new(-1.0, 0.0, 300.0, 20.0);
+    assert_eq!(
+        frame.clone().apply_tab_group_geometry(&[invalid_viewport]),
+        Err(TabGeometryError::InvalidRect { group, pane: None })
+    );
+
+    let mut invalid_bar_region = resolved_tabs(group);
+    invalid_bar_region.bar_drag_regions = vec![Rect::new(290.0, 0.0, 301.0, 20.0)];
+    assert_eq!(
+        frame
+            .clone()
+            .apply_tab_group_geometry(&[invalid_bar_region]),
+        Err(TabGeometryError::InvalidInteractionRegion { group, pane: None })
+    );
+}
+
+#[test]
+fn tab_geometry_errors_have_human_readable_diagnostics() {
+    assert_eq!(
+        TabGeometryError::MissingPane {
+            group: TileId(2),
+            pane: PaneId(7),
+        }
+        .to_string(),
+        "tab group tile 2 is missing pane 7"
+    );
+    assert_eq!(
+        TabGeometryError::InvalidInteractionRegion {
+            group: TileId(2),
+            pane: None,
+        }
+        .to_string(),
+        "tab group tile 2 has an invalid bar interaction region"
+    );
+}
+
+#[test]
+fn frame_diff_observes_resolved_tab_geometry() {
+    let tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
+    let group = tree.root();
+    let before = tree.layout(input());
+    let mut after = before.clone();
+    after
+        .apply_tab_group_geometry(&[resolved_tabs(group)])
+        .unwrap();
+
+    assert_eq!(
+        diff_item(
+            &diff_frames(&before, &after),
+            FrameItemId::Tab {
+                group,
+                pane: PaneId(1)
+            }
+        )
+        .change,
+        FrameChange::Resized
+    );
+}
+
+#[test]
+fn reorder_insertion_uses_resolved_widths() {
+    let tree = TileTree::new(TileNode::tabs(vec![PaneId(1), PaneId(2)]));
+    let group = tree.root();
+    let mut frame = tree.layout(input());
+    frame
+        .apply_tab_group_geometry(&[resolved_tabs(group)])
+        .unwrap();
+    let options = interaction_options_with_drag(DragOptions {
+        allow_split: false,
+        ..DragOptions::default()
+    });
+
+    let update = pointer_update(
+        &tree,
+        &frame,
+        Point::new(250.0, 10.0),
+        Point::new(90.0, 10.0),
+        &options,
+    );
+    assert!(matches!(
+        dock_proposal(&update),
+        Some(DockProposal::ReorderTab { index: 0, .. })
+    ));
+}
+
+#[test]
+fn vertical_reorder_insertion_uses_bar_placement() {
+    let tree = TileTree::new(TileNode::Tabs(TabNode {
+        panes: vec![PaneId(1), PaneId(2)],
+        active: 0,
+        placement: TabBarPlacement::Left,
+    }));
+    let group = tree.root();
+    let mut frame = tree.layout(input());
+    frame
+        .apply_tab_group_geometry(&[TabGroupGeometry {
+            group,
+            viewport: Rect::new(0.0, 0.0, 20.0, 200.0),
+            tabs: vec![
+                TabGeometry {
+                    pane: PaneId(1),
+                    rect: Rect::new(0.0, 0.0, 20.0, 140.0),
+                    interaction_regions: vec![Rect::new(0.0, 0.0, 20.0, 140.0)],
+                },
+                TabGeometry {
+                    pane: PaneId(2),
+                    rect: Rect::new(0.0, 140.0, 20.0, 200.0),
+                    interaction_regions: vec![Rect::new(0.0, 140.0, 20.0, 200.0)],
+                },
+            ],
+            bar_drag_regions: vec![],
+        }])
+        .unwrap();
+    let options = interaction_options_with_drag(DragOptions {
+        allow_split: false,
+        ..DragOptions::default()
+    });
+
+    let update = pointer_update(
+        &tree,
+        &frame,
+        Point::new(10.0, 170.0),
+        Point::new(10.0, 60.0),
+        &options,
+    );
+    assert!(matches!(
+        dock_proposal(&update),
+        Some(DockProposal::ReorderTab { index: 0, .. })
+    ));
 }
 
 #[test]
@@ -1845,6 +2266,9 @@ fn serde_covers_public_data_types() {
     assert_serde::<ProjectionHiddenItem>();
     assert_serde::<TabBarFrame>();
     assert_serde::<TabFrame>();
+    assert_serde::<TabGroupGeometry>();
+    assert_serde::<TabGeometry>();
+    assert_serde::<TabGeometryError>();
     assert_serde::<SplitChildFrame>();
     assert_serde::<SplitHandleFrame>();
     assert_serde::<FrameItemId>();

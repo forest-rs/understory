@@ -134,6 +134,19 @@ if update.proposal.is_some() {
 }
 ```
 
+## Externally resolved tab geometry
+
+[`TileTree::layout`] emits deterministic equal-sized tab rectangles and a
+[`TabBarFrame::viewport`] equal to the complete reserved bar. A retained UI
+toolkit can arrange richer headers and then call
+[`LayoutFrame::apply_tab_group_geometry`] so rendering, hit testing, and
+reorder insertion consume its measured rectangles. The method validates the
+complete pane set before changing the frame.
+
+Projected frames, currently produced by zoom, do not retain visible tab
+bars and therefore cannot accept resolved tab geometry. Their projection
+metadata retains the provisional tab rectangles produced before projection.
+
 This crate supports `no_std` + `alloc` builds when default features are
 disabled and the `libm` feature is enabled for Kurbo geometry math. Enable
 the `serde` feature to serialize layout trees, snapshots, frames, policy
