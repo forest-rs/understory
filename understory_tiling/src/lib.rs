@@ -71,6 +71,31 @@
 //! # Ok::<(), understory_tiling::TileError>(())
 //! ```
 //!
+//! ## Compositional construction and semantic panes
+//!
+//! Use [`TileSpec`] to describe nested initial layouts without assigning
+//! [`TileId`] values. [`TileTree::panes`] then traverses every application pane,
+//! including inactive tabs, in deterministic split-child and tab order.
+//!
+//! ```rust
+//! use understory_tiling::{Axis, PaneId, TileSpec, TileTree};
+//!
+//! let tree = TileTree::from_spec(TileSpec::split(
+//!     Axis::Horizontal,
+//!     [
+//!         TileSpec::tabs([PaneId(1), PaneId(2)]),
+//!         TileSpec::tabs([PaneId(3), PaneId(4)]),
+//!     ],
+//!     [0.6, 0.4],
+//! ))?;
+//!
+//! assert_eq!(
+//!     tree.panes().collect::<Vec<_>>(),
+//!     [PaneId(1), PaneId(2), PaneId(3), PaneId(4)],
+//! );
+//! # Ok::<(), understory_tiling::TileSpecError>(())
+//! ```
+//!
 //! ## Interaction Path
 //!
 //! ```rust
@@ -148,6 +173,7 @@ mod model;
 mod ops;
 mod policy;
 mod snapshot;
+mod spec;
 #[cfg(test)]
 mod tests;
 mod tree;
@@ -178,4 +204,5 @@ pub use policy::{
     commit_proposal, validate_interaction_update, validate_proposal,
 };
 pub use snapshot::{LayoutSnapshot, RepairAction, RepairReport, RestoreOptions, restore_snapshot};
-pub use tree::TileTree;
+pub use spec::{TileSpec, TileSpecError};
+pub use tree::{Panes, TileTree};

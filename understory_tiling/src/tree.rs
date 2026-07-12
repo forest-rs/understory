@@ -14,7 +14,7 @@ use crate::{
     Axis, DockTarget, FrameItemId, HitKind, HitRegion, LayoutFrame, LayoutInput, PaneFrame, PaneId,
     Placement, Rect, RepairReport, Revision, SplitChildFrame, SplitConstraints, SplitHandleFrame,
     SplitNode, TabBarFrame, TabBarPlacement, TabFrame, TabNode, TileError, TileId, TileNode,
-    TileOp,
+    TileOp, TileSpec, TileSpecError,
 };
 use crate::{FrameProjection, ProjectionHiddenItem, ProjectionKind};
 
@@ -45,6 +45,72 @@ struct RepairSink<'a> {
 enum PaneLocation {
     Tile { tile: TileId },
     InTabs { group: TileId, index: usize },
+}
+
+/// Iterator over every semantic pane in a [`TileTree`].
+///
+/// Split children are visited depth first in stored order, and tab groups yield
+/// panes in tab order, including inactive tabs. For a host-edited or malformed
+/// tree, missing and cyclic tile references are skipped and a duplicate pane is
+/// yielded only at its first semantic occurrence. Normalize or repair such a
+/// tree before relying on its structure for other operations.
+#[derive(Clone, Debug)]
+pub struct Panes<'a> {
+    tree: &'a TileTree,
+    pending: Vec<PaneTraversal>,
+    visited_tiles: Vec<TileId>,
+    yielded_panes: Vec<PaneId>,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum PaneTraversal {
+    Tile(TileId),
+    Pane(PaneId),
+}
+
+impl Iterator for Panes<'_> {
+    type Item = PaneId;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(item) = self.pending.pop() {
+            match item {
+                PaneTraversal::Pane(pane) => {
+                    if !self.yielded_panes.contains(&pane) {
+                        self.yielded_panes.push(pane);
+                        return Some(pane);
+                    }
+                }
+                PaneTraversal::Tile(tile) if self.visited_tiles.contains(&tile) => {}
+                PaneTraversal::Tile(tile) => match self.tree.get_node(tile) {
+                    Some(TileNode::Pane(pane)) => {
+                        self.visited_tiles.push(tile);
+                        if !self.yielded_panes.contains(&pane.pane) {
+                            self.yielded_panes.push(pane.pane);
+                            return Some(pane.pane);
+                        }
+                    }
+                    Some(TileNode::Tabs(tabs)) => {
+                        self.visited_tiles.push(tile);
+                        self.pending
+                            .extend(tabs.panes.iter().rev().copied().map(PaneTraversal::Pane));
+                    }
+                    Some(TileNode::Split(split)) => {
+                        self.visited_tiles.push(tile);
+                        self.pending.extend(
+                            split
+                                .children
+                                .iter()
+                                .rev()
+                                .copied()
+                                .map(PaneTraversal::Tile),
+                        );
+                    }
+                    None => {}
+                },
+            }
+        }
+        None
+    }
 }
 
 impl<'a> RepairSink<'a> {
@@ -85,6 +151,38 @@ impl TileTree {
     #[must_use]
     pub fn single_pane(pane: PaneId) -> Self {
         Self::new(TileNode::pane(pane))
+    }
+
+    /// Constructs a normalized tree from an ID-free recursive specification.
+    ///
+    /// Validation completes before arena construction. Pane ids must be unique,
+    /// tab groups must be non-empty with a valid active index, and splits must
+    /// have at least two children with one finite positive share per child.
+    /// Tile ids are assigned deterministically in preorder.
+    pub fn from_spec(spec: TileSpec) -> Result<Self, TileSpecError> {
+        validate_spec(&spec, &mut Vec::new())?;
+        let mut tree = Self {
+            root: TileId(0),
+            revision: Revision(0),
+            nodes: Vec::new(),
+        };
+        tree.root = tree.push_spec(spec);
+        tree.normalize();
+        Ok(tree)
+    }
+
+    /// Iterates over every semantic pane in deterministic depth-first order.
+    ///
+    /// This includes inactive tabs and ordinary pane leaves. The iterator uses
+    /// a traversal stack but does not collect the yielded panes.
+    #[must_use]
+    pub fn panes(&self) -> Panes<'_> {
+        Panes {
+            tree: self,
+            pending: alloc::vec![PaneTraversal::Tile(self.root)],
+            visited_tiles: Vec::new(),
+            yielded_panes: Vec::new(),
+        }
     }
 
     /// Returns the root tile id.
@@ -234,6 +332,46 @@ impl TileTree {
     fn push_node(&mut self, node: TileNode) -> TileId {
         let id = TileId(u32::try_from(self.nodes.len()).expect("tile arena exhausted"));
         self.nodes.push(NodeSlot { node: Some(node) });
+        id
+    }
+
+    fn push_spec(&mut self, spec: TileSpec) -> TileId {
+        let id = self.push_node(TileNode::Tabs(TabNode {
+            panes: Vec::new(),
+            active: 0,
+            placement: TabBarPlacement::Hidden,
+        }));
+        let node = match spec {
+            TileSpec::Pane(pane) => TileNode::pane(pane),
+            TileSpec::Tabs {
+                panes,
+                active,
+                placement,
+            } => TileNode::Tabs(TabNode {
+                panes,
+                active,
+                placement,
+            }),
+            TileSpec::Split {
+                axis,
+                children,
+                shares,
+                constraints,
+            } => {
+                let children = children
+                    .into_iter()
+                    .map(|child| self.push_spec(child))
+                    .collect();
+                TileNode::Split(SplitNode {
+                    axis,
+                    children,
+                    shares,
+                    constraints,
+                })
+            }
+        };
+        self.set_node(id, node)
+            .expect("newly allocated tile id must be valid");
         id
     }
 
@@ -945,6 +1083,80 @@ impl TileTree {
             None => 0,
         }
     }
+}
+
+fn validate_spec(spec: &TileSpec, panes: &mut Vec<PaneId>) -> Result<(), TileSpecError> {
+    match spec {
+        TileSpec::Pane(pane) => validate_spec_pane(*pane, panes),
+        TileSpec::Tabs {
+            panes: tab_panes,
+            active,
+            ..
+        } => {
+            if tab_panes.is_empty() {
+                return Err(TileSpecError::EmptyTabs);
+            }
+            if *active >= tab_panes.len() {
+                return Err(TileSpecError::InvalidActiveTab {
+                    active: *active,
+                    panes: tab_panes.len(),
+                });
+            }
+            for pane in tab_panes {
+                validate_spec_pane(*pane, panes)?;
+            }
+            Ok(())
+        }
+        TileSpec::Split {
+            children,
+            shares,
+            constraints,
+            ..
+        } => {
+            if children.len() < 2 {
+                return Err(TileSpecError::TooFewSplitChildren {
+                    children: children.len(),
+                });
+            }
+            if children.len() != shares.len() {
+                return Err(TileSpecError::ShareCountMismatch {
+                    children: children.len(),
+                    shares: shares.len(),
+                });
+            }
+            if let Some(index) = shares
+                .iter()
+                .position(|share| !share.is_finite() || *share <= 0.0)
+            {
+                return Err(TileSpecError::InvalidShare { index });
+            }
+            if constraints.min_major.len() > children.len() {
+                return Err(TileSpecError::TooManySplitConstraints {
+                    children: children.len(),
+                    constraints: constraints.min_major.len(),
+                });
+            }
+            if let Some(index) = constraints
+                .min_major
+                .iter()
+                .position(|minimum| !minimum.is_finite() || *minimum < 0.0)
+            {
+                return Err(TileSpecError::InvalidSplitConstraint { index });
+            }
+            for child in children {
+                validate_spec(child, panes)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn validate_spec_pane(pane: PaneId, panes: &mut Vec<PaneId>) -> Result<(), TileSpecError> {
+    if panes.contains(&pane) {
+        return Err(TileSpecError::DuplicatePane(pane));
+    }
+    panes.push(pane);
+    Ok(())
 }
 
 fn project_zoom(frame: &mut LayoutFrame, pane: PaneId, zoom_rect: Rect) {
