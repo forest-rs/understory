@@ -63,7 +63,7 @@ pub enum TabBarPlacement {
 /// Store this inside [`SplitNode`] when building or restoring a tree. The MVP
 /// normalizes the data but mostly uses [`LayoutInput::min_pane_size`] while the
 /// per-child constraint solver matures.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SplitConstraints {
     /// Minimum major-axis length per child.

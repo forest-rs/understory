@@ -70,6 +70,197 @@ fn single_pane_fills_bounds() {
 }
 
 #[test]
+fn semantic_panes_include_leaves_and_inactive_tabs() {
+    let single = TileTree::single_pane(PaneId(1));
+    assert_eq!(single.panes().collect::<Vec<_>>(), vec![PaneId(1)]);
+
+    let tabs = TileTree::new(TileNode::Tabs(TabNode {
+        panes: vec![PaneId(2), PaneId(3), PaneId(4)],
+        active: 1,
+        placement: TabBarPlacement::Top,
+    }));
+    assert_eq!(
+        tabs.panes().collect::<Vec<_>>(),
+        vec![PaneId(2), PaneId(3), PaneId(4)]
+    );
+}
+
+#[test]
+fn semantic_panes_bound_malformed_cycles_and_duplicates() {
+    let tree = TileTree::from_raw_parts_for_test(
+        TileId(0),
+        Revision(0),
+        vec![
+            Some(TileNode::Split(SplitNode {
+                axis: Axis::Horizontal,
+                children: vec![TileId(0), TileId(1), TileId(2)],
+                shares: vec![1.0, 1.0, 1.0],
+                constraints: SplitConstraints::default(),
+            })),
+            Some(TileNode::tabs(vec![PaneId(1), PaneId(1)])),
+            Some(TileNode::pane(PaneId(2))),
+        ],
+    );
+
+    assert_eq!(tree.panes().collect::<Vec<_>>(), vec![PaneId(1), PaneId(2)]);
+}
+
+fn representative_spec() -> TileSpec {
+    TileSpec::split(
+        Axis::Horizontal,
+        [
+            TileSpec::tabs([PaneId(1), PaneId(2)]),
+            TileSpec::tabs_with([PaneId(3), PaneId(4)], 1, TabBarPlacement::Bottom),
+        ],
+        [0.6, 0.4],
+    )
+}
+
+#[test]
+fn tree_spec_builds_independent_tab_groups_in_semantic_order() {
+    let tree = TileTree::from_spec(representative_spec()).unwrap();
+
+    assert_eq!(tree.root(), TileId(0));
+    assert_eq!(
+        tree.panes().collect::<Vec<_>>(),
+        vec![PaneId(1), PaneId(2), PaneId(3), PaneId(4)]
+    );
+    let Some(TileNode::Split(split)) = tree.node(tree.root()) else {
+        panic!("root should be a split");
+    };
+    assert_eq!(split.children, vec![TileId(1), TileId(2)]);
+    assert_eq!(split.shares, vec![0.6, 0.4]);
+
+    let frame = tree.layout(input());
+    assert_eq!(frame.tab_bars.len(), 2);
+    assert_eq!(frame.tabs.len(), 4);
+}
+
+#[test]
+fn tree_spec_preserves_deep_semantic_order() {
+    let tree = TileTree::from_spec(TileSpec::split(
+        Axis::Horizontal,
+        [
+            TileSpec::pane(PaneId(1)),
+            TileSpec::split(
+                Axis::Vertical,
+                [
+                    TileSpec::tabs([PaneId(2), PaneId(3)]),
+                    TileSpec::pane(PaneId(4)),
+                ],
+                [1.0, 1.0],
+            ),
+        ],
+        [1.0, 2.0],
+    ))
+    .unwrap();
+
+    assert_eq!(
+        tree.panes().collect::<Vec<_>>(),
+        vec![PaneId(1), PaneId(2), PaneId(3), PaneId(4)]
+    );
+}
+
+#[test]
+fn tree_spec_rejects_duplicate_and_invalid_tab_data() {
+    let duplicate = TileSpec::equal_split(
+        Axis::Horizontal,
+        [
+            TileSpec::tabs([PaneId(1), PaneId(2)]),
+            TileSpec::pane(PaneId(2)),
+        ],
+    );
+    assert_eq!(
+        TileTree::from_spec(duplicate).unwrap_err(),
+        TileSpecError::DuplicatePane(PaneId(2))
+    );
+    assert_eq!(
+        TileTree::from_spec(TileSpec::tabs([])).unwrap_err(),
+        TileSpecError::EmptyTabs
+    );
+    assert_eq!(
+        TileTree::from_spec(TileSpec::tabs_with(
+            [PaneId(1), PaneId(2)],
+            2,
+            TabBarPlacement::Left,
+        ))
+        .unwrap_err(),
+        TileSpecError::InvalidActiveTab {
+            active: 2,
+            panes: 2,
+        }
+    );
+}
+
+#[test]
+fn tree_spec_rejects_invalid_split_data() {
+    assert_eq!(
+        TileTree::from_spec(TileSpec::equal_split(Axis::Horizontal, [])).unwrap_err(),
+        TileSpecError::TooFewSplitChildren { children: 0 }
+    );
+    assert_eq!(
+        TileTree::from_spec(TileSpec::equal_split(
+            Axis::Horizontal,
+            [TileSpec::pane(PaneId(1))],
+        ))
+        .unwrap_err(),
+        TileSpecError::TooFewSplitChildren { children: 1 }
+    );
+    assert_eq!(
+        TileTree::from_spec(TileSpec::split(
+            Axis::Horizontal,
+            [TileSpec::pane(PaneId(1)), TileSpec::pane(PaneId(2))],
+            [1.0],
+        ))
+        .unwrap_err(),
+        TileSpecError::ShareCountMismatch {
+            children: 2,
+            shares: 1,
+        }
+    );
+    assert_eq!(
+        TileTree::from_spec(TileSpec::split(
+            Axis::Horizontal,
+            [TileSpec::pane(PaneId(1)), TileSpec::pane(PaneId(2))],
+            [1.0, f64::NAN],
+        ))
+        .unwrap_err(),
+        TileSpecError::InvalidShare { index: 1 }
+    );
+
+    let constrained = TileSpec::Split {
+        axis: Axis::Horizontal,
+        children: vec![TileSpec::pane(PaneId(1)), TileSpec::pane(PaneId(2))],
+        shares: vec![1.0, 1.0],
+        constraints: SplitConstraints {
+            min_major: vec![10.0, f64::INFINITY],
+        },
+    };
+    assert_eq!(
+        TileTree::from_spec(constrained).unwrap_err(),
+        TileSpecError::InvalidSplitConstraint { index: 1 }
+    );
+}
+
+#[test]
+fn snapshot_restore_preserves_semantic_panes() {
+    let tree = TileTree::from_spec(representative_spec()).unwrap();
+    let expected = tree.panes().collect::<Vec<_>>();
+    let restored = restore_snapshot(
+        LayoutSnapshot {
+            schema_version: 1,
+            tree,
+            active_pane: Some(PaneId(3)),
+            closed_panes: vec![],
+        },
+        RestoreOptions { normalize: true },
+    )
+    .unwrap();
+
+    assert_eq!(restored.panes().collect::<Vec<_>>(), expected);
+}
+
+#[test]
 fn split_pane_creates_two_panes_and_handle() {
     let mut tree = TileTree::single_pane(PaneId(1));
     tree.apply(TileOp::SplitPane {
@@ -2252,6 +2443,8 @@ fn serde_covers_public_data_types() {
     assert_serde::<PaneNode>();
     assert_serde::<LayoutInput>();
     assert_serde::<TileTree>();
+    assert_serde::<TileSpec>();
+    assert_serde::<TileSpecError>();
 
     assert_serde::<LayoutFrame>();
     assert_serde::<FrameDiff>();

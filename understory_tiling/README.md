@@ -85,6 +85,30 @@ assert_eq!(frame.panes.len(), 2);
 assert!(hit_test(&frame, Point::new(10.0, 10.0)).is_some());
 ```
 
+## Compositional construction and semantic panes
+
+Use [`TileSpec`] to describe nested initial layouts without assigning
+[`TileId`] values. [`TileTree::panes`] then traverses every application pane,
+including inactive tabs, in deterministic split-child and tab order.
+
+```rust
+use understory_tiling::{Axis, PaneId, TileSpec, TileTree};
+
+let tree = TileTree::from_spec(TileSpec::split(
+    Axis::Horizontal,
+    [
+        TileSpec::tabs([PaneId(1), PaneId(2)]),
+        TileSpec::tabs([PaneId(3), PaneId(4)]),
+    ],
+    [0.6, 0.4],
+))?;
+
+assert_eq!(
+    tree.panes().collect::<Vec<_>>(),
+    [PaneId(1), PaneId(2), PaneId(3), PaneId(4)],
+);
+```
+
 ## Interaction Path
 
 ```rust
@@ -160,7 +184,9 @@ data, and interaction proposals.
 [`ResizeProposal`]: https://docs.rs/understory_tiling/latest/understory_tiling/struct.ResizeProposal.html
 [`TileId`]: https://docs.rs/understory_tiling/latest/understory_tiling/struct.TileId.html
 [`TileOp`]: https://docs.rs/understory_tiling/latest/understory_tiling/enum.TileOp.html
+[`TileSpec`]: https://docs.rs/understory_tiling/latest/understory_tiling/enum.TileSpec.html
 [`TileTree`]: https://docs.rs/understory_tiling/latest/understory_tiling/struct.TileTree.html
+[`TileTree::panes`]: https://docs.rs/understory_tiling/latest/understory_tiling/struct.TileTree.html#method.panes
 
 ## Minimum supported Rust Version (MSRV)
 
