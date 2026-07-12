@@ -78,10 +78,9 @@ let frame = tree.layout(LayoutInput {
     tab_bar_thickness: 28.0,
     split_handle_thickness: 6.0,
     min_pane_size: Size::new(80.0, 80.0),
-    zoom: None,
 });
 
-assert_eq!(frame.panes.len(), 2);
+assert_eq!(frame.panes().len(), 2);
 assert!(hit_test(&frame, Point::new(10.0, 10.0)).is_some());
 ```
 
@@ -114,7 +113,7 @@ assert_eq!(
 ```rust
 use kurbo::{Point, Rect, Size};
 use understory_tiling::{
-    Axis, DockPolicyData, InteractionOptions, LayoutInput, PaneId, Placement,
+    Axis, DockPolicy, InteractionOptions, LayoutInput, PaneId, Placement,
     TileOp, TileTree, begin_interaction, commit_proposal,
     update_interaction, validate_interaction_update,
 };
@@ -133,11 +132,10 @@ let layout_input = LayoutInput {
     tab_bar_thickness: 28.0,
     split_handle_thickness: 6.0,
     min_pane_size: Size::new(80.0, 80.0),
-    zoom: None,
 };
 let frame = tree.layout(layout_input);
 let options = InteractionOptions::from_layout_input(layout_input);
-let policy = DockPolicyData::default();
+let policy = DockPolicy::default();
 
 let mut state = begin_interaction(&frame, Point::new(20.0, 20.0), &options);
 let update = update_interaction(
@@ -167,19 +165,21 @@ toolkit can arrange richer headers and then call
 reorder insertion consume its measured rectangles. The method validates the
 complete pane set before changing the frame.
 
-Projected frames, currently produced by zoom, do not retain visible tab
-bars and therefore cannot accept resolved tab geometry. Their projection
-metadata retains the provisional tab rectangles produced before projection.
+Presentation transforms compose in an explicit order: solve a base frame,
+apply resolved tab geometry, then call [`LayoutFrame::apply_projection`] if
+needed. Interaction preview frames are also base frames; finalize them with
+the same presentation transforms before display.
 
 This crate supports `no_std` + `alloc` builds when default features are
 disabled and the `libm` feature is enabled for Kurbo geometry math. Enable
-the `serde` feature to serialize layout trees, snapshots, frames, policy
-data, and interaction proposals.
+the `serde` feature to persist valid layout trees and snapshots and to
+serialize renderer-independent frame, policy, and interaction output data.
 
 <!-- cargo-rdme end -->
 
 [`DockProposal`]: https://docs.rs/understory_tiling/latest/understory_tiling/enum.DockProposal.html
 [`LayoutFrame`]: https://docs.rs/understory_tiling/latest/understory_tiling/struct.LayoutFrame.html
+[`LayoutFrame::apply_projection`]: https://docs.rs/understory_tiling/latest/understory_tiling/struct.LayoutFrame.html#method.apply_projection
 [`PaneId`]: https://docs.rs/understory_tiling/latest/understory_tiling/struct.PaneId.html
 [`ResizeProposal`]: https://docs.rs/understory_tiling/latest/understory_tiling/struct.ResizeProposal.html
 [`TileId`]: https://docs.rs/understory_tiling/latest/understory_tiling/struct.TileId.html

@@ -63,10 +63,9 @@
 //!     tab_bar_thickness: 28.0,
 //!     split_handle_thickness: 6.0,
 //!     min_pane_size: Size::new(80.0, 80.0),
-//!     zoom: None,
 //! });
 //!
-//! assert_eq!(frame.panes.len(), 2);
+//! assert_eq!(frame.panes().len(), 2);
 //! assert!(hit_test(&frame, Point::new(10.0, 10.0)).is_some());
 //! # Ok::<(), understory_tiling::TileError>(())
 //! ```
@@ -101,7 +100,7 @@
 //! ```rust
 //! use kurbo::{Point, Rect, Size};
 //! use understory_tiling::{
-//!     Axis, DockPolicyData, InteractionOptions, LayoutInput, PaneId, Placement,
+//!     Axis, DockPolicy, InteractionOptions, LayoutInput, PaneId, Placement,
 //!     TileOp, TileTree, begin_interaction, commit_proposal,
 //!     update_interaction, validate_interaction_update,
 //! };
@@ -120,11 +119,10 @@
 //!     tab_bar_thickness: 28.0,
 //!     split_handle_thickness: 6.0,
 //!     min_pane_size: Size::new(80.0, 80.0),
-//!     zoom: None,
 //! };
 //! let frame = tree.layout(layout_input);
 //! let options = InteractionOptions::from_layout_input(layout_input);
-//! let policy = DockPolicyData::default();
+//! let policy = DockPolicy::default();
 //!
 //! let mut state = begin_interaction(&frame, Point::new(20.0, 20.0), &options);
 //! let update = update_interaction(
@@ -155,14 +153,15 @@
 //! reorder insertion consume its measured rectangles. The method validates the
 //! complete pane set before changing the frame.
 //!
-//! Projected frames, currently produced by zoom, do not retain visible tab
-//! bars and therefore cannot accept resolved tab geometry. Their projection
-//! metadata retains the provisional tab rectangles produced before projection.
+//! Presentation transforms compose in an explicit order: solve a base frame,
+//! apply resolved tab geometry, then call [`LayoutFrame::apply_projection`] if
+//! needed. Interaction preview frames are also base frames; finalize them with
+//! the same presentation transforms before display.
 //!
 //! This crate supports `no_std` + `alloc` builds when default features are
 //! disabled and the `libm` feature is enabled for Kurbo geometry math. Enable
-//! the `serde` feature to serialize layout trees, snapshots, frames, policy
-//! data, and interaction proposals.
+//! the `serde` feature to persist valid layout trees and snapshots and to
+//! serialize renderer-independent frame, policy, and interaction output data.
 
 extern crate alloc;
 
@@ -181,9 +180,9 @@ mod util;
 
 pub use frame::{
     FrameCause, FrameChange, FrameDiff, FrameItemDiff, FrameItemId, FrameMotion, FrameProjection,
-    HitKind, HitRegion, LayoutFrame, PaneFrame, ProjectionEvent, ProjectionHiddenItem,
-    ProjectionKind, SplitChildFrame, SplitHandleFrame, TabBarFrame, TabFrame, TabGeometry,
-    TabGeometryError, TabGroupGeometry, diff_frames, hit_test,
+    FrameProjectionError, FrameProjectionInput, HitKind, HitRegion, LayoutFrame, PaneFrame,
+    ProjectionEvent, ProjectionHiddenItem, ProjectionKind, SplitChildFrame, SplitHandleFrame,
+    TabBarFrame, TabFrame, TabGeometry, TabGeometryError, TabGroupGeometry, diff_frames, hit_test,
 };
 pub use ids::{PaneId, Revision, TileId};
 pub use interaction::{
@@ -200,9 +199,9 @@ pub use model::{
 };
 pub use ops::{DockTarget, TileError, TileOp};
 pub use policy::{
-    DockPolicyData, EdgeSet, PaneCapabilities, ProposalValidationInput, ValidatedProposal, ZoneSet,
+    DockPermissions, DockPolicy, EdgeSet, ProposalValidationInput, ValidatedProposal, ZoneSet,
     commit_proposal, validate_interaction_update, validate_proposal,
 };
-pub use snapshot::{LayoutSnapshot, RepairAction, RepairReport, RestoreOptions, restore_snapshot};
+pub use snapshot::{LayoutSnapshot, RepairAction, RestoreOutcome, restore_snapshot};
 pub use spec::{TileSpec, TileSpecError};
 pub use tree::{Panes, TileTree};

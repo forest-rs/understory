@@ -28,9 +28,9 @@ impl fmt::Display for TileId {
 ///
 /// The embedding application creates these ids and passes them into
 /// [`TileTree::single_pane`](crate::TileTree::single_pane),
-/// [`TileNode::pane`](crate::TileNode::pane), and [`TileOp`](crate::TileOp)
-/// values. Layout, hit testing, and interaction frames return the same ids so
-/// the app can attach rendered chrome and pane contents.
+/// [`TileSpec`](crate::TileSpec), and [`TileOp`](crate::TileOp) values. Layout,
+/// hit testing, and interaction frames return the same ids so the app can
+/// attach rendered chrome and pane contents.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PaneId(

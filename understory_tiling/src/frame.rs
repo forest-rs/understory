@@ -11,33 +11,172 @@ use crate::{Axis, PaneId, Point, Rect, Revision, TabBarPlacement, TileId};
 /// Returned by [`TileTree::layout`](crate::TileTree::layout). Renderers and hit
 /// testing should consume this flattened data instead of walking
 /// [`TileNode`](crate::TileNode) directly.
-#[derive(Clone, Debug, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct LayoutFrame {
     /// Tree revision used for this frame.
-    pub revision: Revision,
+    pub(crate) revision: Revision,
     /// Active pane rectangles.
-    pub panes: Vec<PaneFrame>,
+    pub(crate) panes: Vec<PaneFrame>,
     /// Visible tab bar rectangles.
-    pub tab_bars: Vec<TabBarFrame>,
+    pub(crate) tab_bars: Vec<TabBarFrame>,
     /// Individual tab rectangles.
-    pub tabs: Vec<TabFrame>,
+    pub(crate) tabs: Vec<TabFrame>,
     /// Solved split child rectangles.
-    pub split_children: Vec<SplitChildFrame>,
+    pub(crate) split_children: Vec<SplitChildFrame>,
     /// Split handle rectangles.
-    pub split_handles: Vec<SplitHandleFrame>,
+    pub(crate) split_handles: Vec<SplitHandleFrame>,
     /// Presentation projection metadata, when this frame has been collapsed onto
     /// one pane (for example by zoom).
-    pub projection: Option<FrameProjection>,
+    pub(crate) projection: Option<FrameProjection>,
     /// Hit-test regions in frame coordinates.
-    pub hit_regions: Vec<HitRegion>,
+    pub(crate) hit_regions: Vec<HitRegion>,
     /// Pane focus order in semantic traversal order.
-    pub focus_order: Vec<PaneId>,
+    pub(crate) focus_order: Vec<PaneId>,
     /// Paint order hints for renderers.
-    pub paint_order: Vec<FrameItemId>,
+    pub(crate) paint_order: Vec<FrameItemId>,
 }
 
 impl LayoutFrame {
+    pub(crate) fn new(revision: Revision) -> Self {
+        Self {
+            revision,
+            panes: Vec::new(),
+            tab_bars: Vec::new(),
+            tabs: Vec::new(),
+            split_children: Vec::new(),
+            split_handles: Vec::new(),
+            projection: None,
+            hit_regions: Vec::new(),
+            focus_order: Vec::new(),
+            paint_order: Vec::new(),
+        }
+    }
+
+    /// Returns the semantic tree revision used to solve this frame.
+    #[must_use]
+    pub const fn revision(&self) -> Revision {
+        self.revision
+    }
+
+    /// Returns active pane geometry in semantic traversal order.
+    #[must_use]
+    pub fn panes(&self) -> &[PaneFrame] {
+        &self.panes
+    }
+
+    /// Returns visible reserved tab bars.
+    #[must_use]
+    pub fn tab_bars(&self) -> &[TabBarFrame] {
+        &self.tab_bars
+    }
+
+    /// Returns visible tab geometry in semantic tab order.
+    #[must_use]
+    pub fn tabs(&self) -> &[TabFrame] {
+        &self.tabs
+    }
+
+    /// Returns solved split-child geometry.
+    #[must_use]
+    pub fn split_children(&self) -> &[SplitChildFrame] {
+        &self.split_children
+    }
+
+    /// Returns split-handle geometry.
+    #[must_use]
+    pub fn split_handles(&self) -> &[SplitHandleFrame] {
+        &self.split_handles
+    }
+
+    /// Returns presentation projection metadata, when projected.
+    #[must_use]
+    pub const fn projection(&self) -> Option<&FrameProjection> {
+        self.projection.as_ref()
+    }
+
+    /// Returns semantic hit regions in frame coordinates.
+    #[must_use]
+    pub fn hit_regions(&self) -> &[HitRegion] {
+        &self.hit_regions
+    }
+
+    /// Returns pane focus order.
+    #[must_use]
+    pub fn focus_order(&self) -> &[PaneId] {
+        &self.focus_order
+    }
+
+    /// Returns deterministic paint-order hints.
+    #[must_use]
+    pub fn paint_order(&self) -> &[FrameItemId] {
+        &self.paint_order
+    }
+
+    /// Applies a presentation projection to this solved frame.
+    ///
+    /// Apply renderer-resolved geometry before this transform so hidden-item
+    /// metadata records the same rectangles the host presented. Projection is
+    /// transactional: invalid input leaves the frame unchanged.
+    pub fn apply_projection(
+        &mut self,
+        input: FrameProjectionInput,
+    ) -> Result<(), FrameProjectionError> {
+        if self.projection.is_some() {
+            return Err(FrameProjectionError::AlreadyProjected);
+        }
+        let FrameProjectionInput::Zoom {
+            focus,
+            projected_rect,
+        } = input;
+        if !valid_rect(projected_rect) {
+            return Err(FrameProjectionError::InvalidRect);
+        }
+        let source = self
+            .panes
+            .iter()
+            .find(|candidate| candidate.pane == focus)
+            .copied()
+            .ok_or(FrameProjectionError::UnknownPane(focus))?;
+        let hidden_items = frame_item_rects(self)
+            .into_iter()
+            .filter(|(item, _)| *item != FrameItemId::Pane(focus))
+            .map(|(item, rect)| ProjectionHiddenItem { item, rect })
+            .collect();
+
+        self.projection = Some(FrameProjection {
+            kind: ProjectionKind::Zoom,
+            focus,
+            focus_tile: source.tile,
+            source_rect: source.rect,
+            projected_rect,
+            hidden_items,
+        });
+        self.panes.clear();
+        self.panes.push(PaneFrame {
+            pane: focus,
+            tile: source.tile,
+            rect: projected_rect,
+            clip: projected_rect,
+            active: source.active,
+        });
+        self.tab_bars.clear();
+        self.tabs.clear();
+        self.split_children.clear();
+        self.split_handles.clear();
+        self.hit_regions.clear();
+        self.hit_regions.push(HitRegion {
+            rect: projected_rect,
+            z: HIT_Z_PANE,
+            kind: HitKind::Pane { pane: focus },
+        });
+        self.focus_order.clear();
+        self.focus_order.push(focus);
+        self.paint_order.clear();
+        self.paint_order.push(FrameItemId::Pane(focus));
+        Ok(())
+    }
+
     /// Replaces provisional tab geometry with presentation-resolved geometry.
     ///
     /// The supplied geometry must describe every semantic tab in each named
@@ -102,7 +241,7 @@ impl LayoutFrame {
                 for rect in &resolved.interaction_regions {
                     self.hit_regions.push(HitRegion {
                         rect: *rect,
-                        z: 10,
+                        z: HIT_Z_TAB,
                         kind: HitKind::Tab {
                             group: geometry.group,
                             pane: semantic_tab.pane,
@@ -113,7 +252,7 @@ impl LayoutFrame {
             for rect in &geometry.bar_drag_regions {
                 self.hit_regions.push(HitRegion {
                     rect: *rect,
-                    z: 5,
+                    z: HIT_Z_TAB_BAR,
                     kind: HitKind::TabBar {
                         group: geometry.group,
                     },
@@ -207,6 +346,48 @@ impl LayoutFrame {
         Ok(())
     }
 }
+
+/// Presentation-only transform applied to a solved [`LayoutFrame`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum FrameProjectionInput {
+    /// Present one currently visible pane over the complete projection rect.
+    Zoom {
+        /// Visible pane to project.
+        focus: PaneId,
+        /// Destination rectangle in frame coordinates.
+        projected_rect: Rect,
+    },
+}
+
+/// Failure returned while applying a frame projection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum FrameProjectionError {
+    /// The requested pane is not visible in the input frame.
+    UnknownPane(PaneId),
+    /// The destination rectangle is non-finite or reversed.
+    InvalidRect,
+    /// The frame already has a projection applied.
+    AlreadyProjected,
+}
+
+impl fmt::Display for FrameProjectionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownPane(pane) => write!(formatter, "cannot project unknown {pane}"),
+            Self::InvalidRect => formatter.write_str("invalid projection rectangle"),
+            Self::AlreadyProjected => formatter.write_str("frame is already projected"),
+        }
+    }
+}
+
+impl core::error::Error for FrameProjectionError {}
+
+pub(crate) const HIT_Z_PANE: i16 = 0;
+pub(crate) const HIT_Z_TAB_BAR: i16 = 5;
+pub(crate) const HIT_Z_TAB: i16 = 10;
+pub(crate) const HIT_Z_SPLIT_HANDLE: i16 = 20;
 
 /// Presentation-resolved geometry for one visible semantic tab group.
 #[derive(Clone, Debug, PartialEq)]
@@ -352,9 +533,8 @@ pub enum ProjectionKind {
 
 /// Presentation projection metadata for a solved frame.
 ///
-/// Produced in [`LayoutFrame::projection`] when a projection (such as
-/// [`LayoutInput::zoom`](crate::LayoutInput::zoom)) names a visible pane. Hosts
-/// use `source_rect` as the focus pane's normal tiling rectangle and
+/// Produced by [`LayoutFrame::apply_projection`] when a projection names a
+/// visible pane. Hosts use `source_rect` as the focus pane's normal tiling rectangle and
 /// `projected_rect` as its collapsed rectangle for projection/restore animation
 /// planning.
 #[derive(Clone, Debug, PartialEq)]
