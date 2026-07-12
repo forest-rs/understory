@@ -125,6 +125,8 @@ pub enum TileError {
     InvalidTileId,
     /// The operation referenced a missing pane.
     InvalidPaneId,
+    /// The operation tried to introduce an existing pane id again.
+    DuplicatePane(PaneId),
     /// The operation is structurally invalid.
     InvalidOperation,
     /// The target cannot accept the requested operation.
@@ -135,18 +137,28 @@ pub enum TileError {
     PolicyRejected,
     /// The operation tried to close the last pane.
     CannotCloseLastPane,
+    /// A persisted or host-edited tree could not be made valid.
+    InvalidTree,
+    /// The monotonic tree revision cannot represent another mutation.
+    RevisionExhausted,
+    /// A snapshot uses an unsupported schema version.
+    UnsupportedSnapshotVersion,
 }
 
 impl fmt::Display for TileError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::InvalidTileId => "invalid tile id",
-            Self::InvalidPaneId => "invalid pane id",
-            Self::InvalidOperation => "invalid operation",
-            Self::InvalidTarget => "invalid target",
-            Self::StaleInteraction => "stale interaction",
-            Self::PolicyRejected => "policy rejected operation",
-            Self::CannotCloseLastPane => "cannot close last pane",
-        })
+        match self {
+            Self::InvalidTileId => f.write_str("invalid tile id"),
+            Self::InvalidPaneId => f.write_str("invalid pane id"),
+            Self::DuplicatePane(pane) => write!(f, "duplicate {pane}"),
+            Self::InvalidOperation => f.write_str("invalid operation"),
+            Self::InvalidTarget => f.write_str("invalid target"),
+            Self::StaleInteraction => f.write_str("stale interaction"),
+            Self::PolicyRejected => f.write_str("policy rejected operation"),
+            Self::CannotCloseLastPane => f.write_str("cannot close last pane"),
+            Self::InvalidTree => f.write_str("invalid tile tree"),
+            Self::RevisionExhausted => f.write_str("tile tree revision exhausted"),
+            Self::UnsupportedSnapshotVersion => f.write_str("unsupported layout snapshot version"),
+        }
     }
 }

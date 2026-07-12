@@ -91,6 +91,84 @@ impl TileSpec {
             constraints: SplitConstraints::default(),
         }
     }
+
+    pub(crate) fn validate(&self) -> Result<(), TileSpecError> {
+        validate_spec(self, &mut Vec::new())
+    }
+}
+
+fn validate_spec(spec: &TileSpec, panes: &mut Vec<PaneId>) -> Result<(), TileSpecError> {
+    match spec {
+        TileSpec::Pane(pane) => validate_pane(*pane, panes),
+        TileSpec::Tabs {
+            panes: tab_panes,
+            active,
+            ..
+        } => {
+            if tab_panes.is_empty() {
+                return Err(TileSpecError::EmptyTabs);
+            }
+            if *active >= tab_panes.len() {
+                return Err(TileSpecError::InvalidActiveTab {
+                    active: *active,
+                    panes: tab_panes.len(),
+                });
+            }
+            for pane in tab_panes {
+                validate_pane(*pane, panes)?;
+            }
+            Ok(())
+        }
+        TileSpec::Split {
+            children,
+            shares,
+            constraints,
+            ..
+        } => {
+            if children.len() < 2 {
+                return Err(TileSpecError::TooFewSplitChildren {
+                    children: children.len(),
+                });
+            }
+            if children.len() != shares.len() {
+                return Err(TileSpecError::ShareCountMismatch {
+                    children: children.len(),
+                    shares: shares.len(),
+                });
+            }
+            if let Some(index) = shares
+                .iter()
+                .position(|share| !share.is_finite() || *share <= 0.0)
+            {
+                return Err(TileSpecError::InvalidShare { index });
+            }
+            if constraints.min_major.len() > children.len() {
+                return Err(TileSpecError::TooManySplitConstraints {
+                    children: children.len(),
+                    constraints: constraints.min_major.len(),
+                });
+            }
+            if let Some(index) = constraints
+                .min_major
+                .iter()
+                .position(|minimum| !minimum.is_finite() || *minimum < 0.0)
+            {
+                return Err(TileSpecError::InvalidSplitConstraint { index });
+            }
+            for child in children {
+                validate_spec(child, panes)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn validate_pane(pane: PaneId, panes: &mut Vec<PaneId>) -> Result<(), TileSpecError> {
+    if panes.contains(&pane) {
+        return Err(TileSpecError::DuplicatePane(pane));
+    }
+    panes.push(pane);
+    Ok(())
 }
 
 /// Error returned when an ID-free [`TileSpec`] is structurally invalid.
