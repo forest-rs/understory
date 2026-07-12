@@ -1,6 +1,8 @@
 // Copyright 2026 the Understory Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+#[cfg(feature = "serde")]
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use crate::tree::RawTileTree;
@@ -9,24 +11,24 @@ use crate::{PaneId, TileError, TileId, TileTree};
 /// Saved layout snapshot.
 ///
 /// Construct this when persisting a layout, then pass it to
-/// [`restore_snapshot`] or [`TileOp::RestoreLayout`](crate::TileOp::RestoreLayout)
-/// when loading saved state. The tree is repaired before restoration returns.
+/// [`restore_snapshot`] or [`TileTree::restore`] when loading saved state. The
+/// tree is repaired before restoration returns.
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(transparent))]
 pub struct LayoutSnapshot {
     payload: SnapshotPayload,
 }
 
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(tag = "schema_version", content = "layout"))]
 enum SnapshotPayload {
-    #[cfg_attr(feature = "serde", serde(rename = "1"))]
     V1(RawTileTree),
-    #[cfg_attr(feature = "serde", serde(other))]
-    #[cfg_attr(not(any(feature = "serde", test)), allow(dead_code))]
-    Unsupported,
+    #[cfg_attr(
+        not(any(feature = "serde", test)),
+        allow(
+            dead_code,
+            reason = "unsupported versions are constructed only by the serde wire decoder"
+        )
+    )]
+    Unsupported(u64),
 }
 
 impl LayoutSnapshot {
@@ -44,15 +46,83 @@ impl LayoutSnapshot {
     pub const fn schema_version(&self) -> Option<u16> {
         match self.payload {
             SnapshotPayload::V1(_) => Some(1),
-            SnapshotPayload::Unsupported => None,
+            SnapshotPayload::Unsupported(_) => None,
         }
     }
 
     #[cfg(test)]
-    pub(crate) const fn unsupported_for_test() -> Self {
+    pub(crate) const fn unsupported_for_test(version: u64) -> Self {
         Self {
-            payload: SnapshotPayload::Unsupported,
+            payload: SnapshotPayload::Unsupported(version),
         }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl serde::Serialize for LayoutSnapshot {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeMap;
+
+        let mut state = serializer.serialize_map(Some(1))?;
+        match &self.payload {
+            SnapshotPayload::V1(tree) => {
+                state.serialize_entry("1", tree)?;
+            }
+            SnapshotPayload::Unsupported(version) => {
+                state.serialize_entry(&version.to_string(), &())?;
+            }
+        }
+        state.end()
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for LayoutSnapshot {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use core::fmt;
+        use serde::de::{IgnoredAny, MapAccess, Visitor};
+
+        struct SnapshotVisitor;
+
+        impl<'de> Visitor<'de> for SnapshotVisitor {
+            type Value = LayoutSnapshot;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a versioned layout snapshot")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let version = map
+                    .next_key::<String>()?
+                    .ok_or_else(|| serde::de::Error::custom("snapshot must contain one version"))?;
+                let payload = if version == "1" {
+                    SnapshotPayload::V1(map.next_value::<RawTileTree>()?)
+                } else {
+                    let version = version.parse::<u64>().map_err(|_| {
+                        serde::de::Error::custom("snapshot version must be an unsigned integer")
+                    })?;
+                    let _ = map.next_value::<IgnoredAny>()?;
+                    SnapshotPayload::Unsupported(version)
+                };
+                if map.next_key::<IgnoredAny>()?.is_some() {
+                    return Err(serde::de::Error::custom(
+                        "snapshot must contain exactly one version",
+                    ));
+                }
+                Ok(LayoutSnapshot { payload })
+            }
+        }
+
+        deserializer.deserialize_map(SnapshotVisitor)
     }
 }
 
@@ -99,8 +169,11 @@ pub struct RestoreOutcome {
 /// repairs persisted structure before returning it and reports those repairs;
 /// an irreparable tree with no semantic panes is rejected.
 pub fn restore_snapshot(snapshot: LayoutSnapshot) -> Result<RestoreOutcome, TileError> {
-    let SnapshotPayload::V1(raw_tree) = snapshot.payload else {
-        return Err(TileError::UnsupportedSnapshotVersion);
+    let raw_tree = match snapshot.payload {
+        SnapshotPayload::V1(raw_tree) => raw_tree,
+        SnapshotPayload::Unsupported(version) => {
+            return Err(TileError::UnsupportedSnapshotVersion(version));
+        }
     };
     let mut tree = raw_tree.into_tree();
     let repairs = tree.repair();

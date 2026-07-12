@@ -237,6 +237,25 @@ impl TileTree {
         Ok(())
     }
 
+    /// Restores persisted state atomically and reports every repair performed.
+    ///
+    /// The persisted revision is ignored. A successful restoration advances
+    /// this live tree's revision by one so existing frames and interactions
+    /// become stale. Failure leaves the tree unchanged.
+    pub fn restore(
+        &mut self,
+        snapshot: crate::LayoutSnapshot,
+    ) -> Result<Vec<RepairAction>, TileError> {
+        let crate::RestoreOutcome { mut tree, repairs } = crate::restore_snapshot(snapshot)?;
+        tree.revision.0 = self
+            .revision
+            .0
+            .checked_add(1)
+            .ok_or(TileError::RevisionExhausted)?;
+        *self = tree;
+        Ok(repairs)
+    }
+
     /// Normalizes the tree in place.
     pub(crate) fn normalize(&mut self) {
         let mut sink = RepairSink::silent();
@@ -339,13 +358,6 @@ impl TileTree {
             TileOp::MoveTabGroup { group, target } => self.move_tab_group(group, target),
             TileOp::ReorderTab { group, pane, index } => self.reorder_tab(group, pane, index),
             TileOp::SetSplitShares { split, shares } => self.set_split_shares(split, shares),
-            TileOp::RestoreLayout { snapshot } => {
-                let revision = self.revision;
-                let mut restored = crate::restore_snapshot(snapshot)?.tree;
-                restored.revision = revision;
-                *self = restored;
-                Ok(true)
-            }
         }
     }
 
