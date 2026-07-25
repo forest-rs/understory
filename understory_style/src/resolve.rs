@@ -587,6 +587,7 @@ where
     property: Property<T>,
     style: Option<(&'cx StyleCascade, MatchState)>,
     resource_fallback: Option<ResourceKey>,
+    without_animation: bool,
 }
 
 impl<'a, K, F> core::fmt::Debug for ResolveCx<'a, K, F>
@@ -681,6 +682,7 @@ where
             property,
             style: None,
             resource_fallback: None,
+            without_animation: false,
         }
     }
 }
@@ -712,6 +714,20 @@ where
         self
     }
 
+    /// Resolves the base value underneath the animation stage.
+    ///
+    /// This skips animation values on the queried object and, for inherited
+    /// properties, on its ancestors. The remaining local, style, theme,
+    /// inheritance, expression, and default precedence is unchanged.
+    ///
+    /// Transition hosts use this after updating a base value while an
+    /// in-flight transition still masks it through the animation slot.
+    #[must_use]
+    pub fn without_animation(mut self) -> Self {
+        self.without_animation = true;
+        self
+    }
+
     /// Resolves this query and returns an owned value.
     ///
     /// This is the fallible counterpart to [`ResolveCx::get_value`] for callers
@@ -724,6 +740,7 @@ where
                 self.property,
                 self.style,
                 self.resource_fallback,
+                self.without_animation,
             )
             .map(ResolvedValue::into_owned)
     }
@@ -738,6 +755,7 @@ where
             self.property,
             self.style,
             self.resource_fallback,
+            self.without_animation,
         )
     }
 }
@@ -919,6 +937,7 @@ where
         cascade: Option<&'cx StyleCascade>,
         expr: ExprResolveOptions<'cx>,
         in_flight: &mut InFlightProperties,
+        without_animation: bool,
     ) -> Result<Option<ResolvedValue<'cx, T>>, ExprError>
     where
         T: Clone + 'static,
@@ -928,7 +947,7 @@ where
                 break;
             };
 
-            if let Some(value) = parent.store().get_animation(property) {
+            if !without_animation && let Some(value) = parent.store().get_animation(property) {
                 return Ok(Some(ResolvedValue::Borrowed(value)));
             }
             if let Some(value) = parent.store().get_local(property) {
@@ -960,6 +979,7 @@ where
         cascade: Option<&'cx StyleCascade>,
         expr: ExprResolveOptions<'cx>,
         in_flight: &mut InFlightProperties,
+        without_animation: bool,
     ) -> Result<Option<(ResolvedValue<'cx, T>, ResolvedSource)>, ExprError>
     where
         T: Clone + 'static,
@@ -970,7 +990,7 @@ where
                 break;
             };
 
-            if let Some(value) = parent.store().get_animation(property) {
+            if !without_animation && let Some(value) = parent.store().get_animation(property) {
                 return Ok(Some((
                     ResolvedValue::Borrowed(value),
                     ResolvedSource::Inherited {
@@ -1052,7 +1072,7 @@ where
         T: Clone + 'static,
         O: DependencyObject<K>,
     {
-        self.resolve_query_value(object, property, style, None)
+        self.resolve_query_value(object, property, style, None, false)
             .map(ResolvedValue::into_owned)
             .unwrap_or_else(|err| resolution_panic(property.id(), err))
     }
@@ -1078,7 +1098,7 @@ where
         T: Clone + 'static,
         O: DependencyObject<K>,
     {
-        self.explain_query_value(object, property, style, None)
+        self.explain_query_value(object, property, style, None, false)
             .unwrap_or_else(|err| resolution_panic(property.id(), err))
     }
 
@@ -1088,13 +1108,14 @@ where
         property: Property<T>,
         style: Option<(&'cx StyleCascade, MatchState)>,
         resource_fallback: Option<ResourceKey>,
+        without_animation: bool,
     ) -> Result<ResolvedValue<'cx, T>, ExprError>
     where
         T: Clone + 'static,
         O: DependencyObject<K>,
     {
         let expr = self.expr;
-        if let Some(value) = object.property_store().get_animation(property) {
+        if !without_animation && let Some(value) = object.property_store().get_animation(property) {
             return Ok(ResolvedValue::Borrowed(value));
         }
 
@@ -1130,6 +1151,7 @@ where
                 style.map(|s| s.0),
                 expr,
                 &mut in_flight,
+                without_animation,
             )?
         {
             return Ok(value);
@@ -1156,13 +1178,14 @@ where
         property: Property<T>,
         style: Option<(&'cx StyleCascade, MatchState)>,
         resource_fallback: Option<ResourceKey>,
+        without_animation: bool,
     ) -> Result<Resolved<T>, ExprError>
     where
         T: Clone + 'static,
         O: DependencyObject<K>,
     {
         let expr = self.expr;
-        if let Some(value) = object.property_store().get_animation(property) {
+        if !without_animation && let Some(value) = object.property_store().get_animation(property) {
             return Ok(Resolved {
                 value: value.clone(),
                 source: ResolvedSource::Animation,
@@ -1214,6 +1237,7 @@ where
                 style.map(|s| s.0),
                 expr,
                 &mut in_flight,
+                without_animation,
             )?
         {
             return Ok(Resolved {
