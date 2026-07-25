@@ -78,6 +78,72 @@ fn resolve_animation_over_local() {
 }
 
 #[test]
+fn query_without_animation_resolves_the_local_base_value() {
+    let mut registry = PropertyRegistry::new();
+    let width = registry.register("Width", PropertyMetadataBuilder::new(0.0_f64).build());
+
+    let theme = ThemeBuilder::new().build();
+    let mut element = TestElement::new(1, None);
+    element.store.set_local(width, 100.0);
+    element.store.set_animation(width, 200.0);
+
+    let expressions = ExpressionLayer::new();
+    let cx = ResolveCx::new(&registry, &theme, &expressions, NoResolveParentLookup);
+
+    assert_eq!(
+        cx.query(&element, width)
+            .without_animation()
+            .try_value()
+            .unwrap(),
+        100.0,
+    );
+    assert_eq!(
+        cx.query(&element, width)
+            .without_animation()
+            .try_explain()
+            .unwrap(),
+        Resolved {
+            value: 100.0,
+            source: ResolvedSource::LocalOverride {
+                source: LocalValueSource::Local,
+            },
+        },
+    );
+}
+
+#[test]
+fn query_without_animation_skips_inherited_animation_values() {
+    let mut registry = PropertyRegistry::new();
+    let font_size = registry.register(
+        "FontSize",
+        PropertyMetadataBuilder::new(12.0_f64)
+            .inherits(true)
+            .build(),
+    );
+
+    let theme = ThemeBuilder::new().build();
+    let expressions = ExpressionLayer::new();
+    let mut parent = TestElement::new(1, None);
+    parent.store.set_local(font_size, 18.0);
+    parent.store.set_animation(font_size, 24.0);
+    let child = TestElement::new(2, Some(1));
+    let lookup = |key| {
+        (key == parent.key())
+            .then(|| ResolveParent::new(parent.property_store(), parent.parent_key()))
+    };
+    let cx = ResolveCx::new(&registry, &theme, &expressions, lookup);
+
+    assert_eq!(cx.get_value(&child, font_size, None), 24.0);
+    assert_eq!(
+        cx.query(&child, font_size)
+            .without_animation()
+            .try_value()
+            .unwrap(),
+        18.0,
+    );
+}
+
+#[test]
 fn resolve_local_over_style() {
     let mut registry = PropertyRegistry::new();
     let width = registry.register("Width", PropertyMetadataBuilder::new(0.0_f64).build());
