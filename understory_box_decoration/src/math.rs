@@ -12,6 +12,11 @@ mod backend {
     pub(crate) fn powf(value: f64, exponent: f64) -> f64 {
         value.powf(exponent)
     }
+
+    #[inline]
+    pub(crate) fn floor(value: f64) -> f64 {
+        value.floor()
+    }
 }
 
 #[cfg(all(not(feature = "std"), feature = "libm"))]
@@ -20,6 +25,11 @@ mod backend {
     pub(crate) fn powf(value: f64, exponent: f64) -> f64 {
         libm::pow(value, exponent)
     }
+
+    #[inline]
+    pub(crate) fn floor(value: f64) -> f64 {
+        libm::floor(value)
+    }
 }
 
-pub(crate) use backend::powf;
+pub(crate) use backend::{floor, powf};

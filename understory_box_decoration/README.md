@@ -24,10 +24,10 @@ Full documentation at https://github.com/orium/cargo-rdme -->
 Renderer-neutral box decoration geometry primitives.
 
 `understory_box_decoration` owns resolved geometry for painted boxes:
-physical edge widths, box-area contours, corner shapes, side regions, and
-on-demand path emission. It deliberately leaves style cascade, CSS parsing,
-layout, brushes, images, border-style paint lowering, hit policy, and
-renderer command emission to higher-level crates.
+physical edge widths, box-area contours, corner shapes, renderer-neutral
+border paint plans and fragments, and on-demand path emission. It
+deliberately leaves style cascade, CSS parsing, layout, brushes, images,
+hit policy, and renderer command emission to higher-level crates.
 
 If those values come from dependency properties, use
 `understory_presentation_properties` to register canonical surface
@@ -35,11 +35,11 @@ properties and resolve them into `understory_presentation` primitives before
 asking this crate for final geometry.
 
 The first implemented contour family covers CSS box contours with
-elliptical radii, shaped corners, and per-side border styles. It supports
-round, square, bevel, and superellipse-based corner shapes, scales adjacent
-radii with the CSS smallest factor rule when they would overlap a side, and
-derives padding and content contours from concrete border and padding
-widths.
+elliptical radii, shaped corners, per-side border styles, and
+renderer-neutral border paint command planning. It supports round, square,
+bevel, and superellipse-based corner shapes, scales adjacent radii with the
+CSS smallest factor rule when they would overlap a side, and derives
+padding and content contours from concrete border and padding widths.
 
 ## Specification baseline
 
@@ -84,6 +84,11 @@ let mut border_path = BezPath::new();
 geometry.write_border_ring_path(&mut border_path);
 assert!(!clip_path.is_empty());
 assert!(!border_path.is_empty());
+
+let plan = geometry.border_paint().per_side_plan();
+let mut command_count = 0;
+plan.for_each(|_| command_count += 1);
+assert!(command_count > 0);
 ```
 
 ## Boundary and invariants
@@ -111,10 +116,10 @@ application wants standard-library support.
 
 Near-term work should add resolved length-percentage radii so CSS parsing
 layers can defer percentage resolution until the border box is known. After
-that, the natural coverage expansion is corner transition regions,
-`box-shadow` spread geometry, and richer background painting areas. Level 4
-`border-shape` should probably consume a separate CSS-shapes value crate
-rather than making this crate own every shape syntax.
+that, the natural coverage expansion is `box-shadow` spread geometry,
+richer background painting areas, and path-based `border-shape` reference
+geometry. Level 4 `border-shape` should probably consume a separate
+CSS-shapes value crate rather than making this crate own every shape syntax.
 
 [CSS Backgrounds and Borders Module Level 3]: https://www.w3.org/TR/css-backgrounds-3/#border-radius
 [CSS Borders and Box Decorations Module Level 4]: https://drafts.csswg.org/css-borders-4/

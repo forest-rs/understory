@@ -3,9 +3,11 @@
 
 use kurbo::{BezPath, Point, Rect, Size};
 
+use crate::path::write_contour_side_band_path;
 use crate::util::{finite_non_negative, normalize_rect};
 use crate::{
-    BorderStyle, BoxArea, BoxContour, CornerRadii, CornerShape, CornerShapes, Edges, Side,
+    BorderStyle, BoxArea, BoxContour, CornerRadii, CornerShape, CornerShapes, Edges,
+    ResolvedCorner, Side,
 };
 
 /// Fully resolved geometry for a single box decoration.
@@ -27,9 +29,9 @@ pub struct BoxDecorationGeometry {
     pub border_widths: Edges<f64>,
     /// Border style for each side.
     ///
-    /// The style is stored for renderer lowering. This geometry crate treats
-    /// [`BorderStyle::None`] and [`BorderStyle::Hidden`] as non-painting but
-    /// does not implement the paint algorithms for the visible styles.
+    /// The style is stored for renderer-neutral paint planning. This geometry
+    /// crate treats [`BorderStyle::None`] and [`BorderStyle::Hidden`] as
+    /// non-painting.
     pub border_styles: Edges<BorderStyle>,
     /// Non-negative padding widths for each side.
     pub padding_widths: Edges<f64>,
@@ -75,8 +77,8 @@ impl BoxDecorationGeometry {
     ///
     /// This is the entry point for callers that have resolved CSS
     /// `border-style` values. The styles are stored with the geometry and
-    /// copied into [`BorderSideGeometry`]; renderer/backend code remains
-    /// responsible for lowering each style into drawing commands.
+    /// copied into [`crate::BorderSidePaintGeometry`]; renderer/backend code
+    /// remains responsible for lowering each style into drawing commands.
     pub fn from_styled_border_box(
         border_box: Rect,
         border_widths: Edges<f64>,
@@ -168,8 +170,8 @@ impl BoxDecorationGeometry {
     /// of allocating a new path for every box.
     ///
     /// This method does not apply [`BorderStyle`]. Use
-    /// [`BoxDecorationGeometry::border_side_region`] when a lowerer needs
-    /// side-specific style data.
+    /// [`BoxDecorationGeometry::border_paint`] when a lowerer needs resolved
+    /// border paint fragments.
     pub fn write_border_ring_path(self, out: &mut BezPath) {
         self.border_edge.write_path(out);
         self.padding_edge.write_path(out);
@@ -192,83 +194,105 @@ impl BoxDecorationGeometry {
         path
     }
 
-    /// Returns the central side region for one physical border side.
+    /// Returns an intermediate contour through the border ring.
     ///
-    /// The returned region spans between the matching straight side spans of
-    /// the border and padding contours. It intentionally does not include
-    /// corner transition regions or border-style paint lowering.
+    /// `0.0` is the outer border edge and `1.0` is the inner padding edge.
+    /// Values outside that interval are clamped; non-finite values are treated
+    /// as `0.0`.
+    ///
+    /// This is intended for renderers that lower border styles such as
+    /// `double`, `groove`, `ridge`, dashed, or dotted by painting bands or
+    /// strokes inside the already-resolved border ring. It preserves resolved
+    /// corner shapes while interpolating the box and corner radii between the
+    /// border and padding contours.
     #[must_use]
-    pub fn border_side_region(self, side: Side) -> BorderSideGeometry {
-        let outer = self.border_edge.side_span(side);
-        let inner = self.padding_edge.side_span(side);
-        let width = match side {
-            Side::Top => self.border_widths.top,
-            Side::Right => self.border_widths.right,
-            Side::Bottom => self.border_widths.bottom,
-            Side::Left => self.border_widths.left,
-        };
-        let style = match side {
-            Side::Top => self.border_styles.top,
-            Side::Right => self.border_styles.right,
-            Side::Bottom => self.border_styles.bottom,
-            Side::Left => self.border_styles.left,
-        };
-
-        BorderSideGeometry {
-            side,
-            style,
-            width,
-            outer_start: outer.start,
-            outer_end: outer.end,
-            inner_start: inner.start,
-            inner_end: inner.end,
-            bounds: bounds_for_points([outer.start, outer.end, inner.start, inner.end]),
-        }
-    }
-}
-
-/// Central geometry for one physical border side.
-///
-/// This describes the side band between the straight spans of the outer border
-/// contour and inner padding contour. It is suitable for simple side-aware
-/// lowerers and leaves corner transition regions for a richer future API.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct BorderSideGeometry {
-    /// Physical side represented by this region.
-    pub side: Side,
-    /// Resolved style for this border side.
-    pub style: BorderStyle,
-    /// Visible border width for this side.
-    pub width: f64,
-    /// First point on the outer contour side span.
-    pub outer_start: Point,
-    /// Last point on the outer contour side span.
-    pub outer_end: Point,
-    /// First point on the inner contour side span.
-    pub inner_start: Point,
-    /// Last point on the inner contour side span.
-    pub inner_end: Point,
-    /// Axis-aligned bounds of the four side-region points.
-    pub bounds: Rect,
-}
-
-impl BorderSideGeometry {
-    /// Returns true when this side has no positive border width.
-    #[must_use]
-    pub fn is_empty(self) -> bool {
-        !self.style.paints_border() || !self.width.is_finite() || self.width <= 0.0
+    pub(crate) fn border_contour_at(self, t: f64) -> BoxContour {
+        interpolate_contour(self.border_edge, self.padding_edge, unit_interval(t))
     }
 
-    /// Appends this side region as a closed quadrilateral.
+    /// Appends a compound even-odd path for a band inside the border ring.
     ///
-    /// The path is appended to `out`; callers that want only this region
-    /// should clear or create their [`BezPath`] before calling.
-    pub fn write_path(self, out: &mut BezPath) {
-        out.move_to(self.outer_start);
-        out.line_to(self.outer_end);
-        out.line_to(self.inner_end);
-        out.line_to(self.inner_start);
+    /// `outer_t` and `inner_t` use the same coordinate as
+    /// [`Self::border_contour_at`], where `0.0` is the outer border edge and
+    /// `1.0` is the inner padding edge. The values are clamped into `[0, 1]`,
+    /// and `inner_t` is clamped to be no smaller than `outer_t`.
+    ///
+    /// This writes two closed subpaths with matching winding. Renderers
+    /// **must** fill the result with an even-odd rule to paint only the band.
+    pub(crate) fn write_border_band_path(self, outer_t: f64, inner_t: f64, out: &mut BezPath) {
+        let outer_t = unit_interval(outer_t);
+        let inner_t = unit_interval(inner_t).max(outer_t);
+        self.border_contour_at(outer_t).write_path(out);
+        self.border_contour_at(inner_t).write_path(out);
+    }
+
+    /// Builds a compound even-odd path for a band inside the border ring.
+    ///
+    /// Prefer [`Self::write_border_band_path`] in hot paths, and remember that
+    /// the returned path must be filled with an even-odd rule to remain hollow.
+    #[must_use]
+    pub(crate) fn to_border_band_path(self, outer_t: f64, inner_t: f64) -> BezPath {
+        let mut path = BezPath::new();
+        self.write_border_band_path(outer_t, inner_t, &mut path);
+        path
+    }
+
+    /// Appends the ownership clip polygon for one physical border side.
+    ///
+    /// Stroked styles use this to constrain side-owned open contours. Filled
+    /// styles use [`Self::write_border_side_band_path`] so shaped corners are
+    /// partitioned on their real contours instead of an axis-aligned polygon.
+    pub(crate) fn write_border_side_clip_path(self, side: Side, out: &mut BezPath) {
+        let points = border_side_clip_points(self.border_box, self.padding_box, side);
+        out.move_to(points[0]);
+        out.line_to(points[1]);
+        out.line_to(points[2]);
+        out.line_to(points[3]);
         out.close_path();
+    }
+
+    /// Builds the ownership clip polygon for one physical border side.
+    #[must_use]
+    pub(crate) fn to_border_side_clip_path(self, side: Side) -> BezPath {
+        let mut path = BezPath::new();
+        self.write_border_side_clip_path(side, &mut path);
+        path
+    }
+
+    /// Appends a closed path for one physical side's share of a border band.
+    ///
+    /// The side path follows the outer contour between adjacent corner miter
+    /// boundaries, then returns along the inner contour in reverse. That makes
+    /// filled side fragments meet adjacent sides on shaped corner contours
+    /// instead of relying on rectangular clips.
+    pub(crate) fn write_border_side_band_path(
+        self,
+        side: Side,
+        outer_t: f64,
+        inner_t: f64,
+        out: &mut BezPath,
+    ) {
+        let outer_t = unit_interval(outer_t);
+        let inner_t = unit_interval(inner_t).max(outer_t);
+        write_contour_side_band_path(
+            self.border_contour_at(outer_t),
+            self.border_contour_at(inner_t),
+            side,
+            out,
+        );
+    }
+
+    /// Builds one physical side's share of a border band.
+    #[must_use]
+    pub(crate) fn to_border_side_band_path(
+        self,
+        side: Side,
+        outer_t: f64,
+        inner_t: f64,
+    ) -> BezPath {
+        let mut path = BezPath::new();
+        self.write_border_side_band_path(side, outer_t, inner_t, &mut path);
+        path
     }
 }
 
@@ -301,22 +325,6 @@ fn inset_axis(min: f64, max: f64, before: f64, after: f64) -> (f64, f64) {
     }
 }
 
-fn bounds_for_points(points: [Point; 4]) -> Rect {
-    let mut x0 = points[0].x;
-    let mut y0 = points[0].y;
-    let mut x1 = points[0].x;
-    let mut y1 = points[0].y;
-
-    for point in points.into_iter().skip(1) {
-        x0 = x0.min(point.x);
-        y0 = y0.min(point.y);
-        x1 = x1.max(point.x);
-        y1 = y1.max(point.y);
-    }
-
-    Rect::new(x0, y0, x1, y1)
-}
-
 fn inset_radii_for_shapes(
     radii: CornerRadii,
     edges: Edges<f64>,
@@ -339,6 +347,84 @@ fn inset_corner_radius(original: Size, convex: Size, shape: CornerShape) -> Size
         original
     } else {
         convex
+    }
+}
+
+fn interpolate_contour(outer: BoxContour, inner: BoxContour, t: f64) -> BoxContour {
+    BoxContour::new(
+        Rect::new(
+            lerp_f64(outer.rect.x0, inner.rect.x0, t),
+            lerp_f64(outer.rect.y0, inner.rect.y0, t),
+            lerp_f64(outer.rect.x1, inner.rect.x1, t),
+            lerp_f64(outer.rect.y1, inner.rect.y1, t),
+        ),
+        crate::Corners::new(
+            interpolate_corner(outer.corners.top_left, inner.corners.top_left, t),
+            interpolate_corner(outer.corners.top_right, inner.corners.top_right, t),
+            interpolate_corner(outer.corners.bottom_right, inner.corners.bottom_right, t),
+            interpolate_corner(outer.corners.bottom_left, inner.corners.bottom_left, t),
+        ),
+    )
+}
+
+fn interpolate_corner(outer: ResolvedCorner, inner: ResolvedCorner, t: f64) -> ResolvedCorner {
+    ResolvedCorner::new(
+        Size::new(
+            lerp_f64(outer.radii.width, inner.radii.width, t),
+            lerp_f64(outer.radii.height, inner.radii.height, t),
+        ),
+        outer.shape,
+    )
+}
+
+fn border_side_clip_points(border_box: Rect, padding_box: Rect, side: Side) -> [Point; 4] {
+    let outer_top_left = Point::new(border_box.x0, border_box.y0);
+    let outer_top_right = Point::new(border_box.x1, border_box.y0);
+    let outer_bottom_right = Point::new(border_box.x1, border_box.y1);
+    let outer_bottom_left = Point::new(border_box.x0, border_box.y1);
+
+    let inner_top_left = Point::new(padding_box.x0, padding_box.y0);
+    let inner_top_right = Point::new(padding_box.x1, padding_box.y0);
+    let inner_bottom_right = Point::new(padding_box.x1, padding_box.y1);
+    let inner_bottom_left = Point::new(padding_box.x0, padding_box.y1);
+
+    match side {
+        Side::Top => [
+            outer_top_left,
+            outer_top_right,
+            inner_top_right,
+            inner_top_left,
+        ],
+        Side::Right => [
+            outer_top_right,
+            outer_bottom_right,
+            inner_bottom_right,
+            inner_top_right,
+        ],
+        Side::Bottom => [
+            outer_bottom_right,
+            outer_bottom_left,
+            inner_bottom_left,
+            inner_bottom_right,
+        ],
+        Side::Left => [
+            outer_bottom_left,
+            outer_top_left,
+            inner_top_left,
+            inner_bottom_left,
+        ],
+    }
+}
+
+fn lerp_f64(start: f64, end: f64, t: f64) -> f64 {
+    start + (end - start) * t
+}
+
+fn unit_interval(value: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(0.0, 1.0)
+    } else {
+        0.0
     }
 }
 
@@ -365,8 +451,8 @@ const fn visible_border_width(width: f64, style: BorderStyle) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Superellipse;
-    use kurbo::{PathEl, Size};
+    use crate::{Side, Superellipse};
+    use kurbo::{PathEl, Point, Size};
 
     #[test]
     fn geometry_derives_border_padding_and_content_contours() {
@@ -415,6 +501,67 @@ mod tests {
             .filter(|el| matches!(el, PathEl::ClosePath))
             .count();
         assert_eq!(close_count, 2);
+    }
+
+    #[test]
+    fn border_contour_at_interpolates_between_border_and_padding_edges() {
+        let geometry = BoxDecorationGeometry::from_round_border_box(
+            Rect::new(0.0, 0.0, 100.0, 50.0),
+            Edges::new(6.0, 12.0, 18.0, 24.0),
+            Edges::ZERO,
+            CornerRadii::uniform(20.0),
+        );
+
+        let middle = geometry.border_contour_at(0.5);
+
+        assert_eq!(middle.rect, Rect::new(12.0, 3.0, 94.0, 41.0));
+        assert_eq!(middle.corners.top_left.radii, Size::new(10.0, 17.0));
+        assert_eq!(middle.corners.bottom_right.radii, Size::new(14.0, 11.0));
+        assert_eq!(middle.corners.top_left.shape, CornerShape::Round);
+        assert_eq!(geometry.border_contour_at(-1.0), geometry.border_edge);
+        assert_eq!(geometry.border_contour_at(f64::NAN), geometry.border_edge);
+        assert_eq!(geometry.border_contour_at(2.0), geometry.padding_edge);
+    }
+
+    #[test]
+    fn border_band_path_appends_shaped_outer_and_inner_subpaths() {
+        let geometry = BoxDecorationGeometry::from_border_box(
+            Rect::new(0.0, 0.0, 120.0, 80.0),
+            Edges::all(12.0),
+            Edges::ZERO,
+            CornerRadii::all(Size::new(24.0, 16.0)),
+            CornerShapes::new(
+                CornerShape::Square,
+                CornerShape::Bevel,
+                CornerShape::squircle(),
+                CornerShape::scoop(),
+            ),
+        );
+
+        let path = geometry.to_border_band_path(0.0, 1.0 / 3.0);
+        let close_count = path
+            .iter()
+            .filter(|el| matches!(el, PathEl::ClosePath))
+            .count();
+
+        assert_eq!(close_count, 2);
+        assert_eq!(
+            geometry
+                .border_contour_at(1.0 / 3.0)
+                .corners
+                .bottom_right
+                .shape,
+            CornerShape::squircle()
+        );
+        assert_eq!(
+            geometry
+                .border_contour_at(1.0 / 3.0)
+                .corners
+                .bottom_left
+                .shape,
+            CornerShape::scoop()
+        );
+        assert!(path.is_finite());
     }
 
     #[test]
@@ -475,9 +622,9 @@ mod tests {
         assert_eq!(geometry.border_edge.radii(), CornerRadii::ZERO);
         assert_eq!(geometry.padding_edge.radii(), CornerRadii::ZERO);
         assert_eq!(geometry.content_edge.radii(), CornerRadii::ZERO);
-        assert!(path_is_finite(&geometry.border_edge.to_path()));
-        assert!(path_is_finite(&geometry.padding_edge.to_path()));
-        assert!(path_is_finite(&geometry.to_border_ring_path()));
+        assert!(geometry.border_edge.to_path().is_finite());
+        assert!(geometry.padding_edge.to_path().is_finite());
+        assert!(geometry.to_border_ring_path().is_finite());
     }
 
     #[test]
@@ -496,7 +643,7 @@ mod tests {
             geometry.contour(BoxArea::Content).rect,
             geometry.content_box
         );
-        assert!(path_is_finite(&content_clip));
+        assert!(content_clip.is_finite());
     }
 
     #[test]
@@ -529,7 +676,7 @@ mod tests {
             geometry.border_edge.corners.bottom_left.shape,
             CornerShape::scoop()
         );
-        assert!(path_is_finite(&path));
+        assert!(path.is_finite());
     }
 
     #[test]
@@ -544,11 +691,11 @@ mod tests {
 
         let path = geometry.border_edge.to_path();
         assert!(path.iter().any(|el| matches!(el, PathEl::CurveTo(..))));
-        assert!(path_is_finite(&path));
+        assert!(path.is_finite());
     }
 
     #[test]
-    fn side_regions_follow_central_contour_spans() {
+    fn side_paint_geometry_reports_resolved_style_and_width() {
         let geometry = BoxDecorationGeometry::from_round_border_box(
             Rect::new(0.0, 0.0, 100.0, 50.0),
             Edges::new(4.0, 6.0, 8.0, 10.0),
@@ -556,19 +703,16 @@ mod tests {
             CornerRadii::uniform(12.0),
         );
 
-        let top = geometry.border_side_region(Side::Top);
+        let top = geometry.border_paint().side(Side::Top);
 
-        assert_eq!(top.width, 4.0);
-        assert_eq!(top.style, BorderStyle::Solid);
+        assert_eq!(top.width(), 4.0);
+        assert_eq!(top.style(), BorderStyle::Solid);
         assert!(!top.is_empty());
-        assert_eq!(top.outer_start, Point::new(12.0, 0.0));
-        assert_eq!(top.outer_end, Point::new(88.0, 0.0));
-        assert_eq!(top.inner_start, Point::new(12.0, 4.0));
-        assert_eq!(top.inner_end, Point::new(88.0, 4.0));
-
-        let mut path = BezPath::new();
-        top.write_path(&mut path);
-        assert!(path_is_finite(&path));
+        assert_eq!(
+            geometry.border_edge.side_span(Side::Top).start,
+            Point::new(12.0, 0.0)
+        );
+        assert!(top.ring().path.is_finite());
     }
 
     #[test]
@@ -601,19 +745,15 @@ mod tests {
     }
 
     #[test]
-    fn side_regions_with_non_finite_widths_are_empty() {
-        let side = BorderSideGeometry {
-            side: Side::Top,
-            style: BorderStyle::Solid,
-            width: f64::NAN,
-            outer_start: Point::ZERO,
-            outer_end: Point::ZERO,
-            inner_start: Point::ZERO,
-            inner_end: Point::ZERO,
-            bounds: Rect::ZERO,
-        };
+    fn side_paint_geometry_with_non_finite_width_is_empty() {
+        let geometry = BoxDecorationGeometry::from_round_border_box(
+            Rect::new(0.0, 0.0, 100.0, 50.0),
+            Edges::new(f64::NAN, 4.0, 4.0, 4.0),
+            Edges::ZERO,
+            CornerRadii::ZERO,
+        );
 
-        assert!(side.is_empty());
+        assert!(geometry.border_paint().side(Side::Top).is_empty());
     }
 
     #[test]
@@ -637,33 +777,10 @@ mod tests {
         assert_eq!(geometry.border_widths, Edges::new(4.0, 4.0, 0.0, 0.0));
         assert_eq!(geometry.border_styles.right, BorderStyle::Dashed);
         assert_eq!(
-            geometry.border_side_region(Side::Right).style,
+            geometry.border_paint().side(Side::Right).style(),
             BorderStyle::Dashed
         );
-        assert!(geometry.border_side_region(Side::Bottom).is_empty());
-        assert!(geometry.border_side_region(Side::Left).is_empty());
-    }
-
-    fn path_is_finite(path: &BezPath) -> bool {
-        path.iter().all(|element| match element {
-            PathEl::MoveTo(point) | PathEl::LineTo(point) => {
-                point.x.is_finite() && point.y.is_finite()
-            }
-            PathEl::QuadTo(control, point) => {
-                control.x.is_finite()
-                    && control.y.is_finite()
-                    && point.x.is_finite()
-                    && point.y.is_finite()
-            }
-            PathEl::CurveTo(control_0, control_1, point) => {
-                control_0.x.is_finite()
-                    && control_0.y.is_finite()
-                    && control_1.x.is_finite()
-                    && control_1.y.is_finite()
-                    && point.x.is_finite()
-                    && point.y.is_finite()
-            }
-            PathEl::ClosePath => true,
-        })
+        assert!(geometry.border_paint().side(Side::Bottom).is_empty());
+        assert!(geometry.border_paint().side(Side::Left).is_empty());
     }
 }

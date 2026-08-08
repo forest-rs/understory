@@ -55,7 +55,7 @@ The focus is on clean separation of concerns, pluggable performance trade‑offs
 
 - `understory_box_decoration`
   - Renderer-neutral box decoration geometry for physical edges, box-area contours, and shaped corners.
-  - Supports elliptical per-corner radii, CSS smallest-factor radius fitting, round/square/bevel/superellipse corner shapes, derived border/padding/content contours, central border-side regions, and on-demand Kurbo path writing.
+  - Supports elliptical per-corner radii, CSS smallest-factor radius fitting, round/square/bevel/superellipse corner shapes, derived border/padding/content contours, renderer-neutral border paint plans and fragments, and on-demand Kurbo path writing.
   - Does not own style cascade, CSS parsing, brushes, images, layout, hit policy, or renderer command emission.
 
 - `understory_box_tree`
