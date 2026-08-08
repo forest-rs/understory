@@ -1,16 +1,25 @@
+<!-- Instructions
+
+This changelog follows the patterns described here: <https://keepachangelog.com/en/>.
+
+Subheadings to categorize changes are `added, changed, deprecated, removed, fixed, security`.
+
+-->
+
 # Changelog
 
-All notable changes to this crate will be documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+The latest published Understory Overlay release is [0.1.0](#010-2026-08-08) which was released on 2026-08-08.
+You can find its changes [documented below](#010-2026-08-08).
 
 ## [Unreleased]
 
-Minimum supported Rust version: 1.88.
+## [0.1.0][] (2026-08-08)
 
-### Added
+This release has an [MSRV][] of 1.88.
 
-- Initial `understory_overlay` crate with deterministic overlay stack mutation,
-  derived overlay frames, modality underlays, dismiss regions, focus scopes,
-  hover grace geometry, and event-to-operation resolution.
+This is the initial release.
+
+[Unreleased]: https://github.com/forest-rs/understory/compare/understory_overlay-v0.1.0...HEAD
+[0.1.0]: https://github.com/forest-rs/understory/releases/tag/understory_overlay-v0.1.0
+
+[MSRV]: README.md#minimum-supported-rust-version-msrv

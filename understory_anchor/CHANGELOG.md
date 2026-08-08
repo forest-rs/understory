@@ -8,25 +8,18 @@ Subheadings to categorize changes are `added, changed, deprecated, removed, fixe
 
 # Changelog
 
-Understory Anchor has not had a published release yet.
+The latest published Understory Anchor release is [0.1.0](#010-2026-08-08) which was released on 2026-08-08.
+You can find its changes [documented below](#010-2026-08-08).
 
 ## [Unreleased]
 
-### Added
+## [0.1.0][] (2026-08-08)
 
-- Added the initial `understory_anchor` crate with `no_std` anchored geometry
-  resolution for overlays, popovers, menus, tooltips, combobox popups, and
-  selection/caret anchored surfaces.
-- Added placement, anchor, policy, constraint, candidate, diagnostic, arrow,
-  collision report, and previous-frame hysteresis APIs built on `kurbo`
-  geometry types.
-- Added first-class position options so CSS-like adapters can vary placement,
-  constraints, ordering, and stable previous-frame identity per fallback.
-- Added pure-data regression tests covering fallback placement, multi-rect
-  anchors, collision shifting, size shrink/rejection, arrows, transform
-  origins, detachment, per-option constraints, fallback ordering, and
-  hysteresis.
+This release has an [MSRV][] of 1.88.
 
-[Unreleased]: https://github.com/forest-rs/understory/compare/HEAD
+This is the initial release.
+
+[Unreleased]: https://github.com/forest-rs/understory/compare/understory_anchor-v0.1.0...HEAD
+[0.1.0]: https://github.com/forest-rs/understory/releases/tag/understory_anchor-v0.1.0
 
 [MSRV]: README.md#minimum-supported-rust-version-msrv

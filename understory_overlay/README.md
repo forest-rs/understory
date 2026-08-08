@@ -116,10 +116,31 @@ geometry dependencies have floating-point math support.
 
 <!-- cargo-rdme end -->
 
-## MSRV
+## Minimum supported Rust Version (MSRV)
 
-This crate is tested with Rust 1.88 and newer.
+This crate has been verified to compile with **Rust 1.88** and later.
 
 ## License
 
-Dual-licensed under Apache-2.0 and MIT.
+Licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE] or <http://www.apache.org/licenses/LICENSE-2.0>), or
+- MIT license ([LICENSE-MIT] or <http://opensource.org/licenses/MIT>),
+
+at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in the work by you,
+as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
+
+## Contribution
+
+Contributions are welcome by pull request. The [Rust code of conduct] applies.
+Please feel free to add your name to the [AUTHORS] file in any substantive pull request.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in the work by you,
+as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
+
+[LICENSE-APACHE]: https://github.com/forest-rs/understory/blob/main/LICENSE-APACHE
+[LICENSE-MIT]: https://github.com/forest-rs/understory/blob/main/LICENSE-MIT
+[Rust code of conduct]: https://www.rust-lang.org/policies/code-of-conduct
+[AUTHORS]: https://github.com/forest-rs/understory/blob/main/AUTHORS
