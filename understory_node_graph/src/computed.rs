@@ -19,7 +19,7 @@ use crate::invalidation::{GraphInvalidation, GraphInvalidationCause, Invalidatio
 use crate::observe::{DeriveMetrics, DeriveMode, DerivePhase, GraphDeriveObserver, GraphSize};
 use crate::projection::{GraphProjection, PortAnchor};
 use crate::revision::Revision;
-use crate::routing::{EdgeRouter, RouteContext, RoutedEdge};
+use crate::routing::{EdgeRouter, RouteContext, RouteRequest, RoutedEdge};
 use crate::session::{GraphSession, InteractionState};
 
 struct CountedRouter<'a, R> {
@@ -27,9 +27,9 @@ struct CountedRouter<'a, R> {
     calls: Cell<usize>,
 }
 impl<R: EdgeRouter> EdgeRouter for CountedRouter<'_, R> {
-    fn route(&self, edge: EdgeId, cx: &RouteContext) -> RoutedEdge {
+    fn route(&self, request: RouteRequest, cx: &RouteContext) -> RoutedEdge {
         self.calls.set(self.calls.get() + 1);
-        self.inner.route(edge, cx)
+        self.inner.route(request, cx)
     }
 }
 
@@ -658,7 +658,7 @@ impl GraphComputed {
                 continue;
             };
             let route = router.route(
-                edge,
+                RouteRequest::Edge(edge),
                 &RouteContext {
                     output_anchor,
                     input_anchor,
@@ -788,7 +788,7 @@ impl GraphComputed {
             return;
         };
         let route = router.route(
-            edge,
+            RouteRequest::Edge(edge),
             &RouteContext {
                 output_anchor,
                 input_anchor,
@@ -923,7 +923,13 @@ impl GraphComputed {
         };
 
         let route = router.route(
-            EdgeId::from_parts(u32::MAX, 0),
+            RouteRequest::Preview {
+                from,
+                to: match target {
+                    EdgePreviewTarget::Port { port, .. } => Some(port),
+                    EdgePreviewTarget::Pointer(_) => None,
+                },
+            },
             &RouteContext {
                 output_anchor,
                 input_anchor,
@@ -1061,9 +1067,9 @@ mod tests {
     }
 
     impl EdgeRouter for CountingRouter {
-        fn route(&self, edge: crate::ids::EdgeId, cx: &RouteContext) -> RoutedEdge {
+        fn route(&self, request: crate::RouteRequest, cx: &RouteContext) -> RoutedEdge {
             self.calls.set(self.calls.get() + 1);
-            StraightEdgeRouter.route(edge, cx)
+            StraightEdgeRouter.route(request, cx)
         }
     }
 

@@ -7,7 +7,22 @@ use alloc::vec::Vec;
 
 use kurbo::{Point, Rect};
 
-use crate::ids::EdgeId;
+use crate::ids::{EdgeId, PortId};
+
+/// Identity and purpose of a route request.
+/// A preview has no committed edge and must not be looked up as one.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum RouteRequest {
+    /// A live document edge, usable for host routing metadata lookup.
+    Edge(EdgeId),
+    /// A transient connection gesture, optionally snapped to a candidate port.
+    Preview {
+        /// Output port where the gesture began.
+        from: PortId,
+        /// Candidate target port, or `None` while following a free pointer.
+        to: Option<PortId>,
+    },
+}
 
 /// Context provided to edge routers.
 ///
@@ -78,9 +93,9 @@ impl RoutedEdge {
 pub trait EdgeRouter {
     /// Routes one edge from the provided anchors.
     ///
-    /// The `edge` id is provided so routers can consult host-side route hints
-    /// keyed by edge id.
-    fn route(&self, edge: EdgeId, cx: &RouteContext) -> RoutedEdge;
+    /// Committed requests carry a live edge id for routing-hint lookup. Preview
+    /// requests carry endpoint identities without fabricating a document edge.
+    fn route(&self, request: RouteRequest, cx: &RouteContext) -> RoutedEdge;
 }
 
 /// Straight-line router used by the default examples and tests.
@@ -91,7 +106,7 @@ pub trait EdgeRouter {
 pub struct StraightEdgeRouter;
 
 impl EdgeRouter for StraightEdgeRouter {
-    fn route(&self, _edge: EdgeId, cx: &RouteContext) -> RoutedEdge {
+    fn route(&self, _request: RouteRequest, cx: &RouteContext) -> RoutedEdge {
         RoutedEdge::from_points(alloc::vec![cx.output_anchor, cx.input_anchor])
     }
 }
@@ -117,7 +132,7 @@ impl Default for OrthogonalEdgeRouter {
 }
 
 impl EdgeRouter for OrthogonalEdgeRouter {
-    fn route(&self, _edge: EdgeId, cx: &RouteContext) -> RoutedEdge {
+    fn route(&self, _request: RouteRequest, cx: &RouteContext) -> RoutedEdge {
         let output = cx.output_anchor;
         let input = cx.input_anchor;
 
@@ -146,13 +161,13 @@ impl EdgeRouter for OrthogonalEdgeRouter {
 mod tests {
     use kurbo::Point;
 
-    use super::{EdgeRouter, OrthogonalEdgeRouter, RouteContext, StraightEdgeRouter};
+    use super::{EdgeRouter, OrthogonalEdgeRouter, RouteContext, RouteRequest, StraightEdgeRouter};
     use crate::ids::EdgeId;
 
     #[test]
     fn straight_router_returns_two_points() {
         let route = StraightEdgeRouter.route(
-            EdgeId::from_parts(0, 0),
+            RouteRequest::Edge(EdgeId::from_parts(0, 0)),
             &RouteContext {
                 output_anchor: Point::new(10.0, 20.0),
                 input_anchor: Point::new(80.0, 48.0),
@@ -168,7 +183,7 @@ mod tests {
     #[test]
     fn orthogonal_router_inserts_bends() {
         let route = OrthogonalEdgeRouter::default().route(
-            EdgeId::from_parts(0, 0),
+            RouteRequest::Edge(EdgeId::from_parts(0, 0)),
             &RouteContext {
                 output_anchor: Point::new(20.0, 30.0),
                 input_anchor: Point::new(140.0, 90.0),

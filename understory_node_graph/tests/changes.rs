@@ -9,7 +9,7 @@ use understory_node_graph::*;
 #[derive(Default)]
 struct Router(Cell<usize>);
 impl EdgeRouter for Router {
-    fn route(&self, _: EdgeId, cx: &RouteContext) -> RoutedEdge {
+    fn route(&self, _: RouteRequest, cx: &RouteContext) -> RoutedEdge {
         self.0.set(self.0.get() + 1);
         RoutedEdge::from_points(vec![cx.output_anchor, cx.input_anchor])
     }
@@ -429,4 +429,73 @@ fn explicit_socket_anchors_follow_the_node_without_cancelling_automatic_layout()
         f.computed.port_anchor(f.ports[0]),
         Some(Point::new(21., 34.))
     );
+}
+
+#[test]
+fn preview_requests_never_masquerade_as_committed_edges() {
+    struct InspectingRouter<'a> {
+        doc: &'a GraphDoc,
+        requests: std::cell::RefCell<Vec<RouteRequest>>,
+    }
+    impl EdgeRouter for InspectingRouter<'_> {
+        fn route(&self, request: RouteRequest, cx: &RouteContext) -> RoutedEdge {
+            match request {
+                RouteRequest::Edge(edge) => assert!(self.doc.edge(edge).is_some()),
+                RouteRequest::Preview { from, to } => {
+                    assert!(self.doc.port(from).is_some());
+                    if let Some(port) = to {
+                        assert!(
+                            self.doc.port(port).is_some(),
+                            "snapped previews carry a live port"
+                        );
+                    }
+                }
+            }
+            self.requests.borrow_mut().push(request);
+            StraightEdgeRouter.route(request, cx)
+        }
+    }
+    let mut f = Fixture::new();
+    f.session.set_interaction(InteractionState::CreateEdge {
+        from: f.ports[0],
+        pointer: Point::new(20., 30.),
+    });
+    f.session.set_hover(Some(HitTarget::Port(f.ports[1])));
+    let router = InspectingRouter {
+        doc: &f.doc,
+        requests: std::cell::RefCell::new(vec![]),
+    };
+    f.computed.rebuild(
+        &f.doc,
+        &f.projection,
+        &f.session,
+        &mut f.invalidation,
+        &router,
+        &mut NoopGraphDeriveObserver,
+    );
+    assert_eq!(
+        *router.requests.borrow(),
+        vec![RouteRequest::Preview {
+            from: f.ports[0],
+            to: Some(f.ports[1])
+        }]
+    );
+    f.session.set_hover(None);
+    router.requests.borrow_mut().clear();
+    f.computed.rebuild(
+        &f.doc,
+        &f.projection,
+        &f.session,
+        &mut f.invalidation,
+        &router,
+        &mut NoopGraphDeriveObserver,
+    );
+    assert_eq!(
+        *router.requests.borrow(),
+        vec![RouteRequest::Preview {
+            from: f.ports[0],
+            to: None
+        }]
+    );
+    assert_eq!(f.doc.edge_count(), 3);
 }
