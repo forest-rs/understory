@@ -15,6 +15,14 @@ impl EdgeRouter for Router {
     }
 }
 
+#[derive(Default)]
+struct Work(Vec<(DerivePhase, DeriveMetrics)>);
+impl GraphDeriveObserver for Work {
+    fn derive_end(&mut self, phase: DerivePhase, metrics: DeriveMetrics) {
+        self.0.push((phase, metrics));
+    }
+}
+
 struct Fixture {
     doc: GraphDoc,
     projection: GraphProjection,
@@ -288,4 +296,97 @@ fn port_insertion_and_edge_replacement_match_full_derivation() {
     f.rebuild();
     assert_eq!(f.router.0.get(), 1);
     f.agrees_with_fresh();
+}
+
+#[test]
+fn observer_reports_work_separately_from_population_and_counts_real_router_calls() {
+    let mut f = Fixture::new();
+    let (_, changes) = f
+        .projection
+        .edit(|edit| edit.translate_node(f.nodes[0], (10., 0.).into()));
+    f.invalidation.record(&changes);
+    let mut work = Work::default();
+    f.computed.rebuild(
+        &f.doc,
+        &f.projection,
+        &f.session,
+        &mut f.invalidation,
+        &f.router,
+        &mut work,
+    );
+    let anchors = work
+        .0
+        .iter()
+        .find(|(phase, _)| *phase == DerivePhase::PortAnchors)
+        .unwrap()
+        .1;
+    assert_eq!(anchors.graph_size.nodes, 6);
+    assert_eq!((anchors.nodes, anchors.ports), (1, 1));
+    assert_eq!(anchors.mode, DeriveMode::Targeted);
+    let routing = work
+        .0
+        .iter()
+        .find(|(phase, _)| *phase == DerivePhase::EdgeRouting)
+        .unwrap()
+        .1;
+    assert_eq!((routing.edges, routing.routed_edges), (1, 1));
+    let visibility = work
+        .0
+        .iter()
+        .find(|(phase, _)| *phase == DerivePhase::Visibility)
+        .unwrap()
+        .1;
+    assert_eq!((visibility.nodes, visibility.edges), (6, 3));
+    assert_eq!(visibility.mode, DeriveMode::Full);
+    let (_, changes) = f.projection.edit(|edit| {
+        let mut view = EdgeView::new(());
+        view.hidden = true;
+        edit.set_edge_view(f.edges[0], view);
+    });
+    f.invalidation.record(&changes);
+    work.0.clear();
+    f.router.0.set(0);
+    f.session.set_interaction(InteractionState::CreateEdge {
+        from: f.ports[0],
+        pointer: Point::new(40., 20.),
+    });
+    f.computed.rebuild(
+        &f.doc,
+        &f.projection,
+        &f.session,
+        &mut f.invalidation,
+        &f.router,
+        &mut work,
+    );
+    let routing = work
+        .0
+        .iter()
+        .find(|(phase, _)| *phase == DerivePhase::EdgeRouting)
+        .unwrap()
+        .1;
+    assert_eq!((routing.edges, routing.routed_edges), (1, 0));
+    let preview = work
+        .0
+        .iter()
+        .find(|(phase, _)| *phase == DerivePhase::EdgePreview)
+        .unwrap()
+        .1;
+    assert_eq!(preview.routed_edges, 1);
+    assert_eq!(
+        work.0
+            .iter()
+            .map(|(_, metrics)| metrics.routed_edges)
+            .sum::<usize>(),
+        f.router.0.get()
+    );
+    work.0.clear();
+    assert!(!f.computed.rebuild(
+        &f.doc,
+        &f.projection,
+        &f.session,
+        &mut f.invalidation,
+        &f.router,
+        &mut work
+    ));
+    assert!(work.0.is_empty());
 }

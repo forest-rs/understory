@@ -21,21 +21,48 @@ pub enum DerivePhase {
     EdgeRouting,
     /// Recompute visibility sets.
     Visibility,
+    /// Recompute the transient edge-creation preview.
+    EdgePreview,
 }
 
-/// Lightweight derive metrics for one rebuild phase.
-///
-/// Metrics describe the current graph size, not necessarily the exact number of
-/// entries touched by a targeted rebuild. They are meant for logging, debug UI,
-/// and broad performance tracking.
+/// Whether a phase scans its complete input or a covered neighborhood.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub enum DeriveMode {
+    /// Complete derivation of this phase's input.
+    #[default]
+    Full,
+    /// Derivation of the affected neighborhood only.
+    Targeted,
+}
+
+/// Live graph population, distinct from work performed in a derive phase.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub struct GraphSize {
+    /// Live document nodes.
+    pub nodes: usize,
+    /// Live document ports.
+    pub ports: usize,
+    /// Live document edges.
+    pub edges: usize,
+}
+
+/// Work performed by one phase, including entities considered for cache removal.
+/// Counts describe logical entity visits, not individual property lookups, CPU
+/// time or allocator bytes. A missing/hidden edge can be visited without routing.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct DeriveMetrics {
-    /// Number of nodes touched.
+    /// Live population at phase entry, independent of the amount of work.
+    pub graph_size: GraphSize,
+    /// Full or neighborhood derivation.
+    pub mode: DeriveMode,
+    /// Number of nodes considered in this phase.
     pub nodes: usize,
-    /// Number of ports touched.
+    /// Number of ports considered in this phase.
     pub ports: usize,
-    /// Number of edges touched.
+    /// Number of edges considered in this phase.
     pub edges: usize,
+    /// Actual router invocations in this phase, including previews in their own phase.
+    pub routed_edges: usize,
 }
 
 /// Observer for invalidation and derived-state rebuild activity.

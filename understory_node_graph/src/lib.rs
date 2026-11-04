@@ -29,6 +29,9 @@
 //! previews and optional connection validation without pushing a type system
 //! into the crate itself. Policies receive a [`ConnectionContext`] so they can
 //! inspect endpoint metadata and existing topology.
+//! Observers report live [`GraphSize`] separately from phase-local entity visits
+//! and actual router calls. Preview routing has its own phase; visibility reports
+//! its full scan even when anchor and route derivation were targeted.
 //!
 //! The crate intentionally does **not** own rendering, widget policy, graph
 //! execution, or application-specific node semantics.
@@ -144,7 +147,9 @@ pub use invalidation::{
     GRAPH, GraphInvalidation, GraphInvalidationCause, InvalidationTarget, PROJECTION, ROUTING,
     SESSION, VIEWPORT, VISIBILITY,
 };
-pub use observe::{DeriveMetrics, DerivePhase, GraphDeriveObserver, NoopGraphDeriveObserver};
+pub use observe::{
+    DeriveMetrics, DeriveMode, DerivePhase, GraphDeriveObserver, GraphSize, NoopGraphDeriveObserver,
+};
 pub use projection::{EdgeView, GraphProjection, NodeView, PortView};
 pub use revision::Revision;
 pub use routing::{EdgeRouter, OrthogonalEdgeRouter, RouteContext, RoutedEdge, StraightEdgeRouter};

@@ -4,6 +4,7 @@
 //! Derived node-graph geometry, visibility, and preview state.
 
 use alloc::vec::Vec;
+use core::cell::Cell;
 use core::cmp::Ordering;
 
 use hashbrown::{HashMap, HashSet};
@@ -15,11 +16,22 @@ use crate::element::HitTarget;
 use crate::graph::{GraphDoc, PortDirection};
 use crate::ids::{EdgeId, NodeId, PortId};
 use crate::invalidation::{GraphInvalidation, GraphInvalidationCause, InvalidationTarget};
-use crate::observe::{DeriveMetrics, DerivePhase, GraphDeriveObserver};
+use crate::observe::{DeriveMetrics, DeriveMode, DerivePhase, GraphDeriveObserver, GraphSize};
 use crate::projection::GraphProjection;
 use crate::revision::Revision;
 use crate::routing::{EdgeRouter, RouteContext, RoutedEdge};
 use crate::session::{GraphSession, InteractionState};
+
+struct CountedRouter<'a, R> {
+    inner: &'a R,
+    calls: Cell<usize>,
+}
+impl<R: EdgeRouter> EdgeRouter for CountedRouter<'_, R> {
+    fn route(&self, edge: EdgeId, cx: &RouteContext) -> RoutedEdge {
+        self.calls.set(self.calls.get() + 1);
+        self.inner.route(edge, cx)
+    }
+}
 
 const DEFAULT_PORT_HIT_RADIUS: f64 = 8.0;
 const DEFAULT_EDGE_HIT_TOLERANCE: f64 = 6.0;
@@ -298,7 +310,7 @@ impl GraphComputed {
         C: PortCompatibility<N, P, E>,
         O: GraphDeriveObserver,
     {
-        let metrics = DeriveMetrics {
+        let graph_size = GraphSize {
             nodes: doc.node_count(),
             ports: doc.port_count(),
             edges: doc.edge_count(),
@@ -328,7 +340,19 @@ impl GraphComputed {
             || invalidation.has_cause(GraphInvalidationCause::Visibility);
         let preview_dirty = geometry_dirty || visibility_dirty;
 
+        let counted_router = CountedRouter {
+            inner: router,
+            calls: Cell::new(0),
+        };
         if let Some(geometry_plan) = geometry_plan {
+            let (mode, nodes, edges) = match &geometry_plan {
+                GeometryRebuild::Full => (DeriveMode::Full, graph_size.nodes, graph_size.edges),
+                GeometryRebuild::Targeted(targets) => (
+                    DeriveMode::Targeted,
+                    targets.nodes.len(),
+                    targets.edges.len(),
+                ),
+            };
             observer.derive_begin(DerivePhase::NodeBounds);
             match &geometry_plan {
                 GeometryRebuild::Full => self.rebuild_node_bounds(doc, projection),
@@ -336,35 +360,72 @@ impl GraphComputed {
                     self.rebuild_node_bounds_targeted(doc, projection, targets);
                 }
             }
-            observer.derive_end(DerivePhase::NodeBounds, metrics);
-
+            observer.derive_end(
+                DerivePhase::NodeBounds,
+                DeriveMetrics {
+                    graph_size,
+                    mode,
+                    nodes,
+                    ..DeriveMetrics::default()
+                },
+            );
             observer.derive_begin(DerivePhase::PortAnchors);
-            match &geometry_plan {
+            let ports = match &geometry_plan {
                 GeometryRebuild::Full => self.rebuild_port_anchors(doc, projection),
                 GeometryRebuild::Targeted(targets) => {
-                    self.rebuild_port_anchors_targeted(doc, projection, targets);
+                    self.rebuild_port_anchors_targeted(doc, projection, targets)
                 }
-            }
-            observer.derive_end(DerivePhase::PortAnchors, metrics);
-
+            };
+            observer.derive_end(
+                DerivePhase::PortAnchors,
+                DeriveMetrics {
+                    graph_size,
+                    mode,
+                    nodes,
+                    ports,
+                    ..DeriveMetrics::default()
+                },
+            );
             observer.derive_begin(DerivePhase::EdgeRouting);
             match &geometry_plan {
-                GeometryRebuild::Full => self.rebuild_edge_routes(doc, projection, router),
+                GeometryRebuild::Full => self.rebuild_edge_routes(doc, projection, &counted_router),
                 GeometryRebuild::Targeted(targets) => {
-                    self.rebuild_edge_routes_targeted(doc, projection, router, targets);
+                    self.rebuild_edge_routes_targeted(doc, projection, &counted_router, targets);
                 }
             }
-            observer.derive_end(DerivePhase::EdgeRouting, metrics);
+            observer.derive_end(
+                DerivePhase::EdgeRouting,
+                DeriveMetrics {
+                    graph_size,
+                    mode,
+                    edges,
+                    routed_edges: counted_router.calls.replace(0),
+                    ..DeriveMetrics::default()
+                },
+            );
         }
-
         if visibility_dirty {
             observer.derive_begin(DerivePhase::Visibility);
+            let metrics = DeriveMetrics {
+                graph_size,
+                nodes: self.node_bounds.len(),
+                edges: self.edge_routes.len(),
+                ..DeriveMetrics::default()
+            };
             self.rebuild_visibility(session);
             observer.derive_end(DerivePhase::Visibility, metrics);
         }
-
         if preview_dirty {
-            self.rebuild_preview(doc, session, router, compatibility);
+            observer.derive_begin(DerivePhase::EdgePreview);
+            self.rebuild_preview(doc, session, &counted_router, compatibility);
+            observer.derive_end(
+                DerivePhase::EdgePreview,
+                DeriveMetrics {
+                    graph_size,
+                    routed_edges: counted_router.calls.get(),
+                    ..DeriveMetrics::default()
+                },
+            );
         }
 
         let rebuilt = geometry_dirty || visibility_dirty || preview_dirty;
@@ -551,52 +612,11 @@ impl GraphComputed {
         &mut self,
         doc: &GraphDoc<N, P, E>,
         projection: &GraphProjection<NV, PV, EV>,
-    ) {
+    ) -> usize {
         self.port_anchors.clear();
-
-        for (node, _) in doc.iter_nodes() {
-            let Some(node_view) = projection.node_view(node) else {
-                continue;
-            };
-
-            let ports = doc.node_ports(node).unwrap_or(&[]);
-            let input_count = ports
-                .iter()
-                .filter(|port| matches!(doc.port(**port), Some(data) if data.direction == PortDirection::Input))
-                .count();
-            let output_count = ports
-                .iter()
-                .filter(|port| matches!(doc.port(**port), Some(data) if data.direction == PortDirection::Output))
-                .count();
-
-            let mut input_index = 0_usize;
-            let mut output_index = 0_usize;
-
-            for port in ports.iter().copied() {
-                let Some(port_data) = doc.port(port) else {
-                    continue;
-                };
-                let port_view = projection.port_view(port);
-                let offset = port_view.map_or(Vec2::ZERO, |view| view.anchor_offset);
-
-                let (count, index, x) = match port_data.direction {
-                    PortDirection::Input => {
-                        input_index += 1;
-                        (input_count, input_index, node_view.origin.x)
-                    }
-                    PortDirection::Output => {
-                        output_index += 1;
-                        (
-                            output_count,
-                            output_index,
-                            node_view.origin.x + node_view.size.width,
-                        )
-                    }
-                };
-                let y = distributed_edge(node_view.origin.y, node_view.size.height, index, count);
-                self.port_anchors.insert(port, Point::new(x, y) + offset);
-            }
-        }
+        doc.iter_nodes()
+            .map(|(node, _)| self.update_port_anchors_for_node(doc, projection, node))
+            .sum()
     }
 
     fn rebuild_port_anchors_targeted<N, P, E, NV, PV, EV>(
@@ -604,18 +624,18 @@ impl GraphComputed {
         doc: &GraphDoc<N, P, E>,
         projection: &GraphProjection<NV, PV, EV>,
         targets: &TargetedGeometry,
-    ) {
+    ) -> usize {
+        let mut ports = 0;
         for node in targets.nodes.iter().copied() {
-            self.update_port_anchors_for_node(doc, projection, node);
+            ports += self.update_port_anchors_for_node(doc, projection, node);
         }
         for port in targets.ports.iter().copied() {
-            if doc
-                .port(port)
-                .is_none_or(|data| projection.node_view(data.owner).is_none())
-            {
+            if !doc.contains_port(port) {
                 self.port_anchors.remove(&port);
+                ports += 1;
             }
         }
+        ports
     }
 
     fn rebuild_edge_routes<N, P, E, NV, PV, EV, R>(
@@ -687,18 +707,18 @@ impl GraphComputed {
         doc: &GraphDoc<N, P, E>,
         projection: &GraphProjection<NV, PV, EV>,
         node: NodeId,
-    ) {
+    ) -> usize {
         let Some(node_view) = projection.node_view(node) else {
             if let Some(ports) = doc.node_ports(node) {
                 for port in ports {
                     self.port_anchors.remove(port);
                 }
             }
-            return;
+            return doc.node_ports(node).map_or(0, <[PortId]>::len);
         };
 
         let Some(ports) = doc.node_ports(node) else {
-            return;
+            return 0;
         };
         let input_count = ports
             .iter()
@@ -735,6 +755,7 @@ impl GraphComputed {
             let y = distributed_edge(node_view.origin.y, node_view.size.height, index, count);
             self.port_anchors.insert(port, Point::new(x, y) + offset);
         }
+        ports.len()
     }
 
     fn update_edge_route<N, P, E, NV, PV, EV, R>(

@@ -46,6 +46,9 @@ Hosts can also provide a [`PortCompatibility`] policy to drive edge-creation
 previews and optional connection validation without pushing a type system
 into the crate itself. Policies receive a [`ConnectionContext`] so they can
 inspect endpoint metadata and existing topology.
+Observers report live [`GraphSize`] separately from phase-local entity visits
+and actual router calls. Preview routing has its own phase; visibility reports
+its full scan even when anchor and route derivation were targeted.
 
 The crate intentionally does **not** own rendering, widget policy, graph
 execution, or application-specific node semantics.
