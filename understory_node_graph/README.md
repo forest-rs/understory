@@ -143,6 +143,28 @@ preserving its document-local entity handles. Those handles are not durable
 application identities. Use [`GraphComputed::reset`] to clear realized state
 explicitly without discarding allocated table capacity.
 
+## Computed result changes
+
+`rebuild_with_changes` and `rebuild_with_compatibility_and_changes` return an
+owned `ComputedChanges` report. The existing boolean rebuild methods remain
+available. Source receipts certify the input transition; result reports list
+actual changed/removed node bounds, socket anchors and routes, visible-set
+entries/exits, and preview changes. A phase can run and produce an empty report.
+Targeted derivation compares only the affected geometry; it does not copy or
+compare a complete geometry snapshot. Visibility still scans its inputs, then
+merges the old and new membership lists.
+
+Bind each retained host mapping to one computed cache and apply its reports in
+order, consuming updated values before another rebuild. If `before` does not
+match the mapping's last applied `after`, resynchronize from the current
+snapshot. A `reset` report instead establishes a complete new baseline; discard
+the old mapping first. Initialization, cache reset, document replacement and
+recovery from an interrupted rebuild use this path. There is no result journal.
+
+Results use world coordinates. Metadata, selection styling and changes to the
+world-to-view transform remain host responsibilities. Panning can require new
+screen positions even when world geometry and visible membership are unchanged.
+
 ## Socket and floating-surface anchors
 
 [`PortAnchor::Automatic`] retains distributed side-of-node placement.

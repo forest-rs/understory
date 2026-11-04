@@ -12,6 +12,7 @@ use kurbo::{Point, Rect, Vec2};
 
 use crate::change::SourceToken;
 use crate::compatibility::{AllowAllPortConnections, PortCompatibility};
+use crate::computed_changes::{ComputedChanges, GeometryChanges, VisibilityChanges};
 use crate::element::HitTarget;
 use crate::graph::{GraphDoc, PortDirection};
 use crate::ids::{EdgeId, NodeId, PortId};
@@ -79,7 +80,7 @@ pub struct GraphComputed {
 /// This appears while [`InteractionState::CreateEdge`] is active. A renderer can
 /// draw the route exactly like a normal edge while styling the target according
 /// to whether a hovered port is compatible.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct EdgePreview {
     /// Source/output port that started the gesture.
     pub from: PortId,
@@ -310,6 +311,81 @@ impl GraphComputed {
         C: PortCompatibility<N, P, E>,
         O: GraphDeriveObserver,
     {
+        self.rebuild_with_compatibility_and_changes(
+            doc,
+            projection,
+            session,
+            invalidation,
+            router,
+            compatibility,
+            observer,
+        )
+        .rebuilt()
+    }
+
+    /// Rebuilds with the default compatibility policy and returns actual result changes.
+    ///
+    /// Unlike derive metrics, unchanged values are omitted even when a phase ran.
+    /// See [`ComputedChanges`] for baseline, ordering and coordinate-space rules.
+    pub fn rebuild_with_changes<N, P, E, NV, PV, EV, R, O>(
+        &mut self,
+        doc: &GraphDoc<N, P, E>,
+        projection: &GraphProjection<NV, PV, EV>,
+        session: &GraphSession,
+        invalidation: &mut GraphInvalidation,
+        router: &R,
+        observer: &mut O,
+    ) -> ComputedChanges
+    where
+        R: EdgeRouter,
+        O: GraphDeriveObserver,
+    {
+        self.rebuild_with_compatibility_and_changes(
+            doc,
+            projection,
+            session,
+            invalidation,
+            router,
+            &AllowAllPortConnections,
+            observer,
+        )
+    }
+
+    /// Rebuilds with host compatibility and returns actual result changes.
+    ///
+    /// Consume the report before the next rebuild, querying updated geometry
+    /// from this cache. A report contains no source metadata or selection changes.
+    /// See [`ComputedChanges`] for reset and revision-gap handling.
+    pub fn rebuild_with_compatibility_and_changes<N, P, E, NV, PV, EV, R, C, O>(
+        &mut self,
+        doc: &GraphDoc<N, P, E>,
+        projection: &GraphProjection<NV, PV, EV>,
+        session: &GraphSession,
+        invalidation: &mut GraphInvalidation,
+        router: &R,
+        compatibility: &C,
+        observer: &mut O,
+    ) -> ComputedChanges
+    where
+        R: EdgeRouter,
+        C: PortCompatibility<N, P, E>,
+        O: GraphDeriveObserver,
+    {
+        let reset = !self.initialized || self.doc_identity.as_ref() != Some(&doc.identity.token());
+        let mut changes = ComputedChanges {
+            before: self.revision,
+            reset,
+            ..ComputedChanges::default()
+        };
+        if reset {
+            self.node_bounds.clear();
+            self.port_anchors.clear();
+            self.edge_routes.clear();
+            self.visible_nodes.clear();
+            self.visible_edges.clear();
+            // A reset also tells the host to discard a previous preview.
+            self.preview = None;
+        }
         let graph_size = GraphSize {
             nodes: doc.node_count(),
             ports: doc.port_count(),
@@ -340,6 +416,12 @@ impl GraphComputed {
             || invalidation.has_cause(GraphInvalidationCause::Visibility);
         let preview_dirty = geometry_dirty || visibility_dirty;
 
+        // If a host catches a router/observer panic, no report reached its
+        // mirror. The next successful rebuild must establish a new baseline.
+        if geometry_dirty || visibility_dirty || preview_dirty {
+            self.initialized = false;
+        }
+
         let counted_router = CountedRouter {
             inner: router,
             calls: Cell::new(0),
@@ -355,9 +437,11 @@ impl GraphComputed {
             };
             observer.derive_begin(DerivePhase::NodeBounds);
             match &geometry_plan {
-                GeometryRebuild::Full => self.rebuild_node_bounds(doc, projection),
+                GeometryRebuild::Full => {
+                    self.rebuild_node_bounds(doc, projection, &mut changes.nodes);
+                }
                 GeometryRebuild::Targeted(targets) => {
-                    self.rebuild_node_bounds_targeted(doc, projection, targets);
+                    self.rebuild_node_bounds_targeted(doc, projection, targets, &mut changes.nodes);
                 }
             }
             observer.derive_end(
@@ -371,9 +455,11 @@ impl GraphComputed {
             );
             observer.derive_begin(DerivePhase::PortAnchors);
             let ports = match &geometry_plan {
-                GeometryRebuild::Full => self.rebuild_port_anchors(doc, projection),
+                GeometryRebuild::Full => {
+                    self.rebuild_port_anchors(doc, projection, &mut changes.ports)
+                }
                 GeometryRebuild::Targeted(targets) => {
-                    self.rebuild_port_anchors_targeted(doc, projection, targets)
+                    self.rebuild_port_anchors_targeted(doc, projection, targets, &mut changes.ports)
                 }
             };
             observer.derive_end(
@@ -388,9 +474,17 @@ impl GraphComputed {
             );
             observer.derive_begin(DerivePhase::EdgeRouting);
             match &geometry_plan {
-                GeometryRebuild::Full => self.rebuild_edge_routes(doc, projection, &counted_router),
+                GeometryRebuild::Full => {
+                    self.rebuild_edge_routes(doc, projection, &counted_router, &mut changes.edges);
+                }
                 GeometryRebuild::Targeted(targets) => {
-                    self.rebuild_edge_routes_targeted(doc, projection, &counted_router, targets);
+                    self.rebuild_edge_routes_targeted(
+                        doc,
+                        projection,
+                        &counted_router,
+                        targets,
+                        &mut changes.edges,
+                    );
                 }
             }
             observer.derive_end(
@@ -412,12 +506,14 @@ impl GraphComputed {
                 edges: self.edge_routes.len(),
                 ..DeriveMetrics::default()
             };
-            self.rebuild_visibility(session);
+            self.rebuild_visibility(session, &mut changes);
             observer.derive_end(DerivePhase::Visibility, metrics);
         }
         if preview_dirty {
             observer.derive_begin(DerivePhase::EdgePreview);
+            let previous = self.preview.take();
             self.rebuild_preview(doc, session, &counted_router, compatibility);
+            changes.preview_changed = previous != self.preview;
             observer.derive_end(
                 DerivePhase::EdgePreview,
                 DeriveMetrics {
@@ -450,7 +546,14 @@ impl GraphComputed {
             invalidation.clear(GraphInvalidationCause::Viewport);
             invalidation.clear(GraphInvalidationCause::Visibility);
         }
-        rebuilt
+        changes.after = self.revision;
+        changes.nodes.updated.sort_unstable();
+        changes.nodes.removed.sort_unstable();
+        changes.ports.updated.sort_unstable();
+        changes.ports.removed.sort_unstable();
+        changes.edges.updated.sort_unstable();
+        changes.edges.removed.sort_unstable();
+        changes
     }
 
     fn geometry_rebuild_plan<N, P, E, NV, PV, EV>(
@@ -577,11 +680,18 @@ impl GraphComputed {
         &mut self,
         doc: &GraphDoc<N, P, E>,
         projection: &GraphProjection<NV, PV, EV>,
+        changes: &mut GeometryChanges<NodeId>,
     ) {
-        self.node_bounds.clear();
+        self.node_bounds.retain(|node, _| {
+            let keep = doc.contains_node(*node) && projection.node_view(*node).is_some();
+            if !keep {
+                changes.removed.push(*node);
+            }
+            keep
+        });
         for (node, _) in doc.iter_nodes() {
             if let Some(view) = projection.node_view(node) {
-                self.node_bounds.insert(node, view.rect());
+                update_cached(&mut self.node_bounds, node, Some(view.rect()), changes);
             }
         }
     }
@@ -591,20 +701,14 @@ impl GraphComputed {
         doc: &GraphDoc<N, P, E>,
         projection: &GraphProjection<NV, PV, EV>,
         targets: &TargetedGeometry,
+        changes: &mut GeometryChanges<NodeId>,
     ) {
         for node in targets.nodes.iter().copied() {
-            if !doc.contains_node(node) {
-                self.node_bounds.remove(&node);
-                continue;
-            }
-            match projection.node_view(node) {
-                Some(view) => {
-                    self.node_bounds.insert(node, view.rect());
-                }
-                None => {
-                    self.node_bounds.remove(&node);
-                }
-            }
+            let bounds = doc
+                .contains_node(node)
+                .then(|| projection.node_view(node).map(|view| view.rect()))
+                .flatten();
+            update_cached(&mut self.node_bounds, node, bounds, changes);
         }
     }
 
@@ -612,10 +716,19 @@ impl GraphComputed {
         &mut self,
         doc: &GraphDoc<N, P, E>,
         projection: &GraphProjection<NV, PV, EV>,
+        changes: &mut GeometryChanges<PortId>,
     ) -> usize {
-        self.port_anchors.clear();
+        self.port_anchors.retain(|port, _| {
+            let keep = doc
+                .port(*port)
+                .is_some_and(|data| projection.node_view(data.owner).is_some());
+            if !keep {
+                changes.removed.push(*port);
+            }
+            keep
+        });
         doc.iter_nodes()
-            .map(|(node, _)| self.update_port_anchors_for_node(doc, projection, node))
+            .map(|(node, _)| self.update_port_anchors_for_node(doc, projection, node, changes))
             .sum()
     }
 
@@ -624,14 +737,15 @@ impl GraphComputed {
         doc: &GraphDoc<N, P, E>,
         projection: &GraphProjection<NV, PV, EV>,
         targets: &TargetedGeometry,
+        changes: &mut GeometryChanges<PortId>,
     ) -> usize {
         let mut ports = 0;
         for node in targets.nodes.iter().copied() {
-            ports += self.update_port_anchors_for_node(doc, projection, node);
+            ports += self.update_port_anchors_for_node(doc, projection, node, changes);
         }
         for port in targets.ports.iter().copied() {
             if !doc.contains_port(port) {
-                self.port_anchors.remove(&port);
+                update_cached(&mut self.port_anchors, port, None, changes);
                 ports += 1;
             }
         }
@@ -643,28 +757,19 @@ impl GraphComputed {
         doc: &GraphDoc<N, P, E>,
         projection: &GraphProjection<NV, PV, EV>,
         router: &R,
+        changes: &mut GeometryChanges<EdgeId>,
     ) where
         R: EdgeRouter,
     {
-        self.edge_routes.clear();
-        for (edge, edge_data) in doc.iter_edges() {
-            if matches!(projection.edge_view(edge), Some(view) if view.hidden) {
-                continue;
+        self.edge_routes.retain(|edge, _| {
+            let keep = doc.contains_edge(*edge);
+            if !keep {
+                changes.removed.push(*edge);
             }
-            let Some(output_anchor) = self.port_anchors.get(&edge_data.output).copied() else {
-                continue;
-            };
-            let Some(input_anchor) = self.port_anchors.get(&edge_data.input).copied() else {
-                continue;
-            };
-            let route = router.route(
-                RouteRequest::Edge(edge),
-                &RouteContext {
-                    output_anchor,
-                    input_anchor,
-                },
-            );
-            self.edge_routes.insert(edge, route);
+            keep
+        });
+        for (edge, _) in doc.iter_edges() {
+            self.update_edge_route(doc, projection, router, edge, changes);
         }
     }
 
@@ -674,17 +779,19 @@ impl GraphComputed {
         projection: &GraphProjection<NV, PV, EV>,
         router: &R,
         targets: &TargetedGeometry,
+        changes: &mut GeometryChanges<EdgeId>,
     ) where
         R: EdgeRouter,
     {
         for edge in targets.edges.iter().copied() {
-            self.update_edge_route(doc, projection, router, edge);
+            self.update_edge_route(doc, projection, router, edge, changes);
         }
     }
 
-    fn rebuild_visibility(&mut self, session: &GraphSession) {
+    fn rebuild_visibility(&mut self, session: &GraphSession, changes: &mut ComputedChanges) {
         let visible_world = session.visible_world_rect();
-
+        let previous_nodes = self.visible_nodes.clone();
+        let previous_edges = self.visible_edges.clone();
         self.visible_nodes.clear();
         self.visible_nodes.extend(
             self.node_bounds
@@ -692,7 +799,6 @@ impl GraphComputed {
                 .filter_map(|(node, bounds)| intersects(*bounds, visible_world).then_some(*node)),
         );
         self.visible_nodes.sort_by_key(|node| node.index());
-
         self.visible_edges.clear();
         self.visible_edges.extend(
             self.edge_routes.iter().filter_map(|(edge, route)| {
@@ -700,6 +806,10 @@ impl GraphComputed {
             }),
         );
         self.visible_edges.sort_by_key(|edge| edge.index());
+        changes.visible_nodes =
+            membership_changes(&previous_nodes, &self.visible_nodes, |id| id.index());
+        changes.visible_edges =
+            membership_changes(&previous_edges, &self.visible_edges, |id| id.index());
     }
 
     fn update_port_anchors_for_node<N, P, E, NV, PV, EV>(
@@ -707,33 +817,26 @@ impl GraphComputed {
         doc: &GraphDoc<N, P, E>,
         projection: &GraphProjection<NV, PV, EV>,
         node: NodeId,
+        changes: &mut GeometryChanges<PortId>,
     ) -> usize {
         let Some(node_view) = projection.node_view(node) else {
             if let Some(ports) = doc.node_ports(node) {
                 for port in ports {
-                    self.port_anchors.remove(port);
+                    update_cached(&mut self.port_anchors, *port, None, changes);
                 }
             }
             return doc.node_ports(node).map_or(0, <[PortId]>::len);
         };
-
         let Some(ports) = doc.node_ports(node) else {
             return 0;
         };
-        let input_count = ports
-            .iter()
-            .filter(|port| matches!(doc.port(**port), Some(data) if data.direction == PortDirection::Input))
-            .count();
-        let output_count = ports
-            .iter()
-            .filter(|port| matches!(doc.port(**port), Some(data) if data.direction == PortDirection::Output))
-            .count();
+        let input_count = ports.iter().filter(|port| matches!(doc.port(**port), Some(data) if data.direction == PortDirection::Input)).count();
+        let output_count = ports.iter().filter(|port| matches!(doc.port(**port), Some(data) if data.direction == PortDirection::Output)).count();
         let mut input_index = 0_usize;
         let mut output_index = 0_usize;
-
         for port in ports.iter().copied() {
             let Some(port_data) = doc.port(port) else {
-                self.port_anchors.remove(&port);
+                update_cached(&mut self.port_anchors, port, None, changes);
                 continue;
             };
             let port_view = projection.port_view(port);
@@ -757,7 +860,7 @@ impl GraphComputed {
                 PortAnchor::Automatic => Point::new(x, y),
                 PortAnchor::NodeLocal(point) => node_view.origin + point.to_vec2(),
             };
-            self.port_anchors.insert(port, anchor + offset);
+            update_cached(&mut self.port_anchors, port, Some(anchor + offset), changes);
         }
         ports.len()
     }
@@ -768,33 +871,26 @@ impl GraphComputed {
         projection: &GraphProjection<NV, PV, EV>,
         router: &R,
         edge: EdgeId,
+        changes: &mut GeometryChanges<EdgeId>,
     ) where
         R: EdgeRouter,
     {
-        if matches!(projection.edge_view(edge), Some(view) if view.hidden) {
-            self.edge_routes.remove(&edge);
-            return;
-        }
-        let Some(edge_data) = doc.edge(edge) else {
-            self.edge_routes.remove(&edge);
-            return;
-        };
-        let Some(output_anchor) = self.port_anchors.get(&edge_data.output).copied() else {
-            self.edge_routes.remove(&edge);
-            return;
-        };
-        let Some(input_anchor) = self.port_anchors.get(&edge_data.input).copied() else {
-            self.edge_routes.remove(&edge);
-            return;
-        };
-        let route = router.route(
-            RouteRequest::Edge(edge),
-            &RouteContext {
-                output_anchor,
-                input_anchor,
-            },
-        );
-        self.edge_routes.insert(edge, route);
+        let route = (|| {
+            if matches!(projection.edge_view(edge), Some(view) if view.hidden) {
+                return None;
+            }
+            let data = doc.edge(edge)?;
+            let output_anchor = self.port_anchors.get(&data.output).copied()?;
+            let input_anchor = self.port_anchors.get(&data.input).copied()?;
+            Some(router.route(
+                RouteRequest::Edge(edge),
+                &RouteContext {
+                    output_anchor,
+                    input_anchor,
+                },
+            ))
+        })();
+        update_cached(&mut self.edge_routes, edge, route, changes);
     }
 
     fn hit_test_port<N, P, E, NV, PV, EV>(
@@ -959,6 +1055,61 @@ impl GraphComputed {
         }?;
         Some((port, compatible))
     }
+}
+
+fn update_cached<I: Copy + Eq + core::hash::Hash, V: PartialEq>(
+    cache: &mut HashMap<I, V>,
+    id: I,
+    value: Option<V>,
+    changes: &mut GeometryChanges<I>,
+) {
+    match value {
+        Some(value) => {
+            if cache.get(&id) != Some(&value) {
+                cache.insert(id, value);
+                changes.updated.push(id);
+            }
+        }
+        None => {
+            if cache.remove(&id).is_some() {
+                changes.removed.push(id);
+            }
+        }
+    }
+}
+
+// Visible ids are ordered by arena index, not by their generational handle.
+// Reuse of the same slot must therefore produce an exit and an entry.
+fn membership_changes<I: Copy + Eq>(
+    before: &[I],
+    after: &[I],
+    index: impl Fn(I) -> u32,
+) -> VisibilityChanges<I> {
+    let mut changes = VisibilityChanges::default();
+    let (mut old, mut new) = (0, 0);
+    while old < before.len() && new < after.len() {
+        match index(before[old]).cmp(&index(after[new])) {
+            Ordering::Less => {
+                changes.exited.push(before[old]);
+                old += 1;
+            }
+            Ordering::Greater => {
+                changes.entered.push(after[new]);
+                new += 1;
+            }
+            Ordering::Equal => {
+                if before[old] != after[new] {
+                    changes.exited.push(before[old]);
+                    changes.entered.push(after[new]);
+                }
+                old += 1;
+                new += 1;
+            }
+        }
+    }
+    changes.exited.extend_from_slice(&before[old..]);
+    changes.entered.extend_from_slice(&after[new..]);
+    changes
 }
 
 fn intersects(a: Rect, b: Rect) -> bool {

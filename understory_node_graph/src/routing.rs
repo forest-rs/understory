@@ -42,7 +42,7 @@ pub struct RouteContext {
 /// Renderers can draw `points` as a polyline or use them as control data for a
 /// richer path. The `bounds` field lets visibility and hit-test code avoid
 /// recomputing extents for every frame.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct RoutedEdge {
     /// Polyline control points in world space.
     pub points: Vec<Point>,
