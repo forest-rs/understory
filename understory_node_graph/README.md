@@ -109,6 +109,57 @@ assert_eq!(computed.visible_nodes(), &[node]);
 assert!(computed.hit_test_world(&doc, &projection, Point::new(110.0, 90.0)).is_some());
 ```
 
+## Scoped edits and cache affinity
+
+A normal setter is safe but does not provide coverage for a targeted derive.
+Use scoped edits on hot paths and record every receipt, in order, in each
+consuming cache's invalidation state:
+
+```rust
+use kurbo::{Point, Rect, Size, Vec2};
+use understory_node_graph::*;
+let mut doc = GraphDoc::<(), (), ()>::new();
+let node = doc.add_node(NodeData::default());
+let mut projection = GraphProjection::<(), (), ()>::new();
+projection.set_node_view(node, NodeView::new(Point::ZERO, Size::new(80.0, 40.0), ()));
+let session = GraphSession::new(Rect::new(0.0, 0.0, 800.0, 600.0));
+let mut computed = GraphComputed::new();
+let mut invalidation = GraphInvalidation::new();
+computed.rebuild(&doc, &projection, &session, &mut invalidation,
+    &StraightEdgeRouter, &mut NoopGraphDeriveObserver);
+let (_, changes) = projection.edit(|edit| edit.translate_node(node, Vec2::new(20.0, 0.0)));
+invalidation.record(&changes);
+computed.rebuild(&doc, &projection, &session, &mut invalidation,
+    &StraightEdgeRouter, &mut NoopGraphDeriveObserver);
+assert_eq!(computed.node_bounds(node).unwrap().x0, 20.0);
+```
+
+Receipts record applied mutations; they do not make a transaction atomic or
+roll back rejected application edits. Validate application policy first.
+Sources retain no change history. A receipt can be cloned for independent
+consumers; a missing receipt, foreign instance or incomplete revision range
+causes full derivation. Cloning a source gives it a new cache identity while
+preserving its document-local entity handles. Those handles are not durable
+application identities. Use [`GraphComputed::reset`] to clear realized state
+explicitly without discarding allocated table capacity.
+
+## Socket and floating-surface anchors
+
+[`PortAnchor::Automatic`] retains distributed side-of-node placement.
+[`PortAnchor::NodeLocal`] directly specifies a socket point, including points
+outside the node rectangle; sibling insertion does not reposition it.
+[`PortView::anchor_offset`] nudges either resolved anchor.
+
+`understory_anchor` has a separate responsibility: placing floating surfaces
+around a point or rectangle, with collision and fallback policy. A host can
+convert [`GraphComputed::node_bounds`] or [`GraphComputed::port_anchor`] through
+its viewport and pass the result to that resolver for an inspector or tooltip.
+No graph-specific hook or dependency is needed for this composition.
+
+Routers receive [`RouteRequest::Edge`] for committed edges and
+[`RouteRequest::Preview`] for gestures, whose source and optional target ports
+are explicit. Preview requests never carry a fabricated edge identity.
+
 ## Intentional v0 limits
 
 This crate starts with nodes, ports, and edges only. It deliberately defers:

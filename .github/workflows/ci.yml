@@ -23,6 +23,7 @@ env:
     -p understory_guide
     -p understory_index
     -p understory_inspector
+    -p understory_node_graph
     -p understory_outline
     -p understory_presentation
     -p understory_precise_hit
