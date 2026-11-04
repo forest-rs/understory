@@ -390,3 +390,43 @@ fn observer_reports_work_separately_from_population_and_counts_real_router_calls
     ));
     assert!(work.0.is_empty());
 }
+
+#[test]
+fn explicit_socket_anchors_follow_the_node_without_cancelling_automatic_layout() {
+    let mut f = Fixture::new();
+    let mut view = PortView::new(());
+    view.anchor = PortAnchor::NodeLocal(Point::new(-32., 10.));
+    view.anchor_offset = (3., 4.).into();
+    let (_, changes) = f
+        .projection
+        .edit(|edit| edit.set_port_view(f.ports[0], view));
+    f.invalidation.record(&changes);
+    f.rebuild();
+    assert_eq!(
+        f.computed.port_anchor(f.ports[0]),
+        Some(Point::new(-29., 14.))
+    );
+    assert_eq!(f.router.0.get(), 1);
+    f.agrees_with_fresh();
+    let (port, changes) = f.doc.edit(|edit| {
+        edit.add_port(f.nodes[0], PortDirection::Output, ())
+            .unwrap()
+    });
+    f.ports.push(port);
+    f.invalidation.record(&changes);
+    f.rebuild();
+    assert_eq!(
+        f.computed.port_anchor(f.ports[0]),
+        Some(Point::new(-29., 14.))
+    );
+    let (_, changes) = f
+        .projection
+        .edit(|edit| edit.translate_node(f.nodes[0], (50., 20.).into()));
+    f.invalidation.record(&changes);
+    f.rebuild();
+    f.agrees_with_fresh();
+    assert_eq!(
+        f.computed.port_anchor(f.ports[0]),
+        Some(Point::new(21., 34.))
+    );
+}

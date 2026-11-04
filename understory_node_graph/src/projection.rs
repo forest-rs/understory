@@ -70,7 +70,9 @@ impl<M> NodeView<M> {
 /// interaction radius without changing the semantic port.
 #[derive(Clone, Debug)]
 pub struct PortView<M = ()> {
-    /// Additive world-space offset applied after automatic anchor placement.
+    /// Automatic edge distribution or an explicit point relative to the node origin.
+    pub anchor: PortAnchor,
+    /// Additive world-space offset applied after resolving `anchor`.
     pub anchor_offset: Vec2,
     /// Hit radius used by the default hit-test surface.
     ///
@@ -89,11 +91,26 @@ impl<M> PortView<M> {
     #[must_use]
     pub fn new(meta: M) -> Self {
         Self {
+            anchor: PortAnchor::Automatic,
             anchor_offset: Vec2::ZERO,
             hit_radius: 8.0,
             meta,
         }
     }
+}
+
+/// How a projected port is anchored to its owning node.
+///
+/// Socket geometry belongs to the projection. Floating inspectors and tooltips
+/// can independently use `understory_anchor` with computed world/view geometry;
+/// floating-surface collision policy does not determine socket placement.
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+pub enum PortAnchor {
+    /// Distribute ports along the input/output edge according to sibling order.
+    #[default]
+    Automatic,
+    /// A point in node-local coordinates, including points outside its bounds.
+    NodeLocal(Point),
 }
 
 /// Per-edge presentation data for one projection.

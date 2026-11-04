@@ -17,7 +17,7 @@ use crate::graph::{GraphDoc, PortDirection};
 use crate::ids::{EdgeId, NodeId, PortId};
 use crate::invalidation::{GraphInvalidation, GraphInvalidationCause, InvalidationTarget};
 use crate::observe::{DeriveMetrics, DeriveMode, DerivePhase, GraphDeriveObserver, GraphSize};
-use crate::projection::GraphProjection;
+use crate::projection::{GraphProjection, PortAnchor};
 use crate::revision::Revision;
 use crate::routing::{EdgeRouter, RouteContext, RoutedEdge};
 use crate::session::{GraphSession, InteractionState};
@@ -753,7 +753,11 @@ impl GraphComputed {
                 }
             };
             let y = distributed_edge(node_view.origin.y, node_view.size.height, index, count);
-            self.port_anchors.insert(port, Point::new(x, y) + offset);
+            let anchor = match port_view.map_or(PortAnchor::Automatic, |view| view.anchor) {
+                PortAnchor::Automatic => Point::new(x, y),
+                PortAnchor::NodeLocal(point) => node_view.origin + point.to_vec2(),
+            };
+            self.port_anchors.insert(port, anchor + offset);
         }
         ports.len()
     }

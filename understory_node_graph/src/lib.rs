@@ -150,7 +150,7 @@ pub use invalidation::{
 pub use observe::{
     DeriveMetrics, DeriveMode, DerivePhase, GraphDeriveObserver, GraphSize, NoopGraphDeriveObserver,
 };
-pub use projection::{EdgeView, GraphProjection, NodeView, PortView};
+pub use projection::{EdgeView, GraphProjection, NodeView, PortAnchor, PortView};
 pub use revision::Revision;
 pub use routing::{EdgeRouter, OrthogonalEdgeRouter, RouteContext, RoutedEdge, StraightEdgeRouter};
 pub use session::{GraphSession, InteractionState};
