@@ -16,13 +16,15 @@
 //! - [`GraphComputed`]: derived geometry, visibility, and edge-preview state.
 //!
 //! [`GraphInvalidation`] provides explicit coarse invalidation channels for the
-//! derived phases. The current v0 implementation still recomputes whole phases,
-//! but it does so behind an explicit boundary instead of hiding the work.
-//! When callers provide targeted invalidation without also changing document or
-//! projection revisions, the computed layer narrows anchor and route
-//! recomputation to the affected neighborhood. Document and projection revision
-//! changes force a full geometry rebuild so unmarked source edits cannot be
-//! hidden by a targeted hint.
+//! derived phases. Scoped [`GraphDoc::edit`] and [`GraphProjection::edit`] calls
+//! return [`GraphChanges`] receipts covering complete source revision transitions.
+//! Record them in each view's invalidation state to derive only affected geometry.
+//! Missing, reordered or foreign receipts fall back to a full geometry rebuild;
+//! targeted hints alone cannot hide source mutations. Sources retain no journal.
+//! Cached sources have instance identities: replacing or cloning a source cannot
+//! silently reuse equal revision counters. Each source allocates one shared identity
+//! token, using `Arc` on pointer-atomic targets and `Rc` otherwise; mutations do not
+//! allocate identity tokens. Clones have independent identities and state.
 //! Hosts can also provide a [`PortCompatibility`] policy to drive edge-creation
 //! previews and optional connection validation without pushing a type system
 //! into the crate itself. Policies receive a [`ConnectionContext`] so they can
@@ -114,8 +116,10 @@
 extern crate alloc;
 
 mod arena;
+mod change;
 mod compatibility;
 mod computed;
+mod edit;
 mod element;
 mod graph;
 mod ids;
@@ -126,11 +130,13 @@ mod revision;
 mod routing;
 mod session;
 
+pub use change::{ChangeSource, GraphChanges};
 pub use compatibility::{
     AllowAllPortConnections, ConnectionContext, PortCompatibility, RejectDuplicateConnections,
     SingleInputConnections,
 };
 pub use computed::{EdgePreview, EdgePreviewTarget, GraphComputed};
+pub use edit::{GraphEdit, ProjectionEdit};
 pub use element::HitTarget;
 pub use graph::{ConnectError, EdgeData, GraphDoc, NodeData, PortData, PortDirection};
 pub use ids::{EdgeId, GraphElementId, NodeId, PortId};

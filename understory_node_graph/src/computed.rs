@@ -9,6 +9,7 @@ use core::cmp::Ordering;
 use hashbrown::{HashMap, HashSet};
 use kurbo::{Point, Rect, Vec2};
 
+use crate::change::SourceToken;
 use crate::compatibility::{AllowAllPortConnections, PortCompatibility};
 use crate::element::HitTarget;
 use crate::graph::{GraphDoc, PortDirection};
@@ -36,16 +37,18 @@ const DEFAULT_EDGE_HIT_TOLERANCE: f64 = 6.0;
 /// - edge-creation preview routes,
 /// - and hit-test surfaces.
 ///
-/// The current v0 implementation recomputes whole phases when document or
-/// projection revisions change. When hosts provide targeted invalidation
-/// without changing those source revisions, it can narrow anchor and route
-/// recomputation to the affected neighborhood. This keeps the public API calm
-/// while leaving room for finer-grained backends later.
+/// Source revision changes can use targeted geometry when edit receipts cover
+/// the complete transition. Missing coverage forces a full derive. Replacing
+/// source instances (including clones) also forces a full derive, even if their
+/// revision counters match. Use [`Self::reset`] to discard realized state explicitly.
 ///
 /// `GraphComputed` is a cache, not an owner. If the document, projection, or
 /// session changes, call `rebuild` before using query or hit-test results.
 #[derive(Clone, Debug)]
 pub struct GraphComputed {
+    doc_identity: Option<SourceToken>,
+    projection_identity: Option<SourceToken>,
+    session_identity: Option<SourceToken>,
     node_bounds: HashMap<NodeId, Rect>,
     port_anchors: HashMap<PortId, Point>,
     edge_routes: HashMap<EdgeId, RoutedEdge>,
@@ -101,12 +104,13 @@ enum GeometryRebuild {
 #[derive(Clone, Debug, Default)]
 struct TargetedGeometry {
     nodes: HashSet<NodeId>,
+    ports: HashSet<PortId>,
     edges: HashSet<EdgeId>,
 }
 
 impl TargetedGeometry {
     fn is_empty(&self) -> bool {
-        self.nodes.is_empty() && self.edges.is_empty()
+        self.nodes.is_empty() && self.ports.is_empty() && self.edges.is_empty()
     }
 
     fn include_node<N, P, E>(&mut self, doc: &GraphDoc<N, P, E>, node: NodeId) {
@@ -119,6 +123,7 @@ impl TargetedGeometry {
     }
 
     fn include_port<N, P, E>(&mut self, doc: &GraphDoc<N, P, E>, port: PortId) {
+        self.ports.insert(port);
         if let Some(port_data) = doc.port(port) {
             self.nodes.insert(port_data.owner);
         }
@@ -131,6 +136,9 @@ impl TargetedGeometry {
 impl Default for GraphComputed {
     fn default() -> Self {
         Self {
+            doc_identity: None,
+            projection_identity: None,
+            session_identity: None,
             node_bounds: HashMap::new(),
             port_anchors: HashMap::new(),
             edge_routes: HashMap::new(),
@@ -147,6 +155,21 @@ impl Default for GraphComputed {
 }
 
 impl GraphComputed {
+    /// Discards realized results and source associations while retaining table capacity.
+    /// The next rebuild performs a full derive. Sources and receipts are unaffected.
+    pub fn reset(&mut self) {
+        self.node_bounds.clear();
+        self.port_anchors.clear();
+        self.edge_routes.clear();
+        self.visible_nodes.clear();
+        self.visible_edges.clear();
+        self.preview = None;
+        self.doc_identity = None;
+        self.projection_identity = None;
+        self.session_identity = None;
+        self.initialized = false;
+        self.revision.bump();
+    }
     /// Creates an empty computed-state cache.
     ///
     /// The first [`GraphComputed::rebuild`] performs a full derivation even when
@@ -298,6 +321,7 @@ impl GraphComputed {
         let geometry_dirty = geometry_plan.is_some();
         let visibility_dirty = geometry_dirty
             || !self.initialized
+            || self.session_identity.as_ref() != Some(&session.identity.token())
             || self.session_revision != session.revision()
             || invalidation.has_cause(GraphInvalidationCause::Session)
             || invalidation.has_cause(GraphInvalidationCause::Viewport)
@@ -346,6 +370,9 @@ impl GraphComputed {
         let rebuilt = geometry_dirty || visibility_dirty || preview_dirty;
         if rebuilt {
             self.initialized = true;
+            self.doc_identity = Some(doc.identity.token());
+            self.projection_identity = Some(projection.identity.token());
+            self.session_identity = Some(session.identity.token());
             self.doc_revision = doc.revision();
             self.projection_revision = projection.revision();
             self.session_revision = session.revision();
@@ -377,7 +404,10 @@ impl GraphComputed {
             || invalidation.has_cause(GraphInvalidationCause::Projection)
             || invalidation.has_cause(GraphInvalidationCause::Routing);
 
-        if !self.initialized {
+        if !self.initialized
+            || self.doc_identity.as_ref() != Some(&doc.identity.token())
+            || self.projection_identity.as_ref() != Some(&projection.identity.token())
+        {
             return Some(GeometryRebuild::Full);
         }
 
@@ -385,7 +415,25 @@ impl GraphComputed {
             return None;
         }
 
-        if doc_changed || projection_changed {
+        let covered_document = !doc_changed
+            || invalidation
+                .document_changes
+                .as_ref()
+                .is_some_and(|coverage| {
+                    coverage.covers(&doc.identity.token(), self.doc_revision, doc.revision())
+                });
+        let covered_projection = !projection_changed
+            || invalidation
+                .projection_changes
+                .as_ref()
+                .is_some_and(|coverage| {
+                    coverage.covers(
+                        &projection.identity.token(),
+                        self.projection_revision,
+                        projection.revision(),
+                    )
+                });
+        if !covered_document || !covered_projection {
             return Some(GeometryRebuild::Full);
         }
 
@@ -497,7 +545,6 @@ impl GraphComputed {
                 }
             }
         }
-        self.prune_stale_node_bounds(doc, projection);
     }
 
     fn rebuild_port_anchors<N, P, E, NV, PV, EV>(
@@ -561,7 +608,14 @@ impl GraphComputed {
         for node in targets.nodes.iter().copied() {
             self.update_port_anchors_for_node(doc, projection, node);
         }
-        self.prune_stale_port_anchors(doc, projection);
+        for port in targets.ports.iter().copied() {
+            if doc
+                .port(port)
+                .is_none_or(|data| projection.node_view(data.owner).is_none())
+            {
+                self.port_anchors.remove(&port);
+            }
+        }
     }
 
     fn rebuild_edge_routes<N, P, E, NV, PV, EV, R>(
@@ -606,7 +660,6 @@ impl GraphComputed {
         for edge in targets.edges.iter().copied() {
             self.update_edge_route(doc, projection, router, edge);
         }
-        self.prune_stale_edge_routes(doc, projection);
     }
 
     fn rebuild_visibility(&mut self, session: &GraphSession) {
@@ -717,43 +770,6 @@ impl GraphComputed {
             },
         );
         self.edge_routes.insert(edge, route);
-    }
-
-    fn prune_stale_node_bounds<N, P, E, NV, PV, EV>(
-        &mut self,
-        doc: &GraphDoc<N, P, E>,
-        projection: &GraphProjection<NV, PV, EV>,
-    ) {
-        self.node_bounds
-            .retain(|node, _| doc.contains_node(*node) && projection.node_view(*node).is_some());
-    }
-
-    fn prune_stale_port_anchors<N, P, E, NV, PV, EV>(
-        &mut self,
-        doc: &GraphDoc<N, P, E>,
-        projection: &GraphProjection<NV, PV, EV>,
-    ) {
-        self.port_anchors.retain(|port, _| {
-            let Some(port_data) = doc.port(*port) else {
-                return false;
-            };
-            projection.node_view(port_data.owner).is_some()
-        });
-    }
-
-    fn prune_stale_edge_routes<N, P, E, NV, PV, EV>(
-        &mut self,
-        doc: &GraphDoc<N, P, E>,
-        projection: &GraphProjection<NV, PV, EV>,
-    ) {
-        self.edge_routes.retain(|edge, _| {
-            let Some(edge_data) = doc.edge(*edge) else {
-                return false;
-            };
-            !matches!(projection.edge_view(*edge), Some(view) if view.hidden)
-                && self.port_anchors.contains_key(&edge_data.output)
-                && self.port_anchors.contains_key(&edge_data.input)
-        });
     }
 
     fn hit_test_port<N, P, E, NV, PV, EV>(

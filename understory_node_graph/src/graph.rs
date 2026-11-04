@@ -6,7 +6,9 @@
 use alloc::vec::Vec;
 
 use crate::arena::Arena;
+use crate::change::{ChangeSource, GraphChanges, SourceIdentity};
 use crate::compatibility::{ConnectionContext, PortCompatibility};
+use crate::edit::GraphEdit;
 use crate::ids::{EdgeId, NodeId, PortId};
 use crate::revision::Revision;
 
@@ -112,6 +114,7 @@ pub enum ConnectError {
 /// Use `()` when the graph only needs topology.
 #[derive(Clone, Debug)]
 pub struct GraphDoc<N = (), P = (), E = ()> {
+    pub(crate) identity: SourceIdentity,
     nodes: Arena<NodeId, NodeRecord<N>>,
     ports: Arena<PortId, PortRecord<P>>,
     edges: Arena<EdgeId, EdgeData<E>>,
@@ -121,6 +124,7 @@ pub struct GraphDoc<N = (), P = (), E = ()> {
 impl<N, P, E> Default for GraphDoc<N, P, E> {
     fn default() -> Self {
         Self {
+            identity: SourceIdentity::default(),
             nodes: Arena::new(),
             ports: Arena::new(),
             edges: Arena::new(),
@@ -130,6 +134,36 @@ impl<N, P, E> Default for GraphDoc<N, P, E> {
 }
 
 impl<N, P, E> GraphDoc<N, P, E> {
+    /// Collects complete changes for a scoped edit without retaining a journal.
+    ///
+    /// Record the returned receipt in each view's [`GraphInvalidation`](crate::GraphInvalidation).
+    /// Ordinary mutation methods remain valid and force a full derive if their
+    /// revision transition is not covered. A panic returns no receipt, so a
+    /// partially applied edit also falls back to full derivation; this is not
+    /// an atomic transaction or rollback mechanism.
+    pub fn edit<R>(
+        &mut self,
+        edit: impl FnOnce(&mut GraphEdit<'_, N, P, E>) -> R,
+    ) -> (R, GraphChanges) {
+        let before = self.revision;
+        let identity = self.identity.token();
+        let mut editor = GraphEdit {
+            doc: self,
+            targets: Vec::new(),
+        };
+        let result = edit(&mut editor);
+        let after = editor.doc.revision;
+        (
+            result,
+            GraphChanges {
+                source: ChangeSource::Document,
+                identity,
+                before,
+                after,
+                targets: editor.targets,
+            },
+        )
+    }
     /// Creates an empty graph document.
     ///
     /// A fresh document has no projection data. After inserting nodes or ports,
@@ -384,8 +418,8 @@ impl<N, P, E> GraphDoc<N, P, E> {
         F: FnOnce(&mut N) -> R,
     {
         let record = self.nodes.get_mut(node)?;
-        let result = update(&mut record.data.meta);
         self.revision.bump();
+        let result = update(&mut record.data.meta);
         Some(result)
     }
 
@@ -399,8 +433,8 @@ impl<N, P, E> GraphDoc<N, P, E> {
         F: FnOnce(&mut P) -> R,
     {
         let record = self.ports.get_mut(port)?;
-        let result = update(&mut record.data.meta);
         self.revision.bump();
+        let result = update(&mut record.data.meta);
         Some(result)
     }
 
@@ -414,8 +448,8 @@ impl<N, P, E> GraphDoc<N, P, E> {
         F: FnOnce(&mut E) -> R,
     {
         let edge_data = self.edges.get_mut(edge)?;
-        let result = update(&mut edge_data.meta);
         self.revision.bump();
+        let result = update(&mut edge_data.meta);
         Some(result)
     }
 

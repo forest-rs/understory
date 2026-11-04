@@ -5,6 +5,8 @@
 
 use invalidation::{Channel, InvalidationSet};
 
+use crate::GraphElementId;
+use crate::change::{ChangeSource, Coverage, GraphChanges};
 use crate::ids::{EdgeId, NodeId, PortId};
 
 /// Semantic graph content changed.
@@ -61,7 +63,7 @@ impl GraphInvalidationCause {
 /// A broad target such as [`InvalidationTarget::Graph`] asks derived caches to
 /// rebuild the relevant phase completely. More specific targets let
 /// [`GraphComputed`](crate::GraphComputed) narrow geometry work when source
-/// object revisions have not also changed.
+/// object revisions have not changed or complete edit receipts cover the transition.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum InvalidationTarget {
     /// Whole graph document.
@@ -84,20 +86,51 @@ pub enum InvalidationTarget {
 ///
 /// `GraphInvalidation` is the bridge between host-side invalidation policy and
 /// [`GraphComputed`](crate::GraphComputed). Revisions catch ordinary document,
-/// projection, and session mutations; invalidation adds intent for external
+/// projection, and session mutations; edit receipts cover scoped mutations and
+/// invalidation adds intent for external
 /// state such as routing hints, visibility policy, diagnostics, and any changes
 /// that can be scoped to a node, port, or edge without moving the source
 /// object's revision.
 ///
 /// Hosts can mark broad causes while prototyping and move to targeted helpers
-/// for revision-independent hot paths later. `GraphComputed` clears the causes
+/// for revision-independent hot paths or record complete edit receipts.
+/// `GraphComputed` clears the causes
 /// it consumes during a successful rebuild.
 #[derive(Clone, Debug, Default)]
 pub struct GraphInvalidation {
     set: InvalidationSet<InvalidationTarget>,
+    pub(crate) document_changes: Option<Coverage>,
+    pub(crate) projection_changes: Option<Coverage>,
 }
 
 impl GraphInvalidation {
+    /// Records a complete edit receipt and its affected entities.
+    ///
+    /// Consecutive receipts are composed only when their source instance and
+    /// revision boundaries match. Gaps, reordering and receipts from another
+    /// source cannot hide mutations: computed state falls back to a full derive.
+    /// Record a receipt separately in every view that consumes the edited source.
+    pub fn record(&mut self, changes: &GraphChanges) {
+        if changes.is_empty() {
+            return;
+        }
+        let (coverage, cause) = match changes.source {
+            ChangeSource::Document => (&mut self.document_changes, GraphInvalidationCause::Graph),
+            ChangeSource::Projection => (
+                &mut self.projection_changes,
+                GraphInvalidationCause::Projection,
+            ),
+        };
+        Coverage::append(coverage, changes);
+        for target in changes.targets() {
+            let target = match target {
+                GraphElementId::Node(id) => InvalidationTarget::Node(id),
+                GraphElementId::Port(id) => InvalidationTarget::Port(id),
+                GraphElementId::Edge(id) => InvalidationTarget::Edge(id),
+            };
+            self.mark(cause, target);
+        }
+    }
     /// Creates an empty invalidation state.
     #[must_use]
     pub fn new() -> Self {
@@ -288,6 +321,11 @@ impl GraphInvalidation {
     /// causes after it consumes them.
     pub fn clear(&mut self, cause: GraphInvalidationCause) {
         self.set.clear(cause.channel());
+        match cause {
+            GraphInvalidationCause::Graph => self.document_changes = None,
+            GraphInvalidationCause::Projection => self.projection_changes = None,
+            _ => {}
+        }
     }
 
     /// Clears all invalidation causes.
@@ -296,6 +334,8 @@ impl GraphInvalidation {
     /// synchronizing from scratch.
     pub fn clear_all(&mut self) {
         self.set.clear_all();
+        self.document_changes = None;
+        self.projection_changes = None;
     }
 }
 

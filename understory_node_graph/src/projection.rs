@@ -6,8 +6,11 @@
 use hashbrown::HashMap;
 use kurbo::{Point, Rect, Size, Vec2};
 
+use crate::change::{ChangeSource, GraphChanges, SourceIdentity};
+use crate::edit::ProjectionEdit;
 use crate::ids::{EdgeId, NodeId, PortId};
 use crate::revision::Revision;
+use alloc::vec::Vec;
 
 /// Per-node presentation data for one projection.
 ///
@@ -134,6 +137,7 @@ impl<M> EdgeView<M> {
 /// ignores entries that no longer match live document ids.
 #[derive(Clone, Debug)]
 pub struct GraphProjection<NV = (), PV = (), EV = ()> {
+    pub(crate) identity: SourceIdentity,
     node_views: HashMap<NodeId, NodeView<NV>>,
     port_views: HashMap<PortId, PortView<PV>>,
     edge_views: HashMap<EdgeId, EdgeView<EV>>,
@@ -143,6 +147,7 @@ pub struct GraphProjection<NV = (), PV = (), EV = ()> {
 impl<NV, PV, EV> Default for GraphProjection<NV, PV, EV> {
     fn default() -> Self {
         Self {
+            identity: SourceIdentity::default(),
             node_views: HashMap::new(),
             port_views: HashMap::new(),
             edge_views: HashMap::new(),
@@ -152,6 +157,33 @@ impl<NV, PV, EV> Default for GraphProjection<NV, PV, EV> {
 }
 
 impl<NV, PV, EV> GraphProjection<NV, PV, EV> {
+    /// Collects the complete revision transition of a scoped projection edit.
+    ///
+    /// Receipts can be sent to multiple computed caches. No source-side journal
+    /// is retained. This records changes rather than rolling them back on error.
+    pub fn edit<R>(
+        &mut self,
+        edit: impl FnOnce(&mut ProjectionEdit<'_, NV, PV, EV>) -> R,
+    ) -> (R, GraphChanges) {
+        let before = self.revision;
+        let identity = self.identity.token();
+        let mut editor = ProjectionEdit {
+            projection: self,
+            targets: Vec::new(),
+        };
+        let result = edit(&mut editor);
+        let after = editor.projection.revision;
+        (
+            result,
+            GraphChanges {
+                source: ChangeSource::Projection,
+                identity,
+                before,
+                after,
+                targets: editor.targets,
+            },
+        )
+    }
     /// Creates an empty projection.
     ///
     /// Add node views for every document node that should produce bounds,
@@ -190,8 +222,8 @@ impl<NV, PV, EV> GraphProjection<NV, PV, EV> {
         update: impl FnOnce(&mut NodeView<NV>) -> R,
     ) -> Option<R> {
         let view = self.node_views.get_mut(&node)?;
-        let result = update(view);
         self.revision.bump();
+        let result = update(view);
         Some(result)
     }
 

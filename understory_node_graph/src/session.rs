@@ -7,6 +7,7 @@ use kurbo::{Point, Rect};
 use understory_selection::Selection;
 use understory_view2d::Viewport2D;
 
+use crate::change::SourceIdentity;
 use crate::element::HitTarget;
 use crate::ids::{GraphElementId, NodeId, PortId};
 use crate::revision::Revision;
@@ -64,6 +65,7 @@ pub enum InteractionState {
 /// so its selection and viewport can diverge.
 #[derive(Clone, Debug)]
 pub struct GraphSession {
+    pub(crate) identity: SourceIdentity,
     /// Selection state over graph elements.
     ///
     /// Use [`GraphSession::update_selection`] when mutating selection so the
@@ -95,6 +97,7 @@ impl GraphSession {
     #[must_use]
     pub fn new(view_rect: Rect) -> Self {
         Self {
+            identity: SourceIdentity::default(),
             selection: Selection::new(),
             hover: None,
             focus: None,
@@ -189,9 +192,8 @@ impl GraphSession {
     /// [`Viewport2D`] does not expose its own revision counter, so this bumps
     /// the session revision after every closure call.
     pub fn update_viewport<R>(&mut self, update: impl FnOnce(&mut Viewport2D) -> R) -> R {
-        let result = update(&mut self.viewport);
         self.revision.bump();
-        result
+        update(&mut self.viewport)
     }
 
     /// Returns the current viewport rectangle in world coordinates.
