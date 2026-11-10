@@ -38,6 +38,11 @@ pub enum DockTarget {
         /// Optional insertion index.
         index: Option<usize>,
     },
+    /// Form a tab group in the existing slot of a standalone pane.
+    TabWith {
+        /// Standalone pane tile that will become the group.
+        tile: TileId,
+    },
 }
 
 impl DockTarget {

@@ -620,6 +620,37 @@ fn scale_invariant_split_insertion() {
 }
 
 #[test]
+fn dropping_on_a_standalone_pane_creates_tabs_in_its_slot() {
+    let mut tree = TileTree::from_spec(TileSpec::equal_split(
+        Axis::Horizontal,
+        [TileSpec::pane(PaneId(1)), TileSpec::pane(PaneId(2))],
+    ))
+    .unwrap();
+    let layout = input(600.0);
+    let frame = tree.layout(layout);
+    let tile = frame.panes()[1].tile;
+    let update = drag(
+        &tree,
+        layout,
+        frame.panes()[0].rect.center(),
+        frame.panes()[1].rect.center(),
+    );
+    assert!(
+        matches!(update.proposal, Some(Proposal::Dock(DockProposal::MovePane {
+        pane: PaneId(1), target: DockTarget::TabWith { tile: target },
+    })) if target == tile)
+    );
+    assert_eq!(update.overlay.ghost_rects[0].rect, layout.bounds);
+    commit(&mut tree, layout, &update);
+    assert_eq!(tree.root(), tile);
+    let Some(TileNode::Tabs(tabs)) = tree.node(tile) else {
+        panic!("expected tab group")
+    };
+    assert_eq!(tabs.panes, [PaneId(2), PaneId(1)]);
+    assert_eq!(tabs.panes[tabs.active], PaneId(1));
+}
+
+#[test]
 fn workspace_left_edge_is_distinct_from_the_first_pane_edge() {
     let mut tree = TileTree::from_spec(TileSpec::split(
         Axis::Horizontal,

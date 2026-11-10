@@ -567,6 +567,18 @@ impl TileTree {
                 self.remove_pane_at(location)?;
                 self.insert_tab_pane(group, pane, index)?;
             }
+            DockTarget::TabWith { tile } => {
+                let Some(TileNode::Pane(destination)) = self.get_node(tile) else {
+                    return Err(TileError::InvalidTarget);
+                };
+                let destination = destination.pane;
+                if destination == pane {
+                    return Err(TileError::InvalidTarget);
+                }
+                self.remove_pane_at(location)?;
+                self.set_node(tile, TileNode::tabs(vec![destination]))?;
+                self.insert_tab_pane(tile, pane, None)?;
+            }
             DockTarget::Root => {
                 self.remove_pane_at(location)?;
                 let group = self.push_node(TileNode::tabs(vec![pane]));
@@ -666,6 +678,11 @@ impl TileTree {
                 self.get_node(tile).ok_or(TileError::InvalidTileId)?;
                 Ok(())
             }
+            DockTarget::TabWith { tile } => match self.get_node(tile) {
+                Some(TileNode::Pane(_)) => Ok(()),
+                Some(_) => Err(TileError::InvalidTarget),
+                None => Err(TileError::InvalidTileId),
+            },
             DockTarget::TabInto { group, .. } => match self.get_node(group) {
                 Some(TileNode::Tabs(_)) => Ok(()),
                 Some(_) => Err(TileError::InvalidTarget),
@@ -684,7 +701,9 @@ impl TileTree {
                 self.get_node(tile).ok_or(TileError::InvalidTileId)?;
                 Ok(())
             }
-            DockTarget::TabInto { .. } => Err(TileError::InvalidTarget),
+            DockTarget::TabInto { .. } | DockTarget::TabWith { .. } => {
+                Err(TileError::InvalidTarget)
+            }
         }
     }
 
@@ -728,7 +747,9 @@ impl TileTree {
                 placement,
                 ratio,
             } => self.insert_tile_near(tile, axis, group, placement, ratio),
-            DockTarget::TabInto { .. } => Err(TileError::InvalidTarget),
+            DockTarget::TabInto { .. } | DockTarget::TabWith { .. } => {
+                Err(TileError::InvalidTarget)
+            }
         }
     }
 

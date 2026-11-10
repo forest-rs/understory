@@ -371,7 +371,7 @@ pub(crate) fn dock_policy_rejection(
                 DockTarget::Split {
                     axis, placement, ..
                 } => Some(edge_for_split(axis, placement)),
-                DockTarget::TabInto { .. } => None,
+                DockTarget::TabInto { .. } | DockTarget::TabWith { .. } => None,
             }
         }
         DockProposal::ReorderTab { .. } => None,

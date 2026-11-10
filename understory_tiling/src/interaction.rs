@@ -270,6 +270,7 @@ impl DropTargetId {
                 index: Some(_),
             } => Some(Self::TabBar(group)),
             DockTarget::TabInto { group, index: None } => Some(Self::TabBody(group)),
+            DockTarget::TabWith { tile } => Some(Self::TabBody(tile)),
         }
     }
 
@@ -301,9 +302,9 @@ pub struct DropTargetFrame {
     /// Preview rectangle for overlays.
     ///
     /// This is usually larger than `rect`: the hit zone can be an edge strip
-    /// while the preview shows the pane area that would be created. Edge
-    /// candidates start with an estimate. The active overlay target uses the
-    /// solved placement when available. A tab-bar target uses an insertion marker.
+    /// while the preview shows the pane area that would be created. Edge and
+    /// pane-body candidates use solved placement for the active overlay when
+    /// available. A tab-bar target uses a marker in the original strip.
     pub preview_rect: Rect,
     /// Target priority. Higher values win.
     pub priority: i16,
@@ -798,9 +799,15 @@ fn update_drag(
                     .as_ref()
                     .unwrap_or(tree)
                     .layout(preview_layout.unwrap_or(frame.layout_input));
-                if matches!(target.target, DockTarget::Split { .. } | DockTarget::Root)
-                    && let Some(rect) = solved_drop_rect(&solved, drag.subject)
-                {
+                if let Some(rect) = match target.id {
+                    DropTargetId::Split { .. } => solved_drop_rect(&solved, drag.subject),
+                    DropTargetId::TabBody(tile) => solved
+                        .panes
+                        .iter()
+                        .find(|pane| pane.tile == tile)
+                        .map(|pane| pane_tile_bounds(&solved, pane)),
+                    DropTargetId::TabBar(_) => None,
+                } {
                     candidate.preview_rect = rect;
                 }
                 break (Some(*candidate), Some(proposal), Some(solved));
@@ -1040,25 +1047,27 @@ pub fn drop_targets_for_drag_with_policy(
         }
 
         for pane in &frame.panes {
-            if matches!(tree.node(pane.tile), Some(TileNode::Tabs(_))) {
-                let rect = center_rect(pane.rect, edge_fraction);
-                if rect.width() > 0.0 && rect.height() > 0.0 {
-                    let target = DockTarget::TabInto {
-                        group: pane.tile,
-                        index: None,
-                    };
-                    let rejection = rejection_for(target);
-                    targets.push(DropTargetFrame {
-                        id: DropTargetId::TabBody(pane.tile),
-                        rect,
-                        target,
-                        preview_rect: pane.rect,
-                        priority: 15,
-                        distance: rect_distance(rect, drag.current),
-                        accepts: rejection.is_none(),
-                        rejection,
-                    });
-                }
+            let target = match tree.node(pane.tile) {
+                Some(TileNode::Tabs(_)) => DockTarget::TabInto {
+                    group: pane.tile,
+                    index: None,
+                },
+                Some(TileNode::Pane(_)) => DockTarget::TabWith { tile: pane.tile },
+                _ => continue,
+            };
+            let rect = center_rect(pane.rect, edge_fraction);
+            if rect.width() > 0.0 && rect.height() > 0.0 {
+                let rejection = rejection_for(target);
+                targets.push(DropTargetFrame {
+                    id: DropTargetId::TabBody(pane.tile),
+                    rect,
+                    target,
+                    preview_rect: pane.rect,
+                    priority: 15,
+                    distance: rect_distance(rect, drag.current),
+                    accepts: rejection.is_none(),
+                    rejection,
+                });
             }
         }
     }
@@ -1272,6 +1281,16 @@ fn target_accepts(
     match target {
         DockTarget::Root => true,
         DockTarget::Split { tile, .. } => split_target_accepts(tree, frame, drag, tile),
+        DockTarget::TabWith { tile } => {
+            options.allow_tab_into
+                && match drag.subject {
+                    DragSubject::Pane(pane) => {
+                        source_tile_for_pane(frame, pane).is_some_and(|source| source != tile)
+                    }
+                    DragSubject::Tab { .. } => true,
+                    DragSubject::TabGroup(_) => false,
+                }
+        }
         DockTarget::TabInto { group, index } => {
             if !options.allow_tab_into {
                 return false;
