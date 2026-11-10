@@ -189,10 +189,11 @@ pub use frame::{
 pub use ids::{PaneId, Revision, TileId};
 pub use interaction::{
     DockProposal, DragIntent, DragOptions, DragSession, DragSource, DragSubject, DraggedFrame,
-    DropTargetFrame, DropTargetId, GhostFrame, GhostKind, InteractionOptions, InteractionState,
-    InteractionUpdate, OverlayFrame, OverlayHitRegion, PendingDrag, Proposal, ResizeOptions,
-    ResizeProposal, ResizeSession, begin_interaction, drop_targets_for_drag, pick_drop_target,
-    update_interaction,
+    DropRejection, DropTargetFrame, DropTargetId, GhostFrame, GhostKind, InteractionOptions,
+    InteractionState, InteractionUpdate, OverlayFrame, OverlayHitRegion, PendingDrag, Proposal,
+    ResizeOptions, ResizeProposal, ResizeSession, begin_interaction, drop_targets_for_drag,
+    drop_targets_for_drag_with_policy, pick_drop_target, update_interaction,
+    update_interaction_with_policy,
 };
 pub use kurbo::{Point, Rect, Size};
 pub use model::{

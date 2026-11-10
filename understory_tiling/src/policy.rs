@@ -6,8 +6,9 @@ use alloc::vec::Vec;
 use crate::interaction::op_for_dock_proposal;
 use crate::util::major_length;
 use crate::{
-    Axis, DockProposal, DockTarget, InteractionOptions, InteractionUpdate, LayoutFrame, Placement,
-    Proposal, ResizeOptions, ResizeProposal, Revision, TileError, TileNode, TileOp, TileTree,
+    Axis, DockProposal, DockTarget, DropRejection, InteractionOptions, InteractionUpdate,
+    LayoutFrame, Placement, Proposal, ResizeOptions, ResizeProposal, Revision, TileError, TileNode,
+    TileOp, TileTree,
 };
 
 /// Global permissions for docking operations.
@@ -287,19 +288,23 @@ pub fn validate_proposal(
     if policy.locked_layout {
         return Err(TileError::PolicyRejected);
     }
-    let op = match proposal.clone() {
-        Proposal::Dock(dock) => op_for_dock_proposal(dock)?,
+    let op = match &proposal {
+        Proposal::Dock(dock) => op_for_dock_proposal(dock),
         Proposal::Resize(resize) => {
             let frame = frame.ok_or(TileError::InvalidOperation)?;
-            validate_resize_geometry(tree, frame, &resize, &resize_options)?;
+            validate_resize_geometry(tree, frame, resize, &resize_options)?;
             TileOp::SetSplitShares {
                 split: resize.split,
-                shares: resize.new_major_lengths,
+                shares: resize.new_major_lengths.clone(),
             }
         }
     };
     tree.edited(op.clone())?;
-    validate_policy(&proposal, policy)?;
+    if let Proposal::Dock(dock) = &proposal
+        && dock_policy_rejection(dock, policy).is_some()
+    {
+        return Err(TileError::PolicyRejected);
+    }
     Ok(ValidatedProposal {
         proposal,
         op,
@@ -344,66 +349,51 @@ pub fn commit_proposal(
     Ok(proposal.op)
 }
 
-fn validate_policy(proposal: &Proposal, policy: &DockPolicy) -> Result<(), TileError> {
-    match proposal {
-        Proposal::Dock(dock) => validate_dock_policy(dock, &policy.permissions),
-        Proposal::Resize(_) => Ok(()),
-    }
-}
-
-fn validate_dock_policy(
+pub(crate) fn dock_policy_rejection(
     proposal: &DockProposal,
-    capabilities: &DockPermissions,
-) -> Result<(), TileError> {
-    match proposal {
-        DockProposal::MovePane { target, .. } => {
-            require(capabilities.allow_move)?;
-            validate_target_policy(*target, capabilities)
-        }
-        DockProposal::MoveTabGroup { target, .. } => {
-            require(capabilities.allow_move)?;
-            validate_target_policy(*target, capabilities)
-        }
-        DockProposal::ReorderTab { .. } => {
-            require(capabilities.allow_move && capabilities.allow_tab)
-        }
+    policy: &DockPolicy,
+) -> Option<DropRejection> {
+    let capabilities = &policy.permissions;
+    if policy.locked_layout {
+        return Some(DropRejection::LayoutLocked);
     }
-}
-
-fn validate_target_policy(
-    target: DockTarget,
-    capabilities: &DockPermissions,
-) -> Result<(), TileError> {
-    match target {
-        DockTarget::Root => validate_split_policy(
-            DockTarget::ROOT_AXIS,
-            DockTarget::ROOT_PLACEMENT,
-            capabilities,
-        ),
-        DockTarget::Split {
-            axis, placement, ..
-        } => validate_split_policy(axis, placement, capabilities),
-        DockTarget::TabInto { .. } => require(
-            capabilities.allow_move
-                && capabilities.allow_tab
-                && capabilities.allowed_zones.contains(ZoneSet::TAB),
-        ),
+    if !capabilities.allow_move {
+        return Some(DropRejection::MoveDisabled);
     }
-}
 
-fn validate_split_policy(
-    axis: Axis,
-    placement: Placement,
-    capabilities: &DockPermissions,
-) -> Result<(), TileError> {
-    require(
-        capabilities.allow_move
-            && capabilities.allow_split
-            && capabilities.allowed_zones.contains(ZoneSet::SPLIT)
-            && capabilities
-                .allowed_edges
-                .contains(edge_for_split(axis, placement)),
-    )
+    let edge = match *proposal {
+        DockProposal::MovePane { target, .. } | DockProposal::MoveTabGroup { target, .. } => {
+            match target {
+                DockTarget::Root => Some(edge_for_split(
+                    DockTarget::ROOT_AXIS,
+                    DockTarget::ROOT_PLACEMENT,
+                )),
+                DockTarget::Split {
+                    axis, placement, ..
+                } => Some(edge_for_split(axis, placement)),
+                DockTarget::TabInto { .. } => None,
+            }
+        }
+        DockProposal::ReorderTab { .. } => None,
+    };
+
+    if let Some(edge) = edge {
+        if !capabilities.allow_split {
+            Some(DropRejection::SplitDisabled)
+        } else if !capabilities.allowed_zones.contains(ZoneSet::SPLIT) {
+            Some(DropRejection::ZoneDisabled)
+        } else if !capabilities.allowed_edges.contains(edge) {
+            Some(DropRejection::EdgeDisabled)
+        } else {
+            None
+        }
+    } else if !capabilities.allow_tab {
+        Some(DropRejection::TabDisabled)
+    } else if !capabilities.allowed_zones.contains(ZoneSet::TAB) {
+        Some(DropRejection::ZoneDisabled)
+    } else {
+        None
+    }
 }
 
 fn edge_for_split(axis: Axis, placement: Placement) -> EdgeSet {
@@ -412,14 +402,6 @@ fn edge_for_split(axis: Axis, placement: Placement) -> EdgeSet {
         (Axis::Horizontal, Placement::After) => EdgeSet::RIGHT,
         (Axis::Vertical, Placement::Before) => EdgeSet::TOP,
         (Axis::Vertical, Placement::After) => EdgeSet::BOTTOM,
-    }
-}
-
-fn require(allowed: bool) -> Result<(), TileError> {
-    if allowed {
-        Ok(())
-    } else {
-        Err(TileError::PolicyRejected)
     }
 }
 

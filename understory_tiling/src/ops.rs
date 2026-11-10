@@ -130,7 +130,7 @@ pub enum TileOp {
 /// Returned from [`TileTree::apply`](crate::TileTree::apply), interaction
 /// commits, proposal validation, and snapshot restore when an id, target,
 /// policy, or interaction revision is invalid.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TileError {
     /// The operation referenced a missing tile.

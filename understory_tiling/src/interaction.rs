@@ -7,10 +7,11 @@ use core::cmp::Ordering;
 
 use crate::Placement;
 use crate::frame::hit_test;
+use crate::policy::dock_policy_rejection;
 use crate::util::{major_length, rect_distance};
 use crate::{
-    Axis, DockTarget, HitKind, LayoutFrame, LayoutInput, PaneId, Point, Rect, Revision, Size,
-    SplitChildFrame, TabBarPlacement, TileError, TileId, TileNode, TileOp, TileTree,
+    Axis, DockPolicy, DockTarget, HitKind, LayoutFrame, LayoutInput, PaneId, Point, Rect, Revision,
+    Size, SplitChildFrame, TabBarPlacement, TileError, TileId, TileNode, TileOp, TileTree,
 };
 
 /// High-level drag intent.
@@ -318,6 +319,32 @@ pub struct DropTargetFrame {
     /// may still include non-accepting targets so renderers can display invalid
     /// hover feedback.
     pub accepts: bool,
+    /// Why the candidate cannot accept this drag, if rejected.
+    pub rejection: Option<DropRejection>,
+}
+
+/// Why a generated drop target is unavailable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum DropRejection {
+    /// The subject cannot be placed at this target.
+    IncompatibleSubject,
+    /// Same-group reordering is disabled in the drag options.
+    ReorderDisabled,
+    /// The layout is locked.
+    LayoutLocked,
+    /// Moving or reordering panes is disabled.
+    MoveDisabled,
+    /// Splitting is disabled.
+    SplitDisabled,
+    /// Inserting or reordering tabs is disabled.
+    TabDisabled,
+    /// The destination zone is disabled.
+    ZoneDisabled,
+    /// The destination edge is disabled.
+    EdgeDisabled,
+    /// Applying the proposed edit failed.
+    InvalidOperation(TileError),
 }
 
 /// Preview ghost rectangle.
@@ -675,6 +702,23 @@ pub fn update_interaction(
     point: Point,
     options: &InteractionOptions,
 ) -> InteractionUpdate {
+    update_interaction_with_policy(tree, frame, state, point, options, &DockPolicy::default())
+}
+
+/// Updates an interaction using the same policy used to validate its commit.
+///
+/// Drag candidates expose policy rejection reasons and only eligible proposals
+/// produce placement previews. Validate the update again on pointer-up with
+/// the current policy before committing it.
+#[must_use]
+pub fn update_interaction_with_policy(
+    tree: &TileTree,
+    frame: &LayoutFrame,
+    state: &mut InteractionState,
+    point: Point,
+    options: &InteractionOptions,
+    policy: &DockPolicy,
+) -> InteractionUpdate {
     if frame.revision() != tree.revision() {
         *state = InteractionState::None;
         return InteractionUpdate::default();
@@ -692,6 +736,7 @@ pub fn update_interaction(
                 point,
                 &options.drag,
                 options.preview_layout,
+                policy,
             );
             *state = InteractionState::Drag(drag);
             update
@@ -703,7 +748,12 @@ pub fn update_interaction(
             point,
             &options.drag,
             options.preview_layout,
+            policy,
         ),
+        InteractionState::Resize(resize) if policy.locked_layout => {
+            resize.proposal = None;
+            InteractionUpdate::default()
+        }
         InteractionState::Resize(resize) => update_resize(
             tree,
             frame,
@@ -723,35 +773,49 @@ fn update_drag(
     point: Point,
     options: &DragOptions,
     preview_layout: Option<LayoutInput>,
+    policy: &DockPolicy,
 ) -> InteractionUpdate {
     debug_assert!(point.is_finite(), "point must be finite");
     drag.current = point;
-    let mut targets = drop_targets_for_drag(tree, frame, drag, options);
-    let mut active_frame = pick_drag_target(&targets, drag);
+    let mut targets = drop_targets_for_drag_with_policy(tree, frame, drag, options, policy);
+    let (active_frame, proposal, solved) = loop {
+        let Some(target) = pick_drag_target(&targets, drag) else {
+            break (None, None, None);
+        };
+        let candidate = targets
+            .iter_mut()
+            .find(|candidate| candidate.id == target.id)
+            .expect("selected target came from the candidates");
+        let Some(proposal) = proposal_for_drag(frame, drag, target.target) else {
+            candidate.accepts = false;
+            candidate.rejection = Some(DropRejection::IncompatibleSubject);
+            continue;
+        };
+        match tree.edited(op_for_dock_proposal(&proposal)) {
+            Ok(edited) => {
+                let solved = edited
+                    .as_ref()
+                    .unwrap_or(tree)
+                    .layout(preview_layout.unwrap_or(frame.layout_input));
+                if matches!(target.target, DockTarget::Split { .. } | DockTarget::Root)
+                    && let Some(rect) = solved_drop_rect(&solved, drag.subject)
+                {
+                    candidate.preview_rect = rect;
+                }
+                break (Some(*candidate), Some(proposal), Some(solved));
+            }
+            Err(error) => {
+                candidate.accepts = false;
+                candidate.rejection = Some(DropRejection::InvalidOperation(error));
+            }
+        }
+    };
     let active_target = active_frame.map(|target| target.id);
     let rejected_frame = if active_frame.is_none() {
         pick_drop_target_frame(&targets, point, false)
     } else {
         None
     };
-    let proposal = active_frame.and_then(|target| proposal_for_drag(frame, drag, &target, options));
-    let solved = proposal.as_ref().and_then(|proposal| {
-        preview_for_dock_proposal(tree, proposal, preview_layout.unwrap_or(frame.layout_input))
-    });
-    if let Some(target) = &mut active_frame
-        && matches!(target.target, DockTarget::Split { .. } | DockTarget::Root)
-        && let Some(rect) = solved
-            .as_ref()
-            .and_then(|preview| solved_drop_rect(preview, drag.subject))
-    {
-        target.preview_rect = rect;
-        if let Some(candidate) = targets
-            .iter_mut()
-            .find(|candidate| candidate.id == target.id)
-        {
-            candidate.preview_rect = rect;
-        }
-    }
     let overlay_targets = active_frame
         .into_iter()
         .chain(rejected_frame)
@@ -853,6 +917,21 @@ pub fn drop_targets_for_drag(
     drag: &DragSession,
     options: &DragOptions,
 ) -> Vec<DropTargetFrame> {
+    drop_targets_for_drag_with_policy(tree, frame, drag, options, &DockPolicy::default())
+}
+
+/// Generates drag targets with policy acceptance and rejection reasons.
+///
+/// Use [`update_interaction_with_policy`] to also probe the selected edit and
+/// solve its preview.
+#[must_use]
+pub fn drop_targets_for_drag_with_policy(
+    tree: &TileTree,
+    frame: &LayoutFrame,
+    drag: &DragSession,
+    options: &DragOptions,
+    policy: &DockPolicy,
+) -> Vec<DropTargetFrame> {
     if frame.revision() != tree.revision() || drag.base_revision != tree.revision() {
         return Vec::new();
     }
@@ -866,6 +945,21 @@ pub fn drop_targets_for_drag(
         "DragOptions::tab_insert_threshold must be finite and in 0.0..=1.0",
     );
     let edge_fraction = options.edge_zone_fraction;
+    let rejection_for = |target| {
+        if matches!(target, DockTarget::TabInto { group, index: Some(_) }
+            if matches!(drag.subject, DragSubject::Tab { group: source, .. } if source == group))
+            && !options.allow_reorder_tabs
+        {
+            return Some(DropRejection::ReorderDisabled);
+        }
+        if !target_accepts(tree, frame, drag, target, options) {
+            return Some(DropRejection::IncompatibleSubject);
+        }
+        let Some(proposal) = proposal_for_drag(frame, drag, target) else {
+            return Some(DropRejection::IncompatibleSubject);
+        };
+        dock_policy_rejection(&proposal, policy)
+    };
 
     if options.allow_split
         && let Some(root_rect) = frame_bounds(frame)
@@ -881,7 +975,7 @@ pub fn drop_targets_for_drag(
             } else {
                 25
             },
-            |target| target_accepts(tree, frame, drag, target, options),
+            rejection_for,
         );
     }
 
@@ -895,7 +989,7 @@ pub fn drop_targets_for_drag(
                     drag.current,
                     edge_fraction.min(0.08),
                     27,
-                    |target| target_accepts(tree, frame, drag, target, options),
+                    rejection_for,
                 );
             }
         }
@@ -910,7 +1004,7 @@ pub fn drop_targets_for_drag(
                 drag.current,
                 edge_fraction,
                 25,
-                |target| target_accepts(tree, frame, drag, target, options),
+                rejection_for,
             );
         }
     }
@@ -926,6 +1020,7 @@ pub fn drop_targets_for_drag(
                 group: bar.group,
                 index: Some(index),
             };
+            let rejection = rejection_for(target);
             targets.push(DropTargetFrame {
                 id: DropTargetId::TabBar(bar.group),
                 rect: bar.viewport,
@@ -933,7 +1028,8 @@ pub fn drop_targets_for_drag(
                 preview_rect: marker,
                 priority: 30,
                 distance: rect_distance(bar.viewport, drag.current),
-                accepts: target_accepts(tree, frame, drag, target, options),
+                accepts: rejection.is_none(),
+                rejection,
             });
         }
 
@@ -945,6 +1041,7 @@ pub fn drop_targets_for_drag(
                         group: pane.tile,
                         index: None,
                     };
+                    let rejection = rejection_for(target);
                     targets.push(DropTargetFrame {
                         id: DropTargetId::TabBody(pane.tile),
                         rect,
@@ -952,7 +1049,8 @@ pub fn drop_targets_for_drag(
                         preview_rect: pane.rect,
                         priority: 15,
                         distance: rect_distance(rect, drag.current),
-                        accepts: target_accepts(tree, frame, drag, target, options),
+                        accepts: rejection.is_none(),
+                        rejection,
                     });
                 }
             }
@@ -1010,16 +1108,14 @@ fn pick_drag_target(targets: &[DropTargetFrame], drag: &DragSession) -> Option<D
 fn proposal_for_drag(
     frame: &LayoutFrame,
     drag: &DragSession,
-    target: &DropTargetFrame,
-    options: &DragOptions,
+    target: DockTarget,
 ) -> Option<DockProposal> {
     match drag.subject {
-        DragSubject::Pane(pane) | DragSubject::Tab { pane, .. } => match target.target {
+        DragSubject::Pane(pane) | DragSubject::Tab { pane, .. } => match target {
             DockTarget::TabInto {
                 group,
                 index: Some(gap),
-            } if options.allow_reorder_tabs
-                && matches!(drag.subject, DragSubject::Tab { group: source, .. } if source == group) =>
+            } if matches!(drag.subject, DragSubject::Tab { group: source, .. } if source == group) =>
             {
                 let source = frame
                     .tabs
@@ -1031,24 +1127,18 @@ fn proposal_for_drag(
                     index: gap - usize::from(source.index < gap),
                 })
             }
-            _ => Some(DockProposal::MovePane {
-                pane,
-                target: target.target,
-            }),
+            _ => Some(DockProposal::MovePane { pane, target }),
         },
-        DragSubject::TabGroup(group) => Some(DockProposal::MoveTabGroup {
-            group,
-            target: target.target,
-        }),
+        DragSubject::TabGroup(group) => Some(DockProposal::MoveTabGroup { group, target }),
     }
 }
 
-pub(crate) fn op_for_dock_proposal(proposal: DockProposal) -> Result<TileOp, TileError> {
-    match proposal {
-        DockProposal::MovePane { pane, target } => Ok(TileOp::MovePane { pane, target }),
-        DockProposal::MoveTabGroup { group, target } => Ok(TileOp::MoveTabGroup { group, target }),
+pub(crate) fn op_for_dock_proposal(proposal: &DockProposal) -> TileOp {
+    match *proposal {
+        DockProposal::MovePane { pane, target } => TileOp::MovePane { pane, target },
+        DockProposal::MoveTabGroup { group, target } => TileOp::MoveTabGroup { group, target },
         DockProposal::ReorderTab { group, pane, index } => {
-            Ok(TileOp::ReorderTab { group, pane, index })
+            TileOp::ReorderTab { group, pane, index }
         }
     }
 }
@@ -1060,7 +1150,7 @@ fn push_edge_targets(
     point: Point,
     edge_fraction: f64,
     priority: i16,
-    mut accepts: impl FnMut(DockTarget) -> bool,
+    mut rejection_for: impl FnMut(DockTarget) -> Option<DropRejection>,
 ) {
     let width = rect.width();
     let height = rect.height();
@@ -1119,6 +1209,7 @@ fn push_edge_targets(
 
     for (rect, preview_rect, target) in specs {
         let id = DropTargetId::from_target(target).expect("edge target identifies a split");
+        let rejection = rejection_for(target);
         targets.push(DropTargetFrame {
             id,
             rect,
@@ -1126,7 +1217,8 @@ fn push_edge_targets(
             preview_rect,
             priority,
             distance: split_edge_depth(tile_rect, point, edge_w, edge_h, target),
-            accepts: accepts(target),
+            accepts: rejection.is_none(),
+            rejection,
         });
     }
 }
@@ -1455,16 +1547,6 @@ fn preview_for_resize(
             shares: proposal.new_major_lengths.clone(),
         })
         .ok()?;
-    Some(edited.as_ref().unwrap_or(tree).layout(input))
-}
-
-fn preview_for_dock_proposal(
-    tree: &TileTree,
-    proposal: &DockProposal,
-    input: LayoutInput,
-) -> Option<LayoutFrame> {
-    let op = op_for_dock_proposal(proposal.clone()).ok()?;
-    let edited = tree.edited(op).ok()?;
     Some(edited.as_ref().unwrap_or(tree).layout(input))
 }
 

@@ -513,6 +513,38 @@ fn overlapping_edges_hold_selection_until_the_new_edge_is_clearly_closer() {
 }
 
 #[test]
+fn drag_uses_the_same_edge_permissions_as_commit_validation() {
+    let tree = TileTree::from_spec(TileSpec::equal_split(
+        Axis::Horizontal,
+        [TileSpec::pane(PaneId(1)), TileSpec::pane(PaneId(2))],
+    ))
+    .unwrap();
+    let frame = tree.layout(input(600.0));
+    let options = InteractionOptions::from_layout_input(input(600.0));
+    let start = Point::new(150.0, 150.0);
+    let end = Point::new(595.0, 150.0);
+    let mut state = begin_interaction(&frame, start, &options);
+    let allowed = update_interaction(&tree, &frame, &mut state, end, &options);
+    assert!(allowed.preview.is_some());
+
+    let mut policy = DockPolicy::default();
+    policy.permissions.allowed_edges = EdgeSet::LEFT;
+    let rejected =
+        update_interaction_with_policy(&tree, &frame, &mut state, end, &options, &policy);
+    assert!(rejected.proposal.is_none());
+    assert!(rejected.preview.is_none());
+    assert_eq!(
+        rejected.overlay.drop_targets[0].rejection,
+        Some(DropRejection::EdgeDisabled)
+    );
+    assert_eq!(rejected.overlay.ghost_rects[0].kind, GhostKind::Invalid);
+    assert!(matches!(
+        validate_interaction_update(&tree, &frame, &allowed, &policy, &options),
+        Err(TileError::PolicyRejected)
+    ));
+}
+
+#[test]
 fn scale_invariant_split_insertion() {
     fn run(scale: f64) -> Vec<f64> {
         let mut tree = TileTree::from_spec(TileSpec::split(
