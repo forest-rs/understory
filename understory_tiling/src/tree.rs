@@ -605,7 +605,13 @@ impl TileTree {
         match target {
             DockTarget::Root => {
                 let group = self.push_node(TileNode::tabs(vec![pane]));
-                self.insert_tile_near(self.root, Axis::Horizontal, group, Placement::After, 0.5)
+                self.insert_tile_near(
+                    self.root,
+                    DockTarget::ROOT_AXIS,
+                    group,
+                    DockTarget::ROOT_PLACEMENT,
+                    DockTarget::ROOT_RATIO,
+                )
             }
             DockTarget::Split {
                 tile: target,
@@ -636,7 +642,13 @@ impl TileTree {
                 if group == self.root {
                     Ok(())
                 } else {
-                    self.insert_tile_near(self.root, Axis::Horizontal, group, Placement::After, 0.5)
+                    self.insert_tile_near(
+                        self.root,
+                        DockTarget::ROOT_AXIS,
+                        group,
+                        DockTarget::ROOT_PLACEMENT,
+                        DockTarget::ROOT_RATIO,
+                    )
                 }
             }
             DockTarget::Split {

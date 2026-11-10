@@ -375,25 +375,35 @@ fn validate_target_policy(
     capabilities: &DockPermissions,
 ) -> Result<(), TileError> {
     match target {
-        DockTarget::Root => {
-            require(capabilities.allow_move && capabilities.allowed_zones.contains(ZoneSet::SPLIT))
-        }
+        DockTarget::Root => validate_split_policy(
+            DockTarget::ROOT_AXIS,
+            DockTarget::ROOT_PLACEMENT,
+            capabilities,
+        ),
         DockTarget::Split {
             axis, placement, ..
-        } => require(
-            capabilities.allow_move
-                && capabilities.allow_split
-                && capabilities.allowed_zones.contains(ZoneSet::SPLIT)
-                && capabilities
-                    .allowed_edges
-                    .contains(edge_for_split(axis, placement)),
-        ),
+        } => validate_split_policy(axis, placement, capabilities),
         DockTarget::TabInto { .. } => require(
             capabilities.allow_move
                 && capabilities.allow_tab
                 && capabilities.allowed_zones.contains(ZoneSet::TAB),
         ),
     }
+}
+
+fn validate_split_policy(
+    axis: Axis,
+    placement: Placement,
+    capabilities: &DockPermissions,
+) -> Result<(), TileError> {
+    require(
+        capabilities.allow_move
+            && capabilities.allow_split
+            && capabilities.allowed_zones.contains(ZoneSet::SPLIT)
+            && capabilities
+                .allowed_edges
+                .contains(edge_for_split(axis, placement)),
+    )
 }
 
 fn edge_for_split(axis: Axis, placement: Placement) -> EdgeSet {

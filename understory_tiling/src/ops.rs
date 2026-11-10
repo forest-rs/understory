@@ -16,7 +16,7 @@ use crate::{Axis, PaneId, Placement, TileId};
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum DockTarget {
-    /// Root-level target.
+    /// Dock after the root in a horizontal split with an equal share.
     Root,
     /// Split relative to an existing tile.
     Split {
@@ -38,6 +38,12 @@ pub enum DockTarget {
         /// Optional insertion index.
         index: Option<usize>,
     },
+}
+
+impl DockTarget {
+    pub(crate) const ROOT_AXIS: Axis = Axis::Horizontal;
+    pub(crate) const ROOT_PLACEMENT: Placement = Placement::After;
+    pub(crate) const ROOT_RATIO: f64 = 0.5;
 }
 
 /// Semantic mutation applied to a [`TileTree`](crate::TileTree).

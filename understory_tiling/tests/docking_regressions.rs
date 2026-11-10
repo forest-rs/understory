@@ -232,6 +232,32 @@ fn nested_minima_are_preserved_when_root_has_enough_room() {
 }
 
 #[test]
+fn root_docking_respects_split_permissions() {
+    let tree = TileTree::from_spec(TileSpec::tabs([PaneId(1), PaneId(2)])).unwrap();
+    let mut policy = DockPolicy::default();
+    policy.permissions.allow_split = false;
+    let proposal = Proposal::Dock(DockProposal::MovePane {
+        pane: PaneId(1),
+        target: DockTarget::Root,
+    });
+    let validated = validate_proposal(ProposalValidationInput::new(
+        &tree,
+        proposal.clone(),
+        &policy,
+    ));
+    assert!(
+        matches!(validated, Err(TileError::PolicyRejected)),
+        "{validated:?}"
+    );
+    policy.permissions.allow_split = true;
+    policy.permissions.allowed_edges = EdgeSet::LEFT;
+    assert!(matches!(
+        validate_proposal(ProposalValidationInput::new(&tree, proposal, &policy)),
+        Err(TileError::PolicyRejected)
+    ));
+}
+
+#[test]
 fn scale_invariant_split_insertion() {
     fn run(scale: f64) -> Vec<f64> {
         let mut tree = TileTree::from_spec(TileSpec::split(
