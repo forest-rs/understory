@@ -4,7 +4,7 @@
 use alloc::vec::Vec;
 use core::fmt;
 
-use crate::{Axis, PaneId, Point, Rect, Revision, TabBarPlacement, TileId};
+use crate::{Axis, LayoutInput, PaneId, Point, Rect, Revision, Size, TabBarPlacement, TileId};
 
 /// Flattened output from a layout pass.
 ///
@@ -16,8 +16,14 @@ use crate::{Axis, PaneId, Point, Rect, Revision, TabBarPlacement, TileId};
 pub struct LayoutFrame {
     /// Tree revision used for this frame.
     pub(crate) revision: Revision,
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub(crate) layout_input: LayoutInput,
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub(crate) minimum_sizes: Vec<Size>,
     /// Active pane rectangles.
     pub(crate) panes: Vec<PaneFrame>,
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Vec::is_empty"))]
+    pub(crate) collapsed_tiles: Vec<CollapsedTileFrame>,
     /// Visible tab bar rectangles.
     pub(crate) tab_bars: Vec<TabBarFrame>,
     /// Individual tab rectangles.
@@ -38,10 +44,13 @@ pub struct LayoutFrame {
 }
 
 impl LayoutFrame {
-    pub(crate) fn new(revision: Revision) -> Self {
+    pub(crate) fn new(revision: Revision, layout_input: LayoutInput) -> Self {
         Self {
             revision,
+            layout_input,
+            minimum_sizes: Vec::new(),
             panes: Vec::new(),
+            collapsed_tiles: Vec::new(),
             tab_bars: Vec::new(),
             tabs: Vec::new(),
             split_children: Vec::new(),
@@ -57,6 +66,12 @@ impl LayoutFrame {
     #[must_use]
     pub const fn revision(&self) -> Revision {
         self.revision
+    }
+
+    /// Returns the visible strips for collapsed panes and tab groups.
+    #[must_use]
+    pub fn collapsed_tiles(&self) -> &[CollapsedTileFrame] {
+        &self.collapsed_tiles
     }
 
     /// Returns active pane geometry in semantic traversal order.
@@ -160,6 +175,7 @@ impl LayoutFrame {
             clip: projected_rect,
             active: source.active,
         });
+        self.collapsed_tiles.clear();
         self.tab_bars.clear();
         self.tabs.clear();
         self.split_children.clear();
@@ -633,6 +649,20 @@ pub struct TabFrame {
     pub active: bool,
 }
 
+/// Geometry reserved for a collapsed pane or tab group.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct CollapsedTileFrame {
+    /// Tile to expand in response to a host action.
+    pub tile: TileId,
+    /// Axis along which the extent is reserved.
+    pub axis: Axis,
+    /// Solved strip rectangle.
+    pub rect: Rect,
+    /// Pane that would be visible if the tile were expanded.
+    pub active_pane: PaneId,
+}
+
 /// Solved geometry for one split child.
 ///
 /// Produced in [`LayoutFrame::split_children`] for every child of every solved
@@ -705,6 +735,8 @@ pub enum FrameItemId {
         /// Handle index.
         handle: usize,
     },
+    /// Collapsed pane or group strip.
+    CollapsedTile(TileId),
 }
 
 /// Layout difference between two frames.
@@ -880,6 +912,11 @@ pub enum HitKind {
     },
     /// Empty layout space.
     Empty,
+    /// Collapsed pane or group strip.
+    CollapsedTile {
+        /// Hit tile to expand.
+        tile: TileId,
+    },
 }
 
 /// Performs flattened-frame hit testing.
@@ -965,6 +1002,9 @@ pub(crate) fn frame_item_rects(frame: &LayoutFrame) -> Vec<(FrameItemId, Rect)> 
     let mut items = Vec::new();
     for pane in &frame.panes {
         items.push((FrameItemId::Pane(pane.pane), pane.rect));
+    }
+    for collapsed in &frame.collapsed_tiles {
+        items.push((FrameItemId::CollapsedTile(collapsed.tile), collapsed.rect));
     }
     for bar in &frame.tab_bars {
         items.push((FrameItemId::TabBar(bar.group), bar.rect));

@@ -16,7 +16,7 @@ use crate::{Axis, PaneId, Placement, TileId};
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum DockTarget {
-    /// Root-level target.
+    /// Dock after the root in a horizontal split with an equal share.
     Root,
     /// Split relative to an existing tile.
     Split {
@@ -38,6 +38,17 @@ pub enum DockTarget {
         /// Optional insertion index.
         index: Option<usize>,
     },
+    /// Form a tab group in the existing slot of a standalone pane.
+    TabWith {
+        /// Standalone pane tile that will become the group.
+        tile: TileId,
+    },
+}
+
+impl DockTarget {
+    pub(crate) const ROOT_AXIS: Axis = Axis::Horizontal;
+    pub(crate) const ROOT_PLACEMENT: Placement = Placement::After;
+    pub(crate) const ROOT_RATIO: f64 = 0.5;
 }
 
 /// Semantic mutation applied to a [`TileTree`](crate::TileTree).
@@ -96,7 +107,7 @@ pub enum TileOp {
         group: TileId,
         /// Pane tab to move.
         pane: PaneId,
-        /// New tab index.
+        /// Final tab index, after removing the source tab.
         index: usize,
     },
     /// Set split shares directly.
@@ -106,6 +117,17 @@ pub enum TileOp {
         /// Replacement shares.
         shares: Vec<f64>,
     },
+    /// Collapse or expand a pane or tab group in its existing split slot.
+    ///
+    /// The expanded share and active tab remain in the tree. Pointer resize
+    /// is suspended on the containing split while any child is collapsed.
+    /// A tile promoted to the root by another edit expands automatically.
+    SetCollapsed {
+        /// Pane or tab group tile. The root cannot be collapsed.
+        tile: TileId,
+        /// Finite non-negative major-axis strip extent, or `None` to expand.
+        extent: Option<f64>,
+    },
 }
 
 /// Error returned by mutation and commit APIs.
@@ -113,7 +135,7 @@ pub enum TileOp {
 /// Returned from [`TileTree::apply`](crate::TileTree::apply), interaction
 /// commits, proposal validation, and snapshot restore when an id, target,
 /// policy, or interaction revision is invalid.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TileError {
     /// The operation referenced a missing tile.

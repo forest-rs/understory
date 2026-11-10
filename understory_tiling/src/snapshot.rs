@@ -21,6 +21,7 @@ pub struct LayoutSnapshot {
 #[derive(Clone, Debug)]
 enum SnapshotPayload {
     V1(RawTileTree),
+    V2(RawTileTree),
     #[cfg_attr(
         not(any(feature = "serde", test)),
         allow(
@@ -35,17 +36,22 @@ impl LayoutSnapshot {
     /// Captures a valid semantic tree for persistence or later restoration.
     #[must_use]
     pub fn new(tree: TileTree) -> Self {
-        Self {
-            payload: SnapshotPayload::V1(tree.into()),
-        }
+        let payload = if tree.has_collapsed_tiles() {
+            SnapshotPayload::V2(tree.into())
+        } else {
+            SnapshotPayload::V1(tree.into())
+        };
+        Self { payload }
     }
 
     /// Returns the supported persisted schema version, or `None` for an
-    /// unsupported version decoded from the wire.
+    /// unsupported version decoded from the wire. Snapshots with collapsed
+    /// tiles use version 2. Other newly captured snapshots use version 1.
     #[must_use]
     pub const fn schema_version(&self) -> Option<u16> {
         match self.payload {
             SnapshotPayload::V1(_) => Some(1),
+            SnapshotPayload::V2(_) => Some(2),
             SnapshotPayload::Unsupported(_) => None,
         }
     }
@@ -70,6 +76,9 @@ impl serde::Serialize for LayoutSnapshot {
         match &self.payload {
             SnapshotPayload::V1(tree) => {
                 state.serialize_entry("1", tree)?;
+            }
+            SnapshotPayload::V2(tree) => {
+                state.serialize_entry("2", tree)?;
             }
             SnapshotPayload::Unsupported(version) => {
                 state.serialize_entry(&version.to_string(), &())?;
@@ -104,14 +113,16 @@ impl<'de> serde::Deserialize<'de> for LayoutSnapshot {
                 let version = map
                     .next_key::<String>()?
                     .ok_or_else(|| serde::de::Error::custom("snapshot must contain one version"))?;
-                let payload = if version == "1" {
-                    SnapshotPayload::V1(map.next_value::<RawTileTree>()?)
-                } else {
-                    let version = version.parse::<u64>().map_err(|_| {
-                        serde::de::Error::custom("snapshot version must be an unsigned integer")
-                    })?;
-                    let _ = map.next_value::<IgnoredAny>()?;
-                    SnapshotPayload::Unsupported(version)
+                let payload = match version.as_str() {
+                    "1" => SnapshotPayload::V1(map.next_value()?),
+                    "2" => SnapshotPayload::V2(map.next_value()?),
+                    _ => {
+                        let version = version.parse::<u64>().map_err(|_| {
+                            serde::de::Error::custom("snapshot version must be an unsigned integer")
+                        })?;
+                        let _ = map.next_value::<IgnoredAny>()?;
+                        SnapshotPayload::Unsupported(version)
+                    }
                 };
                 if map.next_key::<IgnoredAny>()?.is_some() {
                     return Err(serde::de::Error::custom(
@@ -149,6 +160,8 @@ pub enum RepairAction {
         /// Tile from which the duplicate occurrence was removed.
         tile: TileId,
     },
+    /// Removed an invalid collapsed extent or expanded the root tile.
+    ClearedCollapse(TileId),
 }
 
 /// Result of restoring persisted layout state.
@@ -170,7 +183,7 @@ pub struct RestoreOutcome {
 /// an irreparable tree with no semantic panes is rejected.
 pub fn restore_snapshot(snapshot: LayoutSnapshot) -> Result<RestoreOutcome, TileError> {
     let raw_tree = match snapshot.payload {
-        SnapshotPayload::V1(raw_tree) => raw_tree,
+        SnapshotPayload::V1(raw_tree) | SnapshotPayload::V2(raw_tree) => raw_tree,
         SnapshotPayload::Unsupported(version) => {
             return Err(TileError::UnsupportedSnapshotVersion(version));
         }

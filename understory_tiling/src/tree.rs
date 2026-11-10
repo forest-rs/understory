@@ -1,20 +1,24 @@
 // Copyright 2026 the Understory Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+mod bookmark;
+#[cfg(feature = "serde")]
+mod serde_slot;
+
 use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::frame::{HIT_Z_PANE, HIT_Z_SPLIT_HANDLE, HIT_Z_TAB, HIT_Z_TAB_BAR};
 use crate::snapshot::{RepairAction, RepairReport};
 use crate::util::{
-    is_valid_split_fraction, repaired_shares, solve_lengths_with_min, split_min_major,
+    is_valid_split_fraction, major_size, positive_share, repaired_shares, solve_lengths_with_min,
     split_tab_bar, tab_rects,
 };
 use crate::{
-    Axis, DockTarget, FrameItemId, HitKind, HitRegion, LayoutFrame, LayoutInput, PaneFrame, PaneId,
-    Placement, Rect, Revision, SplitChildFrame, SplitConstraints, SplitHandleFrame, SplitNode,
-    TabBarFrame, TabBarPlacement, TabFrame, TabNode, TileError, TileId, TileNode, TileOp, TileSpec,
-    TileSpecError,
+    Axis, CollapsedTileFrame, DockTarget, FrameItemId, HitKind, HitRegion, LayoutFrame,
+    LayoutInput, PaneFrame, PaneId, Placement, Rect, Revision, Size, SplitChildFrame,
+    SplitConstraints, SplitHandleFrame, SplitNode, TabBarFrame, TabBarPlacement, TabFrame, TabNode,
+    TileError, TileId, TileNode, TileOp, TileSpec, TileSpecError,
 };
 
 /// Persistent semantic tree of splits, tab groups, and pane leaves.
@@ -30,10 +34,10 @@ pub struct TileTree {
     nodes: Vec<NodeSlot>,
 }
 
-#[derive(Clone, Debug)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Debug, Default)]
 struct NodeSlot {
     node: Option<TileNode>,
+    collapsed_extent: Option<f64>,
 }
 
 #[derive(Clone, Debug)]
@@ -169,6 +173,7 @@ impl TileTree {
             revision: Revision(0),
             nodes: vec![NodeSlot {
                 node: Some(TileNode::pane(pane)),
+                collapsed_extent: None,
             }],
         }
     }
@@ -221,19 +226,42 @@ impl TileTree {
         self.get_node(id)
     }
 
+    /// Returns the reserved major-axis extent of a collapsed pane or group.
+    #[must_use]
+    pub fn collapsed_extent(&self, tile: TileId) -> Option<f64> {
+        self.nodes.get(tile.0 as usize)?.collapsed_extent
+    }
+
+    pub(crate) fn has_collapsed_tiles(&self) -> bool {
+        self.nodes
+            .iter()
+            .any(|slot| slot.collapsed_extent.is_some())
+    }
+
     /// Applies a semantic operation atomically.
     pub fn apply(&mut self, op: TileOp) -> Result<(), TileError> {
-        let mut next = self.clone();
-        let changed = next.apply_inner(op)?;
-        if changed {
-            next.revision.0 = next
-                .revision
-                .0
-                .checked_add(1)
-                .ok_or(TileError::RevisionExhausted)?;
-            next.normalize();
+        if let Some(next) = self.edited(op)? {
             *self = next;
         }
+        Ok(())
+    }
+
+    pub(crate) fn edited(&self, op: TileOp) -> Result<Option<Self>, TileError> {
+        let mut next = self.clone();
+        if !next.apply_inner(op)? {
+            return Ok(None);
+        }
+        next.finish_edit()?;
+        Ok(Some(next))
+    }
+
+    fn finish_edit(&mut self) -> Result<(), TileError> {
+        self.revision.0 = self
+            .revision
+            .0
+            .checked_add(1)
+            .ok_or(TileError::RevisionExhausted)?;
+        self.normalize();
         Ok(())
     }
 
@@ -294,7 +322,17 @@ impl TileTree {
                         u32::try_from(index).expect("tile arena exhausted"),
                     )));
                 }
-                slot.node = None;
+                *slot = NodeSlot::default();
+            } else if let Some(extent) = slot.collapsed_extent
+                && (index == self.root.0 as usize
+                    || !extent.is_finite()
+                    || extent < 0.0
+                    || matches!(slot.node, Some(TileNode::Split(_))))
+            {
+                slot.collapsed_extent = None;
+                sink.record(RepairAction::ClearedCollapse(TileId(
+                    u32::try_from(index).expect("tile arena exhausted"),
+                )));
             }
         }
     }
@@ -331,15 +369,10 @@ impl TileTree {
                 && input.min_pane_size.height >= 0.0,
             "LayoutInput::min_pane_size must be finite and non-negative",
         );
-        let mut frame = LayoutFrame::new(self.revision);
-        let mut visiting = vec![false; self.nodes.len()];
-        self.layout_tile(
-            self.root,
-            input.bounds.abs(),
-            &input,
-            &mut frame,
-            &mut visiting,
-        );
+        let mut frame = LayoutFrame::new(self.revision, input);
+        frame.minimum_sizes.resize(self.nodes.len(), Size::ZERO);
+        self.measure_minimum(self.root, input, &mut frame.minimum_sizes);
+        self.layout_tile(self.root, input.bounds.abs(), &input, &mut frame);
         frame
     }
 
@@ -347,6 +380,7 @@ impl TileTree {
         match op {
             TileOp::ActivatePane { pane } => self.activate_pane(pane),
             TileOp::ClosePane { pane } => self.close_pane(pane),
+            TileOp::SetCollapsed { tile, extent } => self.set_collapsed(tile, extent),
             TileOp::SplitPane {
                 pane,
                 axis,
@@ -363,7 +397,10 @@ impl TileTree {
 
     fn push_node(&mut self, node: TileNode) -> TileId {
         let id = TileId(u32::try_from(self.nodes.len()).expect("tile arena exhausted"));
-        self.nodes.push(NodeSlot { node: Some(node) });
+        self.nodes.push(NodeSlot {
+            node: Some(node),
+            collapsed_extent: None,
+        });
         id
     }
 
@@ -426,7 +463,7 @@ impl TileTree {
 
     fn clear_node(&mut self, id: TileId) {
         if let Some(slot) = self.nodes.get_mut(id.0 as usize) {
-            slot.node = None;
+            *slot = NodeSlot::default();
         }
     }
 
@@ -440,8 +477,36 @@ impl TileTree {
         Self {
             root,
             revision,
-            nodes: nodes.into_iter().map(|node| NodeSlot { node }).collect(),
+            nodes: nodes
+                .into_iter()
+                .map(|node| NodeSlot {
+                    node,
+                    collapsed_extent: None,
+                })
+                .collect(),
         }
+    }
+
+    fn set_collapsed(&mut self, tile: TileId, extent: Option<f64>) -> Result<bool, TileError> {
+        match self.get_node(tile) {
+            None => return Err(TileError::InvalidTileId),
+            Some(TileNode::Split(_)) => return Err(TileError::InvalidTarget),
+            _ => {}
+        }
+        if extent.is_some_and(|extent| !extent.is_finite() || extent < 0.0 || tile == self.root) {
+            return Err(TileError::InvalidOperation);
+        }
+        let slot = &mut self.nodes[tile.0 as usize];
+        let changed = slot.collapsed_extent != extent;
+        slot.collapsed_extent = extent;
+        Ok(changed)
+    }
+
+    pub(crate) fn can_resize_split(&self, split: &SplitNode) -> bool {
+        split
+            .children
+            .iter()
+            .all(|child| self.collapsed_extent(*child).is_none())
     }
 
     fn activate_pane(&mut self, pane: PaneId) -> Result<bool, TileError> {
@@ -465,7 +530,8 @@ impl TileTree {
         if self.count_panes() <= 1 {
             return Err(TileError::CannotCloseLastPane);
         }
-        self.remove_pane(pane)?;
+        let location = self.find_pane(pane).ok_or(TileError::InvalidPaneId)?;
+        self.remove_pane_at(location)?;
         Ok(true)
     }
 
@@ -494,13 +560,52 @@ impl TileTree {
     }
 
     fn move_pane(&mut self, pane: PaneId, target: DockTarget) -> Result<bool, TileError> {
-        if !self.contains_pane(pane) {
-            return Err(TileError::InvalidPaneId);
-        }
+        let location = self.find_pane(pane).ok_or(TileError::InvalidPaneId)?;
         self.validate_target(target)?;
-        self.remove_pane(pane)?;
-        let tile = self.push_node(TileNode::pane(pane));
-        self.insert_tile_at_target(tile, pane, target)?;
+        match target {
+            DockTarget::TabInto { group, index } => {
+                self.remove_pane_at(location)?;
+                self.insert_tab_pane(group, pane, index)?;
+            }
+            DockTarget::TabWith { tile } => {
+                let Some(TileNode::Pane(destination)) = self.get_node(tile) else {
+                    return Err(TileError::InvalidTarget);
+                };
+                let destination = destination.pane;
+                if destination == pane {
+                    return Err(TileError::InvalidTarget);
+                }
+                self.remove_pane_at(location)?;
+                self.set_node(tile, TileNode::tabs(vec![destination]))?;
+                self.insert_tab_pane(tile, pane, None)?;
+            }
+            DockTarget::Root => {
+                self.remove_pane_at(location)?;
+                let group = self.push_node(TileNode::tabs(vec![pane]));
+                self.insert_group_at_target(group, target)?;
+            }
+            DockTarget::Split {
+                tile,
+                axis,
+                placement,
+                ratio,
+            } => {
+                let inserted = match location {
+                    PaneLocation::Tile { tile: source } => {
+                        if source == tile {
+                            return Err(TileError::InvalidTileId);
+                        }
+                        self.detach_tile(source)?;
+                        source
+                    }
+                    PaneLocation::InTabs { .. } => {
+                        self.remove_pane_at(location)?;
+                        self.push_node(TileNode::pane(pane))
+                    }
+                };
+                self.insert_tile_near(tile, axis, inserted, placement, ratio)?;
+            }
+        }
         Ok(true)
     }
 
@@ -573,6 +678,11 @@ impl TileTree {
                 self.get_node(tile).ok_or(TileError::InvalidTileId)?;
                 Ok(())
             }
+            DockTarget::TabWith { tile } => match self.get_node(tile) {
+                Some(TileNode::Pane(_)) => Ok(()),
+                Some(_) => Err(TileError::InvalidTarget),
+                None => Err(TileError::InvalidTileId),
+            },
             DockTarget::TabInto { group, .. } => match self.get_node(group) {
                 Some(TileNode::Tabs(_)) => Ok(()),
                 Some(_) => Err(TileError::InvalidTarget),
@@ -591,38 +701,25 @@ impl TileTree {
                 self.get_node(tile).ok_or(TileError::InvalidTileId)?;
                 Ok(())
             }
-            DockTarget::TabInto { .. } => Err(TileError::InvalidTarget),
+            DockTarget::TabInto { .. } | DockTarget::TabWith { .. } => {
+                Err(TileError::InvalidTarget)
+            }
         }
     }
 
-    fn insert_tile_at_target(
+    fn insert_tab_pane(
         &mut self,
-        tile: TileId,
+        group: TileId,
         pane: PaneId,
-        target: DockTarget,
+        index: Option<usize>,
     ) -> Result<(), TileError> {
-        match target {
-            DockTarget::Root => {
-                let group = self.push_node(TileNode::tabs(vec![pane]));
-                self.insert_tile_near(self.root, Axis::Horizontal, group, Placement::After, 0.5)
-            }
-            DockTarget::Split {
-                tile: target,
-                axis,
-                placement,
-                ratio,
-            } => self.insert_tile_near(target, axis, tile, placement, ratio),
-            DockTarget::TabInto { group, index } => {
-                let Some(TileNode::Tabs(tabs)) = self.get_node_mut(group) else {
-                    return Err(TileError::InvalidTarget);
-                };
-                let index = index.unwrap_or(tabs.panes.len()).min(tabs.panes.len());
-                tabs.panes.insert(index, pane);
-                tabs.active = index;
-                self.clear_node(tile);
-                Ok(())
-            }
-        }
+        let Some(TileNode::Tabs(tabs)) = self.get_node_mut(group) else {
+            return Err(TileError::InvalidTarget);
+        };
+        let index = index.unwrap_or(tabs.panes.len()).min(tabs.panes.len());
+        tabs.panes.insert(index, pane);
+        tabs.active = index;
+        Ok(())
     }
 
     fn insert_group_at_target(
@@ -635,7 +732,13 @@ impl TileTree {
                 if group == self.root {
                     Ok(())
                 } else {
-                    self.insert_tile_near(self.root, Axis::Horizontal, group, Placement::After, 0.5)
+                    self.insert_tile_near(
+                        self.root,
+                        DockTarget::ROOT_AXIS,
+                        group,
+                        DockTarget::ROOT_PLACEMENT,
+                        DockTarget::ROOT_RATIO,
+                    )
                 }
             }
             DockTarget::Split {
@@ -644,7 +747,9 @@ impl TileTree {
                 placement,
                 ratio,
             } => self.insert_tile_near(tile, axis, group, placement, ratio),
-            DockTarget::TabInto { .. } => Err(TileError::InvalidTarget),
+            DockTarget::TabInto { .. } | DockTarget::TabWith { .. } => {
+                Err(TileError::InvalidTarget)
+            }
         }
     }
 
@@ -672,8 +777,8 @@ impl TileTree {
                     aligned_constraints(parent_split.children.len(), &parent_split.constraints);
                 parent_split.shares = old_shares;
                 let old_share = parent_split.shares[child_index];
-                let inserted_share = (old_share * share).max(0.01);
-                let target_share = (old_share - inserted_share).max(0.01);
+                let inserted_share = positive_share(old_share * share);
+                let target_share = positive_share(old_share * (1.0 - share));
                 parent_split.shares[child_index] = target_share;
                 let insert_index = match placement {
                     Placement::Before => child_index,
@@ -688,14 +793,8 @@ impl TileTree {
         }
 
         let (children, shares) = match placement {
-            Placement::Before => (
-                vec![inserted, target],
-                vec![share.max(0.01), (1.0 - share).max(0.01)],
-            ),
-            Placement::After => (
-                vec![target, inserted],
-                vec![(1.0 - share).max(0.01), share.max(0.01)],
-            ),
+            Placement::Before => (vec![inserted, target], vec![share, 1.0 - share]),
+            Placement::After => (vec![target, inserted], vec![1.0 - share, share]),
         };
         let split = self.push_node(TileNode::Split(SplitNode {
             axis,
@@ -718,8 +817,8 @@ impl TileTree {
         }
     }
 
-    fn remove_pane(&mut self, pane: PaneId) -> Result<(), TileError> {
-        match self.find_pane(pane).ok_or(TileError::InvalidPaneId)? {
+    fn remove_pane_at(&mut self, location: PaneLocation) -> Result<(), TileError> {
+        match location {
             PaneLocation::Tile { tile } => {
                 self.clear_node(tile);
             }
@@ -870,11 +969,14 @@ impl TileTree {
                 && minimum == 0.0
             {
                 let child_shares = repaired_shares(child_split.children.len(), &child_split.shares);
+                let child_total = child_shares.iter().sum::<f64>();
                 let child_constraints =
                     aligned_constraints(child_split.children.len(), &child_split.constraints);
                 for (grand_index, grandchild) in child_split.children.iter().copied().enumerate() {
                     children.push(grandchild);
-                    shares.push(share * child_shares.get(grand_index).copied().unwrap_or(1.0));
+                    shares.push(positive_share(
+                        share * (child_shares[grand_index] / child_total),
+                    ));
                     constraints.push(child_constraints.get(grand_index).copied().unwrap_or(0.0));
                 }
                 structure_changed = true;
@@ -932,22 +1034,10 @@ impl TileTree {
         }
     }
 
-    fn layout_tile(
-        &self,
-        id: TileId,
-        rect: Rect,
-        input: &LayoutInput,
-        frame: &mut LayoutFrame,
-        visiting: &mut [bool],
-    ) {
-        let index = id.0 as usize;
-        if index >= self.nodes.len() || visiting.get(index).copied().unwrap_or(false) {
-            return;
-        }
+    fn layout_tile(&self, id: TileId, rect: Rect, input: &LayoutInput, frame: &mut LayoutFrame) {
         let Some(node) = self.get_node(id) else {
             return;
         };
-        visiting[index] = true;
         match node {
             TileNode::Pane(pane) => {
                 frame.focus_order.push(pane.pane);
@@ -966,9 +1056,8 @@ impl TileTree {
                 frame.paint_order.push(FrameItemId::Pane(pane.pane));
             }
             TileNode::Tabs(tabs) => self.layout_tabs(id, tabs, rect, input, frame),
-            TileNode::Split(split) => self.layout_split(id, split, rect, input, frame, visiting),
+            TileNode::Split(split) => self.layout_split(id, split, rect, input, frame),
         }
-        visiting[index] = false;
     }
 
     fn layout_tabs(
@@ -1039,6 +1128,82 @@ impl TileTree {
         frame.paint_order.push(FrameItemId::Pane(active_pane));
     }
 
+    fn measure_minimum(&self, id: TileId, input: LayoutInput, minimums: &mut [Size]) -> Size {
+        let size = match self.get_node(id) {
+            Some(TileNode::Pane(_)) => input.min_pane_size,
+            Some(TileNode::Tabs(tabs)) => {
+                let chrome = match tabs.placement {
+                    TabBarPlacement::Top | TabBarPlacement::Bottom => {
+                        Size::new(0.0, input.tab_bar_thickness)
+                    }
+                    TabBarPlacement::Left | TabBarPlacement::Right => {
+                        Size::new(input.tab_bar_thickness, 0.0)
+                    }
+                    TabBarPlacement::Hidden => Size::ZERO,
+                };
+                bounded_size(
+                    input.min_pane_size.width + chrome.width,
+                    input.min_pane_size.height + chrome.height,
+                )
+            }
+            Some(TileNode::Split(split)) => {
+                let mut major =
+                    input.split_handle_thickness * split.children.len().saturating_sub(1) as f64;
+                let mut minor: f64 = 0.0;
+                for (index, child) in split.children.iter().copied().enumerate() {
+                    if let Some(extent) = self.collapsed_extent(child) {
+                        major += extent;
+                        continue;
+                    }
+                    let size = self.measure_minimum(child, input, minimums);
+                    major += child_min_major(split, index, size);
+                    let cross = match split.axis {
+                        Axis::Horizontal => size.height,
+                        Axis::Vertical => size.width,
+                    };
+                    minor = minor.max(cross);
+                }
+                match split.axis {
+                    Axis::Horizontal => bounded_size(major, minor),
+                    Axis::Vertical => bounded_size(minor, major),
+                }
+            }
+            None => Size::ZERO,
+        };
+        minimums[id.0 as usize] = size;
+        size
+    }
+
+    pub(crate) fn resize_minimums(
+        &self,
+        split_id: TileId,
+        split: &SplitNode,
+        frame: &LayoutFrame,
+        min_pane_size: Size,
+    ) -> Vec<f64> {
+        let mut input = frame.layout_input;
+        let required = Size::new(
+            input.min_pane_size.width.max(min_pane_size.width),
+            input.min_pane_size.height.max(min_pane_size.height),
+        );
+        let measured;
+        let minimums = if required == input.min_pane_size {
+            &frame.minimum_sizes
+        } else {
+            input.min_pane_size = required;
+            let mut sizes = vec![Size::ZERO; self.nodes.len()];
+            self.measure_minimum(split_id, input, &mut sizes);
+            measured = sizes;
+            &measured
+        };
+        split
+            .children
+            .iter()
+            .enumerate()
+            .map(|(index, child)| child_min_major(split, index, minimums[child.0 as usize]))
+            .collect()
+    }
+
     fn layout_split(
         &self,
         id: TileId,
@@ -1046,46 +1211,43 @@ impl TileTree {
         rect: Rect,
         input: &LayoutInput,
         frame: &mut LayoutFrame,
-        visiting: &mut [bool],
     ) {
-        let children: Vec<_> = split
-            .children
-            .iter()
-            .copied()
-            .filter(|child| self.get_node(*child).is_some())
-            .collect();
-        if children.is_empty() {
-            return;
-        }
-        if children.len() == 1 {
-            self.layout_tile(children[0], rect, input, frame, visiting);
-            return;
-        }
-
-        let handle = input.split_handle_thickness;
-        let major = match split.axis {
-            Axis::Horizontal => rect.width(),
-            Axis::Vertical => rect.height(),
+        let children = &split.children;
+        let (mut cursor, edge) = match split.axis {
+            Axis::Horizontal => (rect.x0, rect.x1),
+            Axis::Vertical => (rect.y0, rect.y1),
         };
-        let handle_total = handle * (children.len() - 1) as f64;
-        let child_total = (major - handle_total).max(0.0);
+        let major = edge - cursor;
+        let gaps = (children.len() - 1) as f64;
+        let handle = input.split_handle_thickness.min(major / gaps);
+        let child_total = (major - handle * gaps).max(0.0);
         let shares = repaired_shares(children.len(), &split.shares);
-        let default_min_major = match split.axis {
-            Axis::Horizontal => input.min_pane_size.width,
-            Axis::Vertical => input.min_pane_size.height,
-        };
-        let min_major = split_min_major(children.len(), &split.constraints, default_min_major);
-        let lengths = solve_lengths_with_min(child_total, &shares, &min_major);
-        let mut cursor = match split.axis {
-            Axis::Horizontal => rect.x0,
-            Axis::Vertical => rect.y0,
+        let min_major = children
+            .iter()
+            .enumerate()
+            .map(|(index, child)| {
+                child_min_major(split, index, frame.minimum_sizes[child.0 as usize])
+            })
+            .collect::<Vec<_>>();
+        let can_resize = self.can_resize_split(split);
+        let (lengths, fills_split) = if can_resize {
+            (
+                solve_lengths_with_min(child_total, &shares, &min_major),
+                true,
+            )
+        } else {
+            self.solve_with_collapsed_children(children, child_total, &shares, &min_major)
         };
 
         for (index, child) in children.iter().copied().enumerate() {
-            let length = lengths[index];
+            let end = if fills_split && index + 1 == children.len() {
+                edge
+            } else {
+                (cursor + lengths[index]).min(edge)
+            };
             let child_rect = match split.axis {
-                Axis::Horizontal => Rect::new(cursor, rect.y0, cursor + length, rect.y1),
-                Axis::Vertical => Rect::new(rect.x0, cursor, rect.x1, cursor + length),
+                Axis::Horizontal => Rect::new(cursor, rect.y0, end, rect.y1),
+                Axis::Vertical => Rect::new(rect.x0, cursor, rect.x1, end),
             };
             frame.split_children.push(SplitChildFrame {
                 split: id,
@@ -1093,12 +1255,17 @@ impl TileTree {
                 index,
                 rect: child_rect,
             });
-            self.layout_tile(child, child_rect, input, frame, visiting);
-            cursor += length;
+            if self.collapsed_extent(child).is_some() {
+                self.layout_collapsed_tile(child, split.axis, child_rect, frame);
+            } else {
+                self.layout_tile(child, child_rect, input, frame);
+            }
+            cursor = end;
             if index + 1 < children.len() {
+                let end = (cursor + handle).min(edge);
                 let handle_rect = match split.axis {
-                    Axis::Horizontal => Rect::new(cursor, rect.y0, cursor + handle, rect.y1),
-                    Axis::Vertical => Rect::new(rect.x0, cursor, rect.x1, cursor + handle),
+                    Axis::Horizontal => Rect::new(cursor, rect.y0, end, rect.y1),
+                    Axis::Vertical => Rect::new(rect.x0, cursor, rect.x1, end),
                 };
                 frame.split_handles.push(SplitHandleFrame {
                     split: id,
@@ -1106,20 +1273,76 @@ impl TileTree {
                     axis: split.axis,
                     rect: handle_rect,
                 });
-                frame.hit_regions.push(HitRegion {
-                    rect: handle_rect,
-                    z: HIT_Z_SPLIT_HANDLE,
-                    kind: HitKind::SplitHandle {
-                        split: id,
-                        handle: index,
-                    },
-                });
+                if can_resize && handle_rect.width() > 0.0 && handle_rect.height() > 0.0 {
+                    frame.hit_regions.push(HitRegion {
+                        rect: handle_rect,
+                        z: HIT_Z_SPLIT_HANDLE,
+                        kind: HitKind::SplitHandle {
+                            split: id,
+                            handle: index,
+                        },
+                    });
+                }
                 frame.paint_order.push(FrameItemId::SplitHandle {
                     split: id,
                     handle: index,
                 });
-                cursor += handle;
+                cursor = end;
             }
+        }
+    }
+
+    fn solve_with_collapsed_children(
+        &self,
+        children: &[TileId],
+        available: f64,
+        shares: &[f64],
+        minimums: &[f64],
+    ) -> (Vec<f64>, bool) {
+        let mut lengths = vec![0.0; children.len()];
+        let mut expanded = Vec::new();
+        let mut expanded_shares = Vec::new();
+        let mut expanded_minimums = Vec::new();
+        for (index, child) in children.iter().copied().enumerate() {
+            if let Some(extent) = self.collapsed_extent(child) {
+                lengths[index] = extent;
+            } else {
+                expanded.push(index);
+                expanded_shares.push(shares[index]);
+                expanded_minimums.push(minimums[index]);
+            }
+        }
+        let reserved = lengths.iter().sum::<f64>();
+        if reserved >= available {
+            return (solve_lengths_with_min(available, shares, &lengths), true);
+        }
+        let remaining = available - reserved;
+        let solved = solve_lengths_with_min(remaining, &expanded_shares, &expanded_minimums);
+        for (index, length) in expanded.iter().copied().zip(solved) {
+            lengths[index] = length;
+        }
+        (lengths, !expanded.is_empty())
+    }
+
+    fn layout_collapsed_tile(&self, tile: TileId, axis: Axis, rect: Rect, frame: &mut LayoutFrame) {
+        let active_pane = match self.get_node(tile) {
+            Some(TileNode::Pane(pane)) => pane.pane,
+            Some(TileNode::Tabs(tabs)) => tabs.panes[tabs.active],
+            _ => unreachable!("only pane and tab group tiles can be collapsed"),
+        };
+        frame.collapsed_tiles.push(CollapsedTileFrame {
+            tile,
+            axis,
+            rect,
+            active_pane,
+        });
+        frame.paint_order.push(FrameItemId::CollapsedTile(tile));
+        if rect.width() > 0.0 && rect.height() > 0.0 {
+            frame.hit_regions.push(HitRegion {
+                rect,
+                z: HIT_Z_PANE,
+                kind: HitKind::CollapsedTile { tile },
+            });
         }
     }
 
@@ -1180,6 +1403,20 @@ impl TileTree {
     }
 }
 
+fn bounded_size(width: f64, height: f64) -> Size {
+    Size::new(width.min(f64::MAX), height.min(f64::MAX))
+}
+
+fn child_min_major(split: &SplitNode, index: usize, size: Size) -> f64 {
+    let constraint = split
+        .constraints
+        .min_major
+        .get(index)
+        .copied()
+        .unwrap_or(0.0);
+    major_size(size, split.axis).max(constraint)
+}
+
 fn aligned_constraints(count: usize, constraints: &SplitConstraints) -> Vec<f64> {
     (0..count)
         .map(|index| match constraints.min_major.get(index).copied() {
@@ -1194,4 +1431,34 @@ fn compact_constraints(mut constraints: Vec<f64>) -> Vec<f64> {
         constraints.pop();
     }
     constraints
+}
+
+#[cfg(test)]
+mod allocation_tests {
+    use super::*;
+
+    #[test]
+    fn tab_moves_do_not_add_arena_slots() {
+        let mut tree = TileTree::from_spec(TileSpec::equal_split(
+            Axis::Horizontal,
+            [
+                TileSpec::tabs([PaneId(1), PaneId(2)]),
+                TileSpec::tabs([PaneId(3)]),
+            ],
+        ))
+        .unwrap();
+        let Some(TileNode::Split(split)) = tree.node(tree.root()) else {
+            panic!("expected a split")
+        };
+        let (left, right) = (split.children[0], split.children[1]);
+        let capacity = tree.nodes.len();
+        for group in [right, left].into_iter().cycle().take(32) {
+            tree.apply(TileOp::MovePane {
+                pane: PaneId(2),
+                target: DockTarget::TabInto { group, index: None },
+            })
+            .unwrap();
+        }
+        assert_eq!(tree.nodes.len(), capacity);
+    }
 }

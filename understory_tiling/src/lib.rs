@@ -170,6 +170,7 @@ mod ids;
 mod interaction;
 mod model;
 mod ops;
+mod placement;
 mod policy;
 mod snapshot;
 mod spec;
@@ -179,18 +180,20 @@ mod tree;
 mod util;
 
 pub use frame::{
-    FrameCause, FrameChange, FrameDiff, FrameItemDiff, FrameItemId, FrameMotion, FrameProjection,
-    FrameProjectionError, FrameProjectionInput, HitKind, HitRegion, LayoutFrame, PaneFrame,
-    ProjectionEvent, ProjectionHiddenItem, ProjectionKind, SplitChildFrame, SplitHandleFrame,
-    TabBarFrame, TabFrame, TabGeometry, TabGeometryError, TabGroupGeometry, diff_frames, hit_test,
+    CollapsedTileFrame, FrameCause, FrameChange, FrameDiff, FrameItemDiff, FrameItemId,
+    FrameMotion, FrameProjection, FrameProjectionError, FrameProjectionInput, HitKind, HitRegion,
+    LayoutFrame, PaneFrame, ProjectionEvent, ProjectionHiddenItem, ProjectionKind, SplitChildFrame,
+    SplitHandleFrame, TabBarFrame, TabFrame, TabGeometry, TabGeometryError, TabGroupGeometry,
+    diff_frames, hit_test,
 };
 pub use ids::{PaneId, Revision, TileId};
 pub use interaction::{
     DockProposal, DragIntent, DragOptions, DragSession, DragSource, DragSubject, DraggedFrame,
-    DropTargetFrame, DropTargetId, GhostFrame, GhostKind, InteractionOptions, InteractionState,
-    InteractionUpdate, OverlayFrame, OverlayHitRegion, PendingDrag, Proposal, ResizeOptions,
-    ResizeProposal, ResizeSession, begin_interaction, drop_targets_for_drag, pick_drop_target,
-    update_interaction,
+    DropRejection, DropTargetFrame, DropTargetId, GhostFrame, GhostKind, InteractionOptions,
+    InteractionState, InteractionUpdate, OverlayFrame, OverlayHitRegion, PendingDrag, Proposal,
+    ResizeOptions, ResizeProposal, ResizeSession, begin_interaction, drop_targets_for_drag,
+    drop_targets_for_drag_with_policy, pick_drop_target, update_interaction,
+    update_interaction_with_policy,
 };
 pub use kurbo::{Point, Rect, Size};
 pub use model::{
@@ -198,6 +201,7 @@ pub use model::{
     TileNode,
 };
 pub use ops::{DockTarget, TileError, TileOp};
+pub use placement::{PaneBookmark, ReopenPlacement};
 pub use policy::{
     DockPermissions, DockPolicy, EdgeSet, ProposalValidationInput, ValidatedProposal, ZoneSet,
     commit_proposal, validate_interaction_update, validate_proposal,

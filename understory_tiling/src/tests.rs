@@ -1659,7 +1659,7 @@ fn drag_local_pane_edge_target_wins_over_root_target() {
     assert_eq!(
         update.overlay.ghost_rects,
         vec![GhostFrame {
-            rect: Rect::new(155.0, 0.0, 300.0, 100.0),
+            rect: Rect::new(0.0, 0.0, 300.0, 95.0),
             kind: GhostKind::PreviewPane,
         }]
     );
@@ -1852,7 +1852,7 @@ fn tab_group_drag_validates_and_commits_split_move() {
     assert_eq!(
         update.overlay.ghost_rects,
         vec![GhostFrame {
-            rect: Rect::new(155.0, 0.0, 300.0, 100.0),
+            rect: Rect::new(0.0, 0.0, 300.0, 95.0),
             kind: GhostKind::PreviewGroup,
         }]
     );
@@ -2067,7 +2067,7 @@ fn validate_resize_accepts_frame_checked_proposal() {
 
 #[test]
 fn tab_insert_threshold_controls_reorder_index() {
-    let tree = tab_tree([PaneId(1), PaneId(2)]);
+    let tree = tab_tree([PaneId(1), PaneId(2), PaneId(3)]);
     let frame = tree.layout(input());
     let options = interaction_options_with_drag(DragOptions {
         allow_split: false,
@@ -2078,13 +2078,13 @@ fn tab_insert_threshold_controls_reorder_index() {
     let update = pointer_update(
         &tree,
         &frame,
-        Point::new(225.0, 10.0),
-        Point::new(100.0, 10.0),
+        Point::new(250.0, 10.0),
+        Point::new(160.0, 10.0),
         &options,
     );
     assert!(matches!(
         dock_proposal(&update),
-        Some(DockProposal::ReorderTab { index: 0, .. })
+        Some(DockProposal::ReorderTab { index: 1, .. })
     ));
 
     let options = interaction_options_with_drag(DragOptions {
@@ -2095,13 +2095,13 @@ fn tab_insert_threshold_controls_reorder_index() {
     let update = pointer_update(
         &tree,
         &frame,
-        Point::new(225.0, 10.0),
-        Point::new(100.0, 10.0),
+        Point::new(250.0, 10.0),
+        Point::new(160.0, 10.0),
         &options,
     );
     assert!(matches!(
         dock_proposal(&update),
-        Some(DockProposal::ReorderTab { index: 1, .. })
+        Some(DockProposal::ReorderTab { index: 2, .. })
     ));
 }
 
@@ -2477,7 +2477,7 @@ fn repair_reports_same_axis_split_merges() {
         panic!("root should remain a split");
     };
     assert_eq!(root.children, vec![TileId(2), TileId(3), TileId(4)]);
-    assert_eq!(root.shares, vec![2.0, 1.0, 1.0]);
+    assert_eq!(root.shares, vec![2.0 / 3.0, 1.0 / 3.0, 1.0]);
     assert!(tree.node(TileId(1)).is_none());
 }
 

@@ -14,7 +14,7 @@ use crate::{PaneId, Rect, Size, TileId};
 /// are arranged horizontally or vertically. Solved frames echo the axis on
 /// [`SplitHandleFrame`](crate::SplitHandleFrame) values so renderers know which
 /// direction a handle moves.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Axis {
     /// Children are laid out left-to-right.
@@ -27,7 +27,7 @@ pub enum Axis {
 ///
 /// Used in split operations and dock targets to say whether a new pane or group
 /// should be inserted before or after the target tile.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Placement {
     /// Place before the target in the relevant axis or order.
@@ -162,7 +162,11 @@ pub struct LayoutInput {
     ///
     /// Expected to be finite and non-negative.
     pub split_handle_thickness: f64,
-    /// Minimum pane size used by the split solver.
+    /// Minimum pane content size used by the split solver.
+    ///
+    /// Visible tab bars and nested split handles are measured separately.
+    /// When bounds are too small, handles fit inside their split first and
+    /// the remaining space is divided in proportion to the child minimums.
     ///
     /// Expected to be finite and non-negative.
     pub min_pane_size: Size,
