@@ -149,6 +149,8 @@ pub enum RepairAction {
         /// Tile from which the duplicate occurrence was removed.
         tile: TileId,
     },
+    /// Removed an invalid collapsed extent or expanded the root tile.
+    ClearedCollapse(TileId),
 }
 
 /// Result of restoring persisted layout state.

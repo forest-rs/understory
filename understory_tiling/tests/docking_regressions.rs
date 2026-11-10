@@ -258,6 +258,85 @@ fn root_docking_respects_split_permissions() {
 }
 
 #[test]
+fn collapse_preserves_the_split_slot_and_active_tab_through_restore() {
+    let mut tree = TileTree::from_spec(TileSpec::split(
+        Axis::Horizontal,
+        [
+            TileSpec::tabs([PaneId(1), PaneId(2)]),
+            TileSpec::pane(PaneId(3)),
+        ],
+        [1.0, 3.0],
+    ))
+    .unwrap();
+    tree.apply(TileOp::ActivatePane { pane: PaneId(2) })
+        .unwrap();
+    let layout = input(600.0);
+    let expanded = tree.layout(layout);
+    let tile = expanded.panes()[0].tile;
+
+    tree.apply(TileOp::SetCollapsed {
+        tile,
+        extent: Some(24.0),
+    })
+    .unwrap();
+    let collapsed = tree.layout(layout);
+    assert_eq!(
+        tree.panes().collect::<Vec<_>>(),
+        [PaneId(1), PaneId(2), PaneId(3)]
+    );
+    assert_eq!(collapsed.panes()[0].rect.x0, 24.0);
+    assert_eq!(collapsed.collapsed_tiles()[0].active_pane, PaneId(2));
+    assert_eq!(
+        hit_test(&collapsed, Point::new(10.0, 50.0)),
+        Some(HitKind::CollapsedTile { tile })
+    );
+    assert!(
+        diff_frames(&expanded, &collapsed)
+            .items
+            .iter()
+            .any(|item| item.item == FrameItemId::CollapsedTile(tile))
+    );
+
+    let restored = restore_snapshot(LayoutSnapshot::new(tree)).unwrap();
+    assert!(restored.repairs.is_empty());
+    let mut tree = restored.tree;
+    assert_eq!(tree.collapsed_extent(tile), Some(24.0));
+    tree.apply(TileOp::SetCollapsed { tile, extent: None })
+        .unwrap();
+    assert_eq!(tree.layout(layout).panes(), expanded.panes());
+}
+
+#[test]
+fn collapsed_siblings_fit_tiny_bounds_and_the_last_tile_expands() {
+    let mut tree = TileTree::from_spec(TileSpec::equal_split(
+        Axis::Horizontal,
+        [TileSpec::pane(PaneId(1)), TileSpec::pane(PaneId(2))],
+    ))
+    .unwrap();
+    let frame = tree.layout(input(30.0));
+    let first = frame.panes()[0].tile;
+    let second = frame.panes()[1].tile;
+    tree.apply(TileOp::SetCollapsed {
+        tile: first,
+        extent: Some(20.0),
+    })
+    .unwrap();
+    tree.apply(TileOp::SetCollapsed {
+        tile: second,
+        extent: Some(40.0),
+    })
+    .unwrap();
+    let frame = tree.layout(input(30.0));
+    assert!(frame.panes().is_empty());
+    assert_eq!(frame.collapsed_tiles()[0].rect.width(), 10.0);
+    assert_eq!(frame.collapsed_tiles()[1].rect.width(), 20.0);
+    tree.apply(TileOp::ClosePane { pane: PaneId(2) }).unwrap();
+    assert_eq!(tree.root(), first);
+    assert_eq!(tree.collapsed_extent(first), None);
+    assert_eq!(tree.layout(input(30.0)).panes()[0].pane, PaneId(1));
+}
+
+#[test]
 fn scale_invariant_split_insertion() {
     fn run(scale: f64) -> Vec<f64> {
         let mut tree = TileTree::from_spec(TileSpec::split(

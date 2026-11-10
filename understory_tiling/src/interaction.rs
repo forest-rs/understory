@@ -1208,6 +1208,7 @@ fn frame_bounds(frame: &LayoutFrame) -> Option<Rect> {
         .iter()
         .map(|pane| pane.rect)
         .chain(frame.tab_bars.iter().map(|bar| bar.rect))
+        .chain(frame.collapsed_tiles.iter().map(|tile| tile.rect))
         .chain(frame.split_handles.iter().map(|handle| handle.rect))
     {
         bounds = Some(match bounds {
@@ -1302,7 +1303,7 @@ fn resize_proposal_from_frame(
     let TileNode::Split(split) = tree.node(resize.split)? else {
         return None;
     };
-    if resize.handle + 1 >= split.children.len() {
+    if resize.handle.checked_add(1)? >= split.children.len() || !tree.can_resize_split(split) {
         return None;
     }
 

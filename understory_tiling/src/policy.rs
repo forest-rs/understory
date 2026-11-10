@@ -435,7 +435,8 @@ fn validate_resize_geometry(
     let Some(TileNode::Split(split)) = tree.node(proposal.split) else {
         return Err(TileError::InvalidTileId);
     };
-    if proposal.handle + 1 >= split.children.len()
+    if proposal.handle >= split.children.len().saturating_sub(1)
+        || !tree.can_resize_split(split)
         || proposal.new_major_lengths.len() != split.children.len()
         || proposal
             .new_major_lengths

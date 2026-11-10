@@ -112,6 +112,17 @@ pub enum TileOp {
         /// Replacement shares.
         shares: Vec<f64>,
     },
+    /// Collapse or expand a pane or tab group in its existing split slot.
+    ///
+    /// The expanded share and active tab remain in the tree. Pointer resize
+    /// is suspended on the containing split while any child is collapsed.
+    /// A tile promoted to the root by another edit expands automatically.
+    SetCollapsed {
+        /// Pane or tab group tile. The root cannot be collapsed.
+        tile: TileId,
+        /// Finite non-negative major-axis strip extent, or `None` to expand.
+        extent: Option<f64>,
+    },
 }
 
 /// Error returned by mutation and commit APIs.

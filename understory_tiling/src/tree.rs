@@ -11,10 +11,10 @@ use crate::util::{
     split_tab_bar, tab_rects,
 };
 use crate::{
-    Axis, DockTarget, FrameItemId, HitKind, HitRegion, LayoutFrame, LayoutInput, PaneFrame, PaneId,
-    Placement, Rect, Revision, Size, SplitChildFrame, SplitConstraints, SplitHandleFrame,
-    SplitNode, TabBarFrame, TabBarPlacement, TabFrame, TabNode, TileError, TileId, TileNode,
-    TileOp, TileSpec, TileSpecError,
+    Axis, CollapsedTileFrame, DockTarget, FrameItemId, HitKind, HitRegion, LayoutFrame,
+    LayoutInput, PaneFrame, PaneId, Placement, Rect, Revision, Size, SplitChildFrame,
+    SplitConstraints, SplitHandleFrame, SplitNode, TabBarFrame, TabBarPlacement, TabFrame, TabNode,
+    TileError, TileId, TileNode, TileOp, TileSpec, TileSpecError,
 };
 
 /// Persistent semantic tree of splits, tab groups, and pane leaves.
@@ -30,10 +30,15 @@ pub struct TileTree {
     nodes: Vec<NodeSlot>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 struct NodeSlot {
     node: Option<TileNode>,
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    collapsed_extent: Option<f64>,
 }
 
 #[derive(Clone, Debug)]
@@ -169,6 +174,7 @@ impl TileTree {
             revision: Revision(0),
             nodes: vec![NodeSlot {
                 node: Some(TileNode::pane(pane)),
+                collapsed_extent: None,
             }],
         }
     }
@@ -219,6 +225,12 @@ impl TileTree {
     #[must_use]
     pub fn node(&self, id: TileId) -> Option<&TileNode> {
         self.get_node(id)
+    }
+
+    /// Returns the reserved major-axis extent of a collapsed pane or group.
+    #[must_use]
+    pub fn collapsed_extent(&self, tile: TileId) -> Option<f64> {
+        self.nodes.get(tile.0 as usize)?.collapsed_extent
     }
 
     /// Applies a semantic operation atomically.
@@ -300,7 +312,17 @@ impl TileTree {
                         u32::try_from(index).expect("tile arena exhausted"),
                     )));
                 }
-                slot.node = None;
+                *slot = NodeSlot::default();
+            } else if let Some(extent) = slot.collapsed_extent
+                && (index == self.root.0 as usize
+                    || !extent.is_finite()
+                    || extent < 0.0
+                    || matches!(slot.node, Some(TileNode::Split(_))))
+            {
+                slot.collapsed_extent = None;
+                sink.record(RepairAction::ClearedCollapse(TileId(
+                    u32::try_from(index).expect("tile arena exhausted"),
+                )));
             }
         }
     }
@@ -348,6 +370,7 @@ impl TileTree {
         match op {
             TileOp::ActivatePane { pane } => self.activate_pane(pane),
             TileOp::ClosePane { pane } => self.close_pane(pane),
+            TileOp::SetCollapsed { tile, extent } => self.set_collapsed(tile, extent),
             TileOp::SplitPane {
                 pane,
                 axis,
@@ -364,7 +387,10 @@ impl TileTree {
 
     fn push_node(&mut self, node: TileNode) -> TileId {
         let id = TileId(u32::try_from(self.nodes.len()).expect("tile arena exhausted"));
-        self.nodes.push(NodeSlot { node: Some(node) });
+        self.nodes.push(NodeSlot {
+            node: Some(node),
+            collapsed_extent: None,
+        });
         id
     }
 
@@ -427,7 +453,7 @@ impl TileTree {
 
     fn clear_node(&mut self, id: TileId) {
         if let Some(slot) = self.nodes.get_mut(id.0 as usize) {
-            slot.node = None;
+            *slot = NodeSlot::default();
         }
     }
 
@@ -441,8 +467,36 @@ impl TileTree {
         Self {
             root,
             revision,
-            nodes: nodes.into_iter().map(|node| NodeSlot { node }).collect(),
+            nodes: nodes
+                .into_iter()
+                .map(|node| NodeSlot {
+                    node,
+                    collapsed_extent: None,
+                })
+                .collect(),
         }
+    }
+
+    fn set_collapsed(&mut self, tile: TileId, extent: Option<f64>) -> Result<bool, TileError> {
+        match self.get_node(tile) {
+            None => return Err(TileError::InvalidTileId),
+            Some(TileNode::Split(_)) => return Err(TileError::InvalidTarget),
+            _ => {}
+        }
+        if extent.is_some_and(|extent| !extent.is_finite() || extent < 0.0 || tile == self.root) {
+            return Err(TileError::InvalidOperation);
+        }
+        let slot = &mut self.nodes[tile.0 as usize];
+        let changed = slot.collapsed_extent != extent;
+        slot.collapsed_extent = extent;
+        Ok(changed)
+    }
+
+    pub(crate) fn can_resize_split(&self, split: &SplitNode) -> bool {
+        split
+            .children
+            .iter()
+            .all(|child| self.collapsed_extent(*child).is_none())
     }
 
     fn activate_pane(&mut self, pane: PaneId) -> Result<bool, TileError> {
@@ -1059,6 +1113,10 @@ impl TileTree {
                     input.split_handle_thickness * split.children.len().saturating_sub(1) as f64;
                 let mut minor: f64 = 0.0;
                 for (index, child) in split.children.iter().copied().enumerate() {
+                    if let Some(extent) = self.collapsed_extent(child) {
+                        major += extent;
+                        continue;
+                    }
                     let size = self.measure_minimum(child, input, minimums);
                     major += child_min_major(split, index, size);
                     let cross = match split.axis {
@@ -1133,10 +1191,18 @@ impl TileTree {
                 child_min_major(split, index, frame.minimum_sizes[child.0 as usize])
             })
             .collect::<Vec<_>>();
-        let lengths = solve_lengths_with_min(child_total, &shares, &min_major);
+        let can_resize = self.can_resize_split(split);
+        let (lengths, fills_split) = if can_resize {
+            (
+                solve_lengths_with_min(child_total, &shares, &min_major),
+                true,
+            )
+        } else {
+            self.solve_with_collapsed_children(children, child_total, &shares, &min_major)
+        };
 
         for (index, child) in children.iter().copied().enumerate() {
-            let end = if index + 1 == children.len() {
+            let end = if fills_split && index + 1 == children.len() {
                 edge
             } else {
                 (cursor + lengths[index]).min(edge)
@@ -1151,7 +1217,11 @@ impl TileTree {
                 index,
                 rect: child_rect,
             });
-            self.layout_tile(child, child_rect, input, frame);
+            if self.collapsed_extent(child).is_some() {
+                self.layout_collapsed_tile(child, split.axis, child_rect, frame);
+            } else {
+                self.layout_tile(child, child_rect, input, frame);
+            }
             cursor = end;
             if index + 1 < children.len() {
                 let end = (cursor + handle).min(edge);
@@ -1165,7 +1235,7 @@ impl TileTree {
                     axis: split.axis,
                     rect: handle_rect,
                 });
-                if handle_rect.width() > 0.0 && handle_rect.height() > 0.0 {
+                if can_resize && handle_rect.width() > 0.0 && handle_rect.height() > 0.0 {
                     frame.hit_regions.push(HitRegion {
                         rect: handle_rect,
                         z: HIT_Z_SPLIT_HANDLE,
@@ -1181,6 +1251,60 @@ impl TileTree {
                 });
                 cursor = end;
             }
+        }
+    }
+
+    fn solve_with_collapsed_children(
+        &self,
+        children: &[TileId],
+        available: f64,
+        shares: &[f64],
+        minimums: &[f64],
+    ) -> (Vec<f64>, bool) {
+        let mut lengths = vec![0.0; children.len()];
+        let mut expanded = Vec::new();
+        let mut expanded_shares = Vec::new();
+        let mut expanded_minimums = Vec::new();
+        for (index, child) in children.iter().copied().enumerate() {
+            if let Some(extent) = self.collapsed_extent(child) {
+                lengths[index] = extent;
+            } else {
+                expanded.push(index);
+                expanded_shares.push(shares[index]);
+                expanded_minimums.push(minimums[index]);
+            }
+        }
+        let reserved = lengths.iter().sum::<f64>();
+        if reserved >= available {
+            return (solve_lengths_with_min(available, shares, &lengths), true);
+        }
+        let remaining = available - reserved;
+        let solved = solve_lengths_with_min(remaining, &expanded_shares, &expanded_minimums);
+        for (index, length) in expanded.iter().copied().zip(solved) {
+            lengths[index] = length;
+        }
+        (lengths, !expanded.is_empty())
+    }
+
+    fn layout_collapsed_tile(&self, tile: TileId, axis: Axis, rect: Rect, frame: &mut LayoutFrame) {
+        let active_pane = match self.get_node(tile) {
+            Some(TileNode::Pane(pane)) => pane.pane,
+            Some(TileNode::Tabs(tabs)) => tabs.panes[tabs.active],
+            _ => unreachable!("only pane and tab group tiles can be collapsed"),
+        };
+        frame.collapsed_tiles.push(CollapsedTileFrame {
+            tile,
+            axis,
+            rect,
+            active_pane,
+        });
+        frame.paint_order.push(FrameItemId::CollapsedTile(tile));
+        if rect.width() > 0.0 && rect.height() > 0.0 {
+            frame.hit_regions.push(HitRegion {
+                rect,
+                z: HIT_Z_PANE,
+                kind: HitKind::CollapsedTile { tile },
+            });
         }
     }
 

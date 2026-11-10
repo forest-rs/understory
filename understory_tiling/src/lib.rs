@@ -179,10 +179,11 @@ mod tree;
 mod util;
 
 pub use frame::{
-    FrameCause, FrameChange, FrameDiff, FrameItemDiff, FrameItemId, FrameMotion, FrameProjection,
-    FrameProjectionError, FrameProjectionInput, HitKind, HitRegion, LayoutFrame, PaneFrame,
-    ProjectionEvent, ProjectionHiddenItem, ProjectionKind, SplitChildFrame, SplitHandleFrame,
-    TabBarFrame, TabFrame, TabGeometry, TabGeometryError, TabGroupGeometry, diff_frames, hit_test,
+    CollapsedTileFrame, FrameCause, FrameChange, FrameDiff, FrameItemDiff, FrameItemId,
+    FrameMotion, FrameProjection, FrameProjectionError, FrameProjectionInput, HitKind, HitRegion,
+    LayoutFrame, PaneFrame, ProjectionEvent, ProjectionHiddenItem, ProjectionKind, SplitChildFrame,
+    SplitHandleFrame, TabBarFrame, TabFrame, TabGeometry, TabGeometryError, TabGroupGeometry,
+    diff_frames, hit_test,
 };
 pub use ids::{PaneId, Revision, TileId};
 pub use interaction::{
