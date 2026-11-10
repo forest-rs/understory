@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 mod bookmark;
+#[cfg(feature = "serde")]
+mod serde_slot;
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -33,13 +35,8 @@ pub struct TileTree {
 }
 
 #[derive(Clone, Debug, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 struct NodeSlot {
     node: Option<TileNode>,
-    #[cfg_attr(
-        feature = "serde",
-        serde(default, skip_serializing_if = "Option::is_none")
-    )]
     collapsed_extent: Option<f64>,
 }
 
@@ -233,6 +230,12 @@ impl TileTree {
     #[must_use]
     pub fn collapsed_extent(&self, tile: TileId) -> Option<f64> {
         self.nodes.get(tile.0 as usize)?.collapsed_extent
+    }
+
+    pub(crate) fn has_collapsed_tiles(&self) -> bool {
+        self.nodes
+            .iter()
+            .any(|slot| slot.collapsed_extent.is_some())
     }
 
     /// Applies a semantic operation atomically.

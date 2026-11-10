@@ -297,7 +297,9 @@ fn collapse_preserves_the_split_slot_and_active_tab_through_restore() {
             .any(|item| item.item == FrameItemId::CollapsedTile(tile))
     );
 
-    let restored = restore_snapshot(LayoutSnapshot::new(tree)).unwrap();
+    let snapshot = LayoutSnapshot::new(tree);
+    assert_eq!(snapshot.schema_version(), Some(2));
+    let restored = restore_snapshot(snapshot).unwrap();
     assert!(restored.repairs.is_empty());
     let mut tree = restored.tree;
     assert_eq!(tree.collapsed_extent(tile), Some(24.0));
