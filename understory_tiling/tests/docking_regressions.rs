@@ -177,6 +177,61 @@ fn edge_preview_includes_target_group_chrome() {
 }
 
 #[test]
+fn small_bounds_do_not_emit_split_handles_outside_root() {
+    let tree = TileTree::from_spec(TileSpec::equal_split(
+        Axis::Horizontal,
+        [
+            TileSpec::pane(PaneId(1)),
+            TileSpec::pane(PaneId(2)),
+            TileSpec::pane(PaneId(3)),
+        ],
+    ))
+    .unwrap();
+    let mut layout = input(2.0);
+    layout.split_handle_thickness = 6.0;
+    let frame = tree.layout(layout);
+    for handle in frame.split_handles() {
+        assert!(
+            handle.rect.x1 <= layout.bounds.x1,
+            "{:?} exceeds {:?}",
+            handle.rect,
+            layout.bounds
+        );
+    }
+}
+
+#[test]
+fn nested_minima_are_preserved_when_root_has_enough_room() {
+    let tree = TileTree::from_spec(TileSpec::equal_split(
+        Axis::Horizontal,
+        [
+            TileSpec::equal_split(
+                Axis::Vertical,
+                [
+                    TileSpec::equal_split(
+                        Axis::Horizontal,
+                        [TileSpec::pane(PaneId(1)), TileSpec::pane(PaneId(2))],
+                    ),
+                    TileSpec::pane(PaneId(3)),
+                ],
+            ),
+            TileSpec::pane(PaneId(4)),
+        ],
+    ))
+    .unwrap();
+    let mut layout = input(300.0);
+    layout.split_handle_thickness = 6.0;
+    layout.min_pane_size = Size::new(80.0, 40.0);
+    let frame = tree.layout(layout);
+    let pane = frame.panes().iter().find(|p| p.pane == PaneId(1)).unwrap();
+    assert!(
+        pane.rect.width() >= 80.0,
+        "pane width {}",
+        pane.rect.width()
+    );
+}
+
+#[test]
 fn scale_invariant_split_insertion() {
     fn run(scale: f64) -> Vec<f64> {
         let mut tree = TileTree::from_spec(TileSpec::split(

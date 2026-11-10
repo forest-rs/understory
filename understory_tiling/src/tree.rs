@@ -7,14 +7,14 @@ use alloc::vec::Vec;
 use crate::frame::{HIT_Z_PANE, HIT_Z_SPLIT_HANDLE, HIT_Z_TAB, HIT_Z_TAB_BAR};
 use crate::snapshot::{RepairAction, RepairReport};
 use crate::util::{
-    is_valid_split_fraction, positive_share, repaired_shares, solve_lengths_with_min,
-    split_min_major, split_tab_bar, tab_rects,
+    is_valid_split_fraction, major_size, positive_share, repaired_shares, solve_lengths_with_min,
+    split_tab_bar, tab_rects,
 };
 use crate::{
     Axis, DockTarget, FrameItemId, HitKind, HitRegion, LayoutFrame, LayoutInput, PaneFrame, PaneId,
-    Placement, Rect, Revision, SplitChildFrame, SplitConstraints, SplitHandleFrame, SplitNode,
-    TabBarFrame, TabBarPlacement, TabFrame, TabNode, TileError, TileId, TileNode, TileOp, TileSpec,
-    TileSpecError,
+    Placement, Rect, Revision, Size, SplitChildFrame, SplitConstraints, SplitHandleFrame,
+    SplitNode, TabBarFrame, TabBarPlacement, TabFrame, TabNode, TileError, TileId, TileNode,
+    TileOp, TileSpec, TileSpecError,
 };
 
 /// Persistent semantic tree of splits, tab groups, and pane leaves.
@@ -338,14 +338,9 @@ impl TileTree {
             "LayoutInput::min_pane_size must be finite and non-negative",
         );
         let mut frame = LayoutFrame::new(self.revision, input);
-        let mut visiting = vec![false; self.nodes.len()];
-        self.layout_tile(
-            self.root,
-            input.bounds.abs(),
-            &input,
-            &mut frame,
-            &mut visiting,
-        );
+        frame.minimum_sizes.resize(self.nodes.len(), Size::ZERO);
+        self.measure_minimum(self.root, input, &mut frame.minimum_sizes);
+        self.layout_tile(self.root, input.bounds.abs(), &input, &mut frame);
         frame
     }
 
@@ -935,22 +930,10 @@ impl TileTree {
         }
     }
 
-    fn layout_tile(
-        &self,
-        id: TileId,
-        rect: Rect,
-        input: &LayoutInput,
-        frame: &mut LayoutFrame,
-        visiting: &mut [bool],
-    ) {
-        let index = id.0 as usize;
-        if index >= self.nodes.len() || visiting.get(index).copied().unwrap_or(false) {
-            return;
-        }
+    fn layout_tile(&self, id: TileId, rect: Rect, input: &LayoutInput, frame: &mut LayoutFrame) {
         let Some(node) = self.get_node(id) else {
             return;
         };
-        visiting[index] = true;
         match node {
             TileNode::Pane(pane) => {
                 frame.focus_order.push(pane.pane);
@@ -969,9 +952,8 @@ impl TileTree {
                 frame.paint_order.push(FrameItemId::Pane(pane.pane));
             }
             TileNode::Tabs(tabs) => self.layout_tabs(id, tabs, rect, input, frame),
-            TileNode::Split(split) => self.layout_split(id, split, rect, input, frame, visiting),
+            TileNode::Split(split) => self.layout_split(id, split, rect, input, frame),
         }
-        visiting[index] = false;
     }
 
     fn layout_tabs(
@@ -1042,6 +1024,78 @@ impl TileTree {
         frame.paint_order.push(FrameItemId::Pane(active_pane));
     }
 
+    fn measure_minimum(&self, id: TileId, input: LayoutInput, minimums: &mut [Size]) -> Size {
+        let size = match self.get_node(id) {
+            Some(TileNode::Pane(_)) => input.min_pane_size,
+            Some(TileNode::Tabs(tabs)) => {
+                let chrome = match tabs.placement {
+                    TabBarPlacement::Top | TabBarPlacement::Bottom => {
+                        Size::new(0.0, input.tab_bar_thickness)
+                    }
+                    TabBarPlacement::Left | TabBarPlacement::Right => {
+                        Size::new(input.tab_bar_thickness, 0.0)
+                    }
+                    TabBarPlacement::Hidden => Size::ZERO,
+                };
+                bounded_size(
+                    input.min_pane_size.width + chrome.width,
+                    input.min_pane_size.height + chrome.height,
+                )
+            }
+            Some(TileNode::Split(split)) => {
+                let mut major =
+                    input.split_handle_thickness * split.children.len().saturating_sub(1) as f64;
+                let mut minor: f64 = 0.0;
+                for (index, child) in split.children.iter().copied().enumerate() {
+                    let size = self.measure_minimum(child, input, minimums);
+                    major += child_min_major(split, index, size);
+                    let cross = match split.axis {
+                        Axis::Horizontal => size.height,
+                        Axis::Vertical => size.width,
+                    };
+                    minor = minor.max(cross);
+                }
+                match split.axis {
+                    Axis::Horizontal => bounded_size(major, minor),
+                    Axis::Vertical => bounded_size(minor, major),
+                }
+            }
+            None => Size::ZERO,
+        };
+        minimums[id.0 as usize] = size;
+        size
+    }
+
+    pub(crate) fn resize_minimums(
+        &self,
+        split_id: TileId,
+        split: &SplitNode,
+        frame: &LayoutFrame,
+        min_pane_size: Size,
+    ) -> Vec<f64> {
+        let mut input = frame.layout_input;
+        let required = Size::new(
+            input.min_pane_size.width.max(min_pane_size.width),
+            input.min_pane_size.height.max(min_pane_size.height),
+        );
+        let measured;
+        let minimums = if required == input.min_pane_size {
+            &frame.minimum_sizes
+        } else {
+            input.min_pane_size = required;
+            let mut sizes = vec![Size::ZERO; self.nodes.len()];
+            self.measure_minimum(split_id, input, &mut sizes);
+            measured = sizes;
+            &measured
+        };
+        split
+            .children
+            .iter()
+            .enumerate()
+            .map(|(index, child)| child_min_major(split, index, minimums[child.0 as usize]))
+            .collect()
+    }
+
     fn layout_split(
         &self,
         id: TileId,
@@ -1049,46 +1103,35 @@ impl TileTree {
         rect: Rect,
         input: &LayoutInput,
         frame: &mut LayoutFrame,
-        visiting: &mut [bool],
     ) {
-        let children: Vec<_> = split
-            .children
-            .iter()
-            .copied()
-            .filter(|child| self.get_node(*child).is_some())
-            .collect();
-        if children.is_empty() {
-            return;
-        }
-        if children.len() == 1 {
-            self.layout_tile(children[0], rect, input, frame, visiting);
-            return;
-        }
-
-        let handle = input.split_handle_thickness;
-        let major = match split.axis {
-            Axis::Horizontal => rect.width(),
-            Axis::Vertical => rect.height(),
+        let children = &split.children;
+        let (mut cursor, edge) = match split.axis {
+            Axis::Horizontal => (rect.x0, rect.x1),
+            Axis::Vertical => (rect.y0, rect.y1),
         };
-        let handle_total = handle * (children.len() - 1) as f64;
-        let child_total = (major - handle_total).max(0.0);
+        let major = edge - cursor;
+        let gaps = (children.len() - 1) as f64;
+        let handle = input.split_handle_thickness.min(major / gaps);
+        let child_total = (major - handle * gaps).max(0.0);
         let shares = repaired_shares(children.len(), &split.shares);
-        let default_min_major = match split.axis {
-            Axis::Horizontal => input.min_pane_size.width,
-            Axis::Vertical => input.min_pane_size.height,
-        };
-        let min_major = split_min_major(children.len(), &split.constraints, default_min_major);
+        let min_major = children
+            .iter()
+            .enumerate()
+            .map(|(index, child)| {
+                child_min_major(split, index, frame.minimum_sizes[child.0 as usize])
+            })
+            .collect::<Vec<_>>();
         let lengths = solve_lengths_with_min(child_total, &shares, &min_major);
-        let mut cursor = match split.axis {
-            Axis::Horizontal => rect.x0,
-            Axis::Vertical => rect.y0,
-        };
 
         for (index, child) in children.iter().copied().enumerate() {
-            let length = lengths[index];
+            let end = if index + 1 == children.len() {
+                edge
+            } else {
+                (cursor + lengths[index]).min(edge)
+            };
             let child_rect = match split.axis {
-                Axis::Horizontal => Rect::new(cursor, rect.y0, cursor + length, rect.y1),
-                Axis::Vertical => Rect::new(rect.x0, cursor, rect.x1, cursor + length),
+                Axis::Horizontal => Rect::new(cursor, rect.y0, end, rect.y1),
+                Axis::Vertical => Rect::new(rect.x0, cursor, rect.x1, end),
             };
             frame.split_children.push(SplitChildFrame {
                 split: id,
@@ -1096,12 +1139,13 @@ impl TileTree {
                 index,
                 rect: child_rect,
             });
-            self.layout_tile(child, child_rect, input, frame, visiting);
-            cursor += length;
+            self.layout_tile(child, child_rect, input, frame);
+            cursor = end;
             if index + 1 < children.len() {
+                let end = (cursor + handle).min(edge);
                 let handle_rect = match split.axis {
-                    Axis::Horizontal => Rect::new(cursor, rect.y0, cursor + handle, rect.y1),
-                    Axis::Vertical => Rect::new(rect.x0, cursor, rect.x1, cursor + handle),
+                    Axis::Horizontal => Rect::new(cursor, rect.y0, end, rect.y1),
+                    Axis::Vertical => Rect::new(rect.x0, cursor, rect.x1, end),
                 };
                 frame.split_handles.push(SplitHandleFrame {
                     split: id,
@@ -1109,19 +1153,21 @@ impl TileTree {
                     axis: split.axis,
                     rect: handle_rect,
                 });
-                frame.hit_regions.push(HitRegion {
-                    rect: handle_rect,
-                    z: HIT_Z_SPLIT_HANDLE,
-                    kind: HitKind::SplitHandle {
-                        split: id,
-                        handle: index,
-                    },
-                });
+                if handle_rect.width() > 0.0 && handle_rect.height() > 0.0 {
+                    frame.hit_regions.push(HitRegion {
+                        rect: handle_rect,
+                        z: HIT_Z_SPLIT_HANDLE,
+                        kind: HitKind::SplitHandle {
+                            split: id,
+                            handle: index,
+                        },
+                    });
+                }
                 frame.paint_order.push(FrameItemId::SplitHandle {
                     split: id,
                     handle: index,
                 });
-                cursor += handle;
+                cursor = end;
             }
         }
     }
@@ -1181,6 +1227,20 @@ impl TileTree {
     fn count_panes(&self) -> usize {
         self.panes().count()
     }
+}
+
+fn bounded_size(width: f64, height: f64) -> Size {
+    Size::new(width.min(f64::MAX), height.min(f64::MAX))
+}
+
+fn child_min_major(split: &SplitNode, index: usize, size: Size) -> f64 {
+    let constraint = split
+        .constraints
+        .min_major
+        .get(index)
+        .copied()
+        .unwrap_or(0.0);
+    major_size(size, split.axis).max(constraint)
 }
 
 fn aligned_constraints(count: usize, constraints: &SplitConstraints) -> Vec<f64> {

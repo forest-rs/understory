@@ -4,7 +4,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::{Axis, Point, Rect, Size, SplitConstraints, TabBarPlacement};
+use crate::{Axis, Point, Rect, Size, TabBarPlacement};
 
 pub(crate) fn split_tab_bar(
     rect: Rect,
@@ -115,9 +115,19 @@ pub(crate) fn solve_lengths_with_min(total: f64, shares: &[f64], min_major: &[f6
     let min_total = min_major.iter().copied().sum::<f64>();
     if min_total >= total {
         if min_total > 0.0 {
+            let scale = if min_total.is_finite() {
+                1.0
+            } else {
+                min_major.iter().copied().fold(0.0, f64::max)
+            };
+            let sum = if scale == 1.0 {
+                min_total
+            } else {
+                min_major.iter().map(|minimum| minimum / scale).sum()
+            };
             return min_major
                 .iter()
-                .map(|minimum| total * (*minimum / min_total))
+                .map(|minimum| total * ((*minimum / scale) / sum))
                 .collect();
         }
         return vec![total / count as f64; count];
@@ -169,22 +179,6 @@ pub(crate) fn solve_lengths_with_min(total: f64, shares: &[f64], min_major: &[f6
     }
 
     lengths
-}
-
-pub(crate) fn split_min_major(
-    count: usize,
-    constraints: &SplitConstraints,
-    fallback: f64,
-) -> Vec<f64> {
-    if !fallback.is_finite() || fallback < 0.0 {
-        return vec![0.0; count];
-    }
-    (0..count)
-        .map(|index| match constraints.min_major.get(index).copied() {
-            Some(minimum) if minimum.is_finite() && minimum >= 0.0 => fallback.max(minimum),
-            _ => fallback,
-        })
-        .collect()
 }
 
 pub(crate) fn major_size(size: Size, axis: Axis) -> f64 {

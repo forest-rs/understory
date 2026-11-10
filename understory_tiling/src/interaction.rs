@@ -7,7 +7,7 @@ use core::cmp::Ordering;
 
 use crate::Placement;
 use crate::frame::hit_test;
-use crate::util::{major_length, major_size, rect_distance, split_min_major};
+use crate::util::{major_length, rect_distance};
 use crate::{
     Axis, DockTarget, HitKind, LayoutFrame, LayoutInput, PaneId, Point, Rect, Revision, Size,
     SplitChildFrame, TabBarPlacement, TileError, TileId, TileNode, TileOp, TileTree,
@@ -1324,8 +1324,7 @@ fn resize_proposal_from_frame(
         return None;
     }
 
-    let fallback_min_major = major_size(options.min_pane_size, resize.axis);
-    let min_major = split_min_major(split.children.len(), &split.constraints, fallback_min_major);
+    let min_major = tree.resize_minimums(resize.split, split, frame, options.min_pane_size);
     let min_left = min_major[resize.handle];
     let min_right = min_major[resize.handle + 1];
     let lower = min_left - left_length;

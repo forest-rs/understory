@@ -162,7 +162,11 @@ pub struct LayoutInput {
     ///
     /// Expected to be finite and non-negative.
     pub split_handle_thickness: f64,
-    /// Minimum pane size used by the split solver.
+    /// Minimum pane content size used by the split solver.
+    ///
+    /// Visible tab bars and nested split handles are measured separately.
+    /// When bounds are too small, handles fit inside their split first and
+    /// the remaining space is divided in proportion to the child minimums.
     ///
     /// Expected to be finite and non-negative.
     pub min_pane_size: Size,

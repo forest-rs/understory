@@ -4,7 +4,7 @@
 use alloc::vec::Vec;
 
 use crate::interaction::op_for_dock_proposal;
-use crate::util::{major_length, major_size, split_min_major};
+use crate::util::major_length;
 use crate::{
     Axis, DockProposal, DockTarget, InteractionOptions, InteractionUpdate, LayoutFrame, Placement,
     Proposal, ResizeOptions, ResizeProposal, Revision, TileError, TileNode, TileOp, TileTree,
@@ -452,11 +452,7 @@ fn validate_resize_geometry(
         }
     }
 
-    let min_major = split_min_major(
-        split.children.len(),
-        &split.constraints,
-        major_size(options.min_pane_size, split.axis),
-    );
+    let min_major = tree.resize_minimums(proposal.split, split, frame, options.min_pane_size);
     let mut old_total = 0.0;
     let mut new_total = 0.0;
     for child in &children {
