@@ -545,6 +545,35 @@ fn drag_uses_the_same_edge_permissions_as_commit_validation() {
 }
 
 #[test]
+fn moving_a_leaf_to_a_split_keeps_its_tile_identity() {
+    let mut tree = TileTree::from_spec(TileSpec::equal_split(
+        Axis::Horizontal,
+        [
+            TileSpec::pane(PaneId(1)),
+            TileSpec::pane(PaneId(2)),
+            TileSpec::pane(PaneId(3)),
+        ],
+    ))
+    .unwrap();
+    let layout = input(600.0);
+    let frame = tree.layout(layout);
+    let moved = frame.panes()[0].tile;
+    tree.apply(TileOp::MovePane {
+        pane: PaneId(1),
+        target: DockTarget::Split {
+            tile: frame.panes()[2].tile,
+            axis: Axis::Horizontal,
+            placement: Placement::After,
+            ratio: 0.5,
+        },
+    })
+    .unwrap();
+    let frame = tree.layout(layout);
+    assert_eq!(frame.panes()[2].tile, moved);
+    assert_eq!(frame.panes()[2].pane, PaneId(1));
+}
+
+#[test]
 fn scale_invariant_split_insertion() {
     fn run(scale: f64) -> Vec<f64> {
         let mut tree = TileTree::from_spec(TileSpec::split(

@@ -527,7 +527,8 @@ impl TileTree {
         if self.count_panes() <= 1 {
             return Err(TileError::CannotCloseLastPane);
         }
-        self.remove_pane(pane)?;
+        let location = self.find_pane(pane).ok_or(TileError::InvalidPaneId)?;
+        self.remove_pane_at(location)?;
         Ok(true)
     }
 
@@ -556,13 +557,40 @@ impl TileTree {
     }
 
     fn move_pane(&mut self, pane: PaneId, target: DockTarget) -> Result<bool, TileError> {
-        if !self.contains_pane(pane) {
-            return Err(TileError::InvalidPaneId);
-        }
+        let location = self.find_pane(pane).ok_or(TileError::InvalidPaneId)?;
         self.validate_target(target)?;
-        self.remove_pane(pane)?;
-        let tile = self.push_node(TileNode::pane(pane));
-        self.insert_tile_at_target(tile, pane, target)?;
+        match target {
+            DockTarget::TabInto { group, index } => {
+                self.remove_pane_at(location)?;
+                self.insert_tab_pane(group, pane, index)?;
+            }
+            DockTarget::Root => {
+                self.remove_pane_at(location)?;
+                let group = self.push_node(TileNode::tabs(vec![pane]));
+                self.insert_group_at_target(group, target)?;
+            }
+            DockTarget::Split {
+                tile,
+                axis,
+                placement,
+                ratio,
+            } => {
+                let inserted = match location {
+                    PaneLocation::Tile { tile: source } => {
+                        if source == tile {
+                            return Err(TileError::InvalidTileId);
+                        }
+                        self.detach_tile(source)?;
+                        source
+                    }
+                    PaneLocation::InTabs { .. } => {
+                        self.remove_pane_at(location)?;
+                        self.push_node(TileNode::pane(pane))
+                    }
+                };
+                self.insert_tile_near(tile, axis, inserted, placement, ratio)?;
+            }
+        }
         Ok(true)
     }
 
@@ -654,37 +682,6 @@ impl TileTree {
                 Ok(())
             }
             DockTarget::TabInto { .. } => Err(TileError::InvalidTarget),
-        }
-    }
-
-    fn insert_tile_at_target(
-        &mut self,
-        tile: TileId,
-        pane: PaneId,
-        target: DockTarget,
-    ) -> Result<(), TileError> {
-        match target {
-            DockTarget::Root => {
-                let group = self.push_node(TileNode::tabs(vec![pane]));
-                self.insert_tile_near(
-                    self.root,
-                    DockTarget::ROOT_AXIS,
-                    group,
-                    DockTarget::ROOT_PLACEMENT,
-                    DockTarget::ROOT_RATIO,
-                )
-            }
-            DockTarget::Split {
-                tile: target,
-                axis,
-                placement,
-                ratio,
-            } => self.insert_tile_near(target, axis, tile, placement, ratio),
-            DockTarget::TabInto { group, index } => {
-                self.insert_tab_pane(group, pane, index)?;
-                self.clear_node(tile);
-                Ok(())
-            }
         }
     }
 
@@ -796,8 +793,8 @@ impl TileTree {
         }
     }
 
-    fn remove_pane(&mut self, pane: PaneId) -> Result<(), TileError> {
-        match self.find_pane(pane).ok_or(TileError::InvalidPaneId)? {
+    fn remove_pane_at(&mut self, location: PaneLocation) -> Result<(), TileError> {
+        match location {
             PaneLocation::Tile { tile } => {
                 self.clear_node(tile);
             }
@@ -1410,4 +1407,34 @@ fn compact_constraints(mut constraints: Vec<f64>) -> Vec<f64> {
         constraints.pop();
     }
     constraints
+}
+
+#[cfg(test)]
+mod allocation_tests {
+    use super::*;
+
+    #[test]
+    fn tab_moves_do_not_add_arena_slots() {
+        let mut tree = TileTree::from_spec(TileSpec::equal_split(
+            Axis::Horizontal,
+            [
+                TileSpec::tabs([PaneId(1), PaneId(2)]),
+                TileSpec::tabs([PaneId(3)]),
+            ],
+        ))
+        .unwrap();
+        let Some(TileNode::Split(split)) = tree.node(tree.root()) else {
+            panic!("expected a split")
+        };
+        let (left, right) = (split.children[0], split.children[1]);
+        let capacity = tree.nodes.len();
+        for group in [right, left].into_iter().cycle().take(32) {
+            tree.apply(TileOp::MovePane {
+                pane: PaneId(2),
+                target: DockTarget::TabInto { group, index: None },
+            })
+            .unwrap();
+        }
+        assert_eq!(tree.nodes.len(), capacity);
+    }
 }
