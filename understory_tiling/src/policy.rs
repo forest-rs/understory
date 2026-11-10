@@ -298,8 +298,7 @@ pub fn validate_proposal(
             }
         }
     };
-    let mut probe = tree.clone();
-    probe.apply(op.clone())?;
+    tree.edited(op.clone())?;
     validate_policy(&proposal, policy)?;
     Ok(ValidatedProposal {
         proposal,

@@ -120,6 +120,63 @@ fn root_docking_obeys_requested_half_share() {
 }
 
 #[test]
+fn ghost_matches_solved_result_after_source_disappears() {
+    let tree = TileTree::from_spec(TileSpec::equal_split(
+        Axis::Horizontal,
+        [TileSpec::pane(PaneId(1)), TileSpec::pane(PaneId(2))],
+    ))
+    .unwrap();
+    let update = drag(
+        &tree,
+        input(600.0),
+        Point::new(100.0, 150.0),
+        Point::new(590.0, 150.0),
+    );
+    let ghost = update.overlay.ghost_rects[0].rect;
+    let preview = update.preview.unwrap();
+    let actual = preview
+        .panes()
+        .iter()
+        .find(|p| p.pane == PaneId(1))
+        .unwrap()
+        .rect;
+    assert_eq!(ghost, actual);
+}
+
+#[test]
+fn edge_preview_includes_target_group_chrome() {
+    let tree = TileTree::from_spec(TileSpec::equal_split(
+        Axis::Horizontal,
+        [
+            TileSpec::tabs([PaneId(1), PaneId(2)]),
+            TileSpec::tabs([PaneId(3), PaneId(4)]),
+        ],
+    ))
+    .unwrap();
+    // Inspect whether the candidate generator offers a complete-group edge geometry.
+    let frame = tree.layout(input(600.0));
+    let source = DragSession {
+        subject: DragSubject::Tab {
+            group: frame.tabs()[0].group,
+            pane: PaneId(1),
+        },
+        source: DragSource::Tab {
+            group: frame.tabs()[0].group,
+            pane: PaneId(1),
+        },
+        origin: Point::new(50.0, 10.0),
+        current: Point::new(590.0, 150.0),
+        base_revision: tree.revision(),
+        proposal: None,
+    };
+    let targets = drop_targets_for_drag(&tree, &frame, &source, &DragOptions::default());
+    let id = pick_drop_target(&targets, source.current).unwrap();
+    let target = targets.iter().find(|t| t.id == id).unwrap();
+    // Splitting beside a tab group reserves the full group's height, including its bar.
+    assert_eq!(target.preview_rect.y0, 0.0);
+}
+
+#[test]
 fn scale_invariant_split_insertion() {
     fn run(scale: f64) -> Vec<f64> {
         let mut tree = TileTree::from_spec(TileSpec::split(

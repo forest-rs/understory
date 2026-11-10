@@ -1659,7 +1659,7 @@ fn drag_local_pane_edge_target_wins_over_root_target() {
     assert_eq!(
         update.overlay.ghost_rects,
         vec![GhostFrame {
-            rect: Rect::new(155.0, 0.0, 300.0, 100.0),
+            rect: Rect::new(0.0, 0.0, 300.0, 95.0),
             kind: GhostKind::PreviewPane,
         }]
     );
@@ -1852,7 +1852,7 @@ fn tab_group_drag_validates_and_commits_split_move() {
     assert_eq!(
         update.overlay.ghost_rects,
         vec![GhostFrame {
-            rect: Rect::new(155.0, 0.0, 300.0, 100.0),
+            rect: Rect::new(0.0, 0.0, 300.0, 95.0),
             kind: GhostKind::PreviewGroup,
         }]
     );

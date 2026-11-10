@@ -257,8 +257,9 @@ pub struct DropTargetFrame {
     /// Preview rectangle for overlays.
     ///
     /// This is usually larger than `rect`: the hit zone can be an edge strip
-    /// while the preview shows the pane area that would be created. A tab-bar
-    /// target uses this rectangle as the insertion marker.
+    /// while the preview shows the pane area that would be created. Edge
+    /// candidates start with an estimate. The active overlay target uses the
+    /// solved placement when available. A tab-bar target uses an insertion marker.
     pub preview_rect: Rect,
     /// Target priority. Higher values win.
     pub priority: i16,
@@ -682,8 +683,8 @@ fn update_drag(
 ) -> InteractionUpdate {
     debug_assert!(point.is_finite(), "point must be finite");
     drag.current = point;
-    let targets = drop_targets_for_drag(tree, frame, drag, options);
-    let active_frame = pick_drop_target_frame(&targets, point, true);
+    let mut targets = drop_targets_for_drag(tree, frame, drag, options);
+    let mut active_frame = pick_drop_target_frame(&targets, point, true);
     let active_target = active_frame.map(|target| target.id);
     let rejected_frame = if active_frame.is_none() {
         pick_drop_target_frame(&targets, point, false)
@@ -691,31 +692,44 @@ fn update_drag(
         None
     };
     let proposal = active_frame.and_then(|target| proposal_for_drag(frame, drag, &target, options));
-    let preview = preview_layout.and_then(|input| {
-        proposal
-            .as_ref()
-            .and_then(|proposal| preview_for_dock_proposal(tree, proposal, input))
+    let solved = proposal.as_ref().and_then(|proposal| {
+        preview_for_dock_proposal(tree, proposal, preview_layout.unwrap_or(frame.layout_input))
     });
+    if let Some(target) = &mut active_frame
+        && matches!(target.target, DockTarget::Split { .. } | DockTarget::Root)
+        && let Some(rect) = solved
+            .as_ref()
+            .and_then(|preview| solved_drop_rect(preview, drag.subject))
+    {
+        target.preview_rect = rect;
+        if let Some(candidate) = targets
+            .iter_mut()
+            .find(|candidate| candidate.id == target.id)
+        {
+            candidate.preview_rect = rect;
+        }
+    }
     let overlay_targets = active_frame
         .into_iter()
         .chain(rejected_frame)
         .collect::<Vec<_>>();
     drag.proposal = proposal.clone();
 
+    let hit_regions = targets
+        .iter()
+        .map(|target| OverlayHitRegion {
+            rect: target.rect,
+            z: target.priority,
+            target: target.id,
+        })
+        .collect();
     InteractionUpdate {
         proposal: proposal.map(Proposal::Dock),
         base_revision: Some(drag.base_revision),
-        candidates: targets.clone(),
+        candidates: targets,
         overlay: OverlayFrame {
             active_target,
-            hit_regions: targets
-                .iter()
-                .map(|target| OverlayHitRegion {
-                    rect: target.rect,
-                    z: target.priority,
-                    target: target.id,
-                })
-                .collect(),
+            hit_regions,
             drop_targets: overlay_targets,
             ghost_rects: ghost_rects_for_drag(drag, active_frame, rejected_frame),
             dragged: Some(DraggedFrame {
@@ -723,7 +737,7 @@ fn update_drag(
                 rect: Rect::new(point.x - 8.0, point.y - 8.0, point.x + 8.0, point.y + 8.0),
             }),
         },
-        preview,
+        preview: preview_layout.and(solved),
     }
 }
 
@@ -829,7 +843,7 @@ pub fn drop_targets_for_drag(
             push_edge_targets(
                 &mut targets,
                 pane.tile,
-                pane.rect,
+                pane_tile_bounds(frame, pane),
                 drag.current,
                 edge_fraction,
                 25,
@@ -1165,6 +1179,28 @@ fn ghost_kind_for_drag(drag: &DragSession) -> GhostKind {
     }
 }
 
+fn pane_tile_bounds(frame: &LayoutFrame, pane: &crate::PaneFrame) -> Rect {
+    frame
+        .tab_bars
+        .iter()
+        .find(|bar| bar.group == pane.tile)
+        .map_or(pane.rect, |bar| union_rect(pane.rect, bar.rect))
+}
+
+fn solved_drop_rect(frame: &LayoutFrame, subject: DragSubject) -> Option<Rect> {
+    match subject {
+        DragSubject::Pane(pane) | DragSubject::Tab { pane, .. } => frame
+            .panes
+            .iter()
+            .find(|candidate| candidate.pane == pane)
+            .map(|pane| pane.rect),
+        DragSubject::TabGroup(group) => {
+            let pane = frame.panes.iter().find(|pane| pane.tile == group)?;
+            Some(pane_tile_bounds(frame, pane))
+        }
+    }
+}
+
 fn frame_bounds(frame: &LayoutFrame) -> Option<Rect> {
     let mut bounds: Option<Rect> = None;
     for rect in frame
@@ -1335,14 +1371,13 @@ fn preview_for_resize(
     input: Option<LayoutInput>,
 ) -> Option<LayoutFrame> {
     let input = input?;
-    let mut preview_tree = tree.clone();
-    preview_tree
-        .apply(TileOp::SetSplitShares {
+    let edited = tree
+        .edited(TileOp::SetSplitShares {
             split: proposal.split,
             shares: proposal.new_major_lengths.clone(),
         })
         .ok()?;
-    Some(preview_tree.layout(input))
+    Some(edited.as_ref().unwrap_or(tree).layout(input))
 }
 
 fn preview_for_dock_proposal(
@@ -1351,9 +1386,8 @@ fn preview_for_dock_proposal(
     input: LayoutInput,
 ) -> Option<LayoutFrame> {
     let op = op_for_dock_proposal(proposal.clone()).ok()?;
-    let mut preview_tree = tree.clone();
-    preview_tree.apply(op).ok()?;
-    Some(preview_tree.layout(input))
+    let edited = tree.edited(op).ok()?;
+    Some(edited.as_ref().unwrap_or(tree).layout(input))
 }
 
 fn split_child_frames(frame: &LayoutFrame, split: TileId) -> Vec<SplitChildFrame> {

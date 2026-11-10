@@ -4,7 +4,7 @@
 use alloc::vec::Vec;
 use core::fmt;
 
-use crate::{Axis, PaneId, Point, Rect, Revision, TabBarPlacement, TileId};
+use crate::{Axis, LayoutInput, PaneId, Point, Rect, Revision, TabBarPlacement, TileId};
 
 /// Flattened output from a layout pass.
 ///
@@ -16,6 +16,8 @@ use crate::{Axis, PaneId, Point, Rect, Revision, TabBarPlacement, TileId};
 pub struct LayoutFrame {
     /// Tree revision used for this frame.
     pub(crate) revision: Revision,
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub(crate) layout_input: LayoutInput,
     /// Active pane rectangles.
     pub(crate) panes: Vec<PaneFrame>,
     /// Visible tab bar rectangles.
@@ -38,9 +40,10 @@ pub struct LayoutFrame {
 }
 
 impl LayoutFrame {
-    pub(crate) fn new(revision: Revision) -> Self {
+    pub(crate) fn new(revision: Revision, layout_input: LayoutInput) -> Self {
         Self {
             revision,
+            layout_input,
             panes: Vec::new(),
             tab_bars: Vec::new(),
             tabs: Vec::new(),

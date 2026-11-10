@@ -223,18 +223,24 @@ impl TileTree {
 
     /// Applies a semantic operation atomically.
     pub fn apply(&mut self, op: TileOp) -> Result<(), TileError> {
-        let mut next = self.clone();
-        let changed = next.apply_inner(op)?;
-        if changed {
-            next.revision.0 = next
-                .revision
-                .0
-                .checked_add(1)
-                .ok_or(TileError::RevisionExhausted)?;
-            next.normalize();
+        if let Some(next) = self.edited(op)? {
             *self = next;
         }
         Ok(())
+    }
+
+    pub(crate) fn edited(&self, op: TileOp) -> Result<Option<Self>, TileError> {
+        let mut next = self.clone();
+        if !next.apply_inner(op)? {
+            return Ok(None);
+        }
+        next.revision.0 = next
+            .revision
+            .0
+            .checked_add(1)
+            .ok_or(TileError::RevisionExhausted)?;
+        next.normalize();
+        Ok(Some(next))
     }
 
     /// Restores persisted state atomically and reports every repair performed.
@@ -331,7 +337,7 @@ impl TileTree {
                 && input.min_pane_size.height >= 0.0,
             "LayoutInput::min_pane_size must be finite and non-negative",
         );
-        let mut frame = LayoutFrame::new(self.revision);
+        let mut frame = LayoutFrame::new(self.revision, input);
         let mut visiting = vec![false; self.nodes.len()];
         self.layout_tile(
             self.root,
