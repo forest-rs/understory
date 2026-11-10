@@ -417,6 +417,102 @@ fn reopen_recreates_a_binary_slot_or_reports_the_root_fallback() {
 }
 
 #[test]
+fn narrow_container_edge_zone_docks_beside_the_whole_split() {
+    let tree = TileTree::from_spec(TileSpec::equal_split(
+        Axis::Horizontal,
+        [
+            TileSpec::equal_split(
+                Axis::Vertical,
+                [TileSpec::pane(PaneId(1)), TileSpec::pane(PaneId(2))],
+            ),
+            TileSpec::pane(PaneId(3)),
+        ],
+    ))
+    .unwrap();
+    let frame = tree.layout(input(600.0));
+    let container = frame
+        .split_children()
+        .iter()
+        .find(|child| child.split == tree.root())
+        .unwrap()
+        .child;
+    let update = drag(
+        &tree,
+        input(600.0),
+        Point::new(500.0, 150.0),
+        Point::new(5.0, 150.0),
+    );
+    assert_eq!(
+        update.overlay.active_target,
+        Some(DropTargetId::Split {
+            tile: container,
+            axis: Axis::Horizontal,
+            placement: Placement::Before,
+        })
+    );
+    let update = drag(
+        &tree,
+        input(600.0),
+        Point::new(500.0, 150.0),
+        Point::new(40.0, 100.0),
+    );
+    assert_eq!(
+        update.overlay.active_target,
+        Some(DropTargetId::Split {
+            tile: frame.panes()[0].tile,
+            axis: Axis::Horizontal,
+            placement: Placement::Before,
+        })
+    );
+}
+
+#[test]
+fn tab_bar_target_identity_survives_gap_changes() {
+    let tree = TileTree::from_spec(TileSpec::tabs([PaneId(1), PaneId(2), PaneId(3)])).unwrap();
+    let frame = tree.layout(input(300.0));
+    let options = InteractionOptions::from_layout_input(input(300.0));
+    let mut state = begin_interaction(&frame, Point::new(50.0, 10.0), &options);
+    let first = update_interaction(&tree, &frame, &mut state, Point::new(140.0, 10.0), &options);
+    let second = update_interaction(&tree, &frame, &mut state, Point::new(240.0, 10.0), &options);
+    assert_eq!(
+        first.overlay.active_target,
+        Some(DropTargetId::TabBar(tree.root()))
+    );
+    assert_eq!(first.overlay.active_target, second.overlay.active_target);
+    assert_ne!(first.overlay.ghost_rects, second.overlay.ghost_rects);
+}
+
+#[test]
+fn overlapping_edges_hold_selection_until_the_new_edge_is_clearly_closer() {
+    let tree = TileTree::from_spec(TileSpec::equal_split(
+        Axis::Horizontal,
+        [TileSpec::pane(PaneId(1)), TileSpec::pane(PaneId(2))],
+    ))
+    .unwrap();
+    let frame = tree.layout(input(600.0));
+    let options = InteractionOptions::from_layout_input(input(600.0));
+    let mut state = begin_interaction(&frame, Point::new(150.0, 150.0), &options);
+    let first = update_interaction(&tree, &frame, &mut state, Point::new(310.0, 11.0), &options);
+    let second = update_interaction(&tree, &frame, &mut state, Point::new(311.0, 10.0), &options);
+    let third = update_interaction(&tree, &frame, &mut state, Point::new(330.0, 10.0), &options);
+    assert!(matches!(
+        first.overlay.active_target,
+        Some(DropTargetId::Split {
+            axis: Axis::Horizontal,
+            ..
+        })
+    ));
+    assert_eq!(second.overlay.active_target, first.overlay.active_target);
+    assert!(matches!(
+        third.overlay.active_target,
+        Some(DropTargetId::Split {
+            axis: Axis::Vertical,
+            ..
+        })
+    ));
+}
+
+#[test]
 fn scale_invariant_split_insertion() {
     fn run(scale: f64) -> Vec<f64> {
         let mut tree = TileTree::from_spec(TileSpec::split(

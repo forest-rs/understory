@@ -228,16 +228,59 @@ pub struct OverlayHitRegion {
     pub target: DropTargetId,
 }
 
-/// Opaque drop target id.
+/// Semantic identity of a drop target within a layout revision.
 ///
-/// Returned in [`DropTargetFrame`] and [`OverlayFrame::active_target`] to give
-/// renderers a stable handle for highlighting one generated target.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+/// The id stays the same as candidates appear or disappear, including when
+/// the insertion gap changes within the same tab bar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct DropTargetId(
-    /// Numeric target id.
-    pub u32,
-);
+pub enum DropTargetId {
+    /// Edge of a tile, including split containers and the root.
+    Split {
+        /// Target tile.
+        tile: TileId,
+        /// Split axis.
+        axis: Axis,
+        /// Edge along the axis.
+        placement: Placement,
+    },
+    /// Tab strip insertion zone.
+    TabBar(TileId),
+    /// Group content zone that appends a tab.
+    TabBody(TileId),
+}
+
+impl DropTargetId {
+    fn from_target(target: DockTarget) -> Option<Self> {
+        match target {
+            DockTarget::Root => None,
+            DockTarget::Split {
+                tile,
+                axis,
+                placement,
+                ..
+            } => Some(Self::Split {
+                tile,
+                axis,
+                placement,
+            }),
+            DockTarget::TabInto {
+                group,
+                index: Some(_),
+            } => Some(Self::TabBar(group)),
+            DockTarget::TabInto { group, index: None } => Some(Self::TabBody(group)),
+        }
+    }
+
+    fn from_proposal(proposal: &DockProposal) -> Option<Self> {
+        match *proposal {
+            DockProposal::MovePane { target, .. } | DockProposal::MoveTabGroup { target, .. } => {
+                Self::from_target(target)
+            }
+            DockProposal::ReorderTab { group, .. } => Some(Self::TabBar(group)),
+        }
+    }
+}
 
 /// Candidate drop target.
 ///
@@ -684,7 +727,7 @@ fn update_drag(
     debug_assert!(point.is_finite(), "point must be finite");
     drag.current = point;
     let mut targets = drop_targets_for_drag(tree, frame, drag, options);
-    let mut active_frame = pick_drop_target_frame(&targets, point, true);
+    let mut active_frame = pick_drag_target(&targets, drag);
     let active_target = active_frame.map(|target| target.id);
     let rejected_frame = if active_frame.is_none() {
         pick_drop_target_frame(&targets, point, false)
@@ -833,13 +876,33 @@ pub fn drop_targets_for_drag(
             root_rect,
             drag.current,
             edge_fraction,
-            10,
+            if matches!(tree.node(tree.root()), Some(TileNode::Split(_))) {
+                10
+            } else {
+                25
+            },
             |target| target_accepts(tree, frame, drag, target, options),
         );
     }
 
     if options.allow_split {
+        for child in &frame.split_children {
+            if matches!(tree.node(child.child), Some(TileNode::Split(_))) {
+                push_edge_targets(
+                    &mut targets,
+                    child.child,
+                    child.rect,
+                    drag.current,
+                    edge_fraction.min(0.08),
+                    27,
+                    |target| target_accepts(tree, frame, drag, target, options),
+                );
+            }
+        }
         for pane in &frame.panes {
+            if pane.tile == tree.root() {
+                continue;
+            }
             push_edge_targets(
                 &mut targets,
                 pane.tile,
@@ -859,14 +922,12 @@ pub fn drop_targets_for_drag(
             }
             let (index, marker) =
                 tab_insertion(frame, bar, drag.current, options.tab_insert_threshold);
-            let id =
-                DropTargetId(u32::try_from(targets.len()).expect("drop target arena exhausted"));
             let target = DockTarget::TabInto {
                 group: bar.group,
                 index: Some(index),
             };
             targets.push(DropTargetFrame {
-                id,
+                id: DropTargetId::TabBar(bar.group),
                 rect: bar.viewport,
                 target,
                 preview_rect: marker,
@@ -884,11 +945,8 @@ pub fn drop_targets_for_drag(
                         group: pane.tile,
                         index: None,
                     };
-                    let id = DropTargetId(
-                        u32::try_from(targets.len()).expect("drop target arena exhausted"),
-                    );
                     targets.push(DropTargetFrame {
-                        id,
+                        id: DropTargetId::TabBody(pane.tile),
                         rect,
                         target,
                         preview_rect: pane.rect,
@@ -930,6 +988,23 @@ fn pick_drop_target_frame(
         }
     }
     best.map(|(_, target)| target)
+}
+
+fn pick_drag_target(targets: &[DropTargetFrame], drag: &DragSession) -> Option<DropTargetFrame> {
+    let best = pick_drop_target_frame(targets, drag.current, true)?;
+    let previous = drag.proposal.as_ref().and_then(DropTargetId::from_proposal);
+    // Keep the current edge through small changes in normalized edge depth.
+    // A different priority or leaving the hit zone still switches immediately.
+    if let Some(previous @ DropTargetId::Split { .. }) = previous
+        && let Some(target) = targets.iter().find(|target| target.id == previous)
+        && target.accepts
+        && target.priority == best.priority
+        && target.rect.contains(drag.current)
+        && target.distance <= best.distance + 0.1
+    {
+        return Some(*target);
+    }
+    Some(best)
 }
 
 fn proposal_for_drag(
@@ -993,6 +1068,9 @@ fn push_edge_targets(
         width >= 0.0 && height >= 0.0,
         "drop target generation requires non-negative pane dimensions",
     );
+    if width == 0.0 || height == 0.0 || edge_fraction == 0.0 {
+        return;
+    }
     let edge_w = width * edge_fraction;
     let edge_h = height * edge_fraction;
     let tile_rect = rect;
@@ -1040,7 +1118,7 @@ fn push_edge_targets(
     ];
 
     for (rect, preview_rect, target) in specs {
-        let id = DropTargetId(u32::try_from(targets.len()).expect("drop target arena exhausted"));
+        let id = DropTargetId::from_target(target).expect("edge target identifies a split");
         targets.push(DropTargetFrame {
             id,
             rect,
