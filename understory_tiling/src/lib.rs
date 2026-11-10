@@ -170,6 +170,7 @@ mod ids;
 mod interaction;
 mod model;
 mod ops;
+mod placement;
 mod policy;
 mod snapshot;
 mod spec;
@@ -199,6 +200,7 @@ pub use model::{
     TileNode,
 };
 pub use ops::{DockTarget, TileError, TileOp};
+pub use placement::{PaneBookmark, ReopenPlacement};
 pub use policy::{
     DockPermissions, DockPolicy, EdgeSet, ProposalValidationInput, ValidatedProposal, ZoneSet,
     commit_proposal, validate_interaction_update, validate_proposal,

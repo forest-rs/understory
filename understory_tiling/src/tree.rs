@@ -1,6 +1,8 @@
 // Copyright 2026 the Understory Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+mod bookmark;
+
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -246,13 +248,18 @@ impl TileTree {
         if !next.apply_inner(op)? {
             return Ok(None);
         }
-        next.revision.0 = next
+        next.finish_edit()?;
+        Ok(Some(next))
+    }
+
+    fn finish_edit(&mut self) -> Result<(), TileError> {
+        self.revision.0 = self
             .revision
             .0
             .checked_add(1)
             .ok_or(TileError::RevisionExhausted)?;
-        next.normalize();
-        Ok(Some(next))
+        self.normalize();
+        Ok(())
     }
 
     /// Restores persisted state atomically and reports every repair performed.
@@ -674,16 +681,26 @@ impl TileTree {
                 ratio,
             } => self.insert_tile_near(target, axis, tile, placement, ratio),
             DockTarget::TabInto { group, index } => {
-                let Some(TileNode::Tabs(tabs)) = self.get_node_mut(group) else {
-                    return Err(TileError::InvalidTarget);
-                };
-                let index = index.unwrap_or(tabs.panes.len()).min(tabs.panes.len());
-                tabs.panes.insert(index, pane);
-                tabs.active = index;
+                self.insert_tab_pane(group, pane, index)?;
                 self.clear_node(tile);
                 Ok(())
             }
         }
+    }
+
+    fn insert_tab_pane(
+        &mut self,
+        group: TileId,
+        pane: PaneId,
+        index: Option<usize>,
+    ) -> Result<(), TileError> {
+        let Some(TileNode::Tabs(tabs)) = self.get_node_mut(group) else {
+            return Err(TileError::InvalidTarget);
+        };
+        let index = index.unwrap_or(tabs.panes.len()).min(tabs.panes.len());
+        tabs.panes.insert(index, pane);
+        tabs.active = index;
+        Ok(())
     }
 
     fn insert_group_at_target(

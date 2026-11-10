@@ -337,6 +337,86 @@ fn collapsed_siblings_fit_tiny_bounds_and_the_last_tile_expands() {
 }
 
 #[test]
+fn reopen_returns_to_the_saved_tab_gap_after_unrelated_edits() {
+    let mut tree = TileTree::from_spec(TileSpec::equal_split(
+        Axis::Horizontal,
+        [
+            TileSpec::tabs([PaneId(1), PaneId(2), PaneId(3)]),
+            TileSpec::pane(PaneId(4)),
+        ],
+    ))
+    .unwrap();
+    let bookmark = tree.close_pane_with_bookmark(PaneId(2)).unwrap();
+    tree.apply(TileOp::SplitPane {
+        pane: PaneId(4),
+        axis: Axis::Vertical,
+        new_pane: PaneId(5),
+        placement: Placement::After,
+        share: 0.25,
+    })
+    .unwrap();
+    let before = tree.layout(input(600.0));
+    assert_eq!(tree.reopen_pane(&bookmark), Ok(ReopenPlacement::Exact));
+    assert_eq!(
+        tree.panes().collect::<Vec<_>>(),
+        [PaneId(1), PaneId(2), PaneId(3), PaneId(4), PaneId(5)]
+    );
+    let after = tree.layout(input(600.0));
+    assert_eq!(after.panes()[0].pane, PaneId(2));
+    assert_eq!(after.panes()[1..], before.panes()[1..]);
+    let revision = tree.revision();
+    assert_eq!(
+        tree.reopen_pane(&bookmark),
+        Err(TileError::DuplicatePane(PaneId(2)))
+    );
+    assert_eq!(tree.revision(), revision);
+}
+
+#[test]
+fn reopen_preserves_the_current_relative_shares_of_other_children() {
+    let mut tree = TileTree::from_spec(TileSpec::split(
+        Axis::Horizontal,
+        [
+            TileSpec::pane(PaneId(1)),
+            TileSpec::pane(PaneId(2)),
+            TileSpec::pane(PaneId(3)),
+        ],
+        [1.0, 2.0, 1.0],
+    ))
+    .unwrap();
+    let bookmark = tree.close_pane_with_bookmark(PaneId(2)).unwrap();
+    tree.apply(TileOp::SetSplitShares {
+        split: tree.root(),
+        shares: vec![3.0, 1.0],
+    })
+    .unwrap();
+    assert_eq!(tree.reopen_pane(&bookmark), Ok(ReopenPlacement::Exact));
+    assert_eq!(widths(&tree, input(800.0)), [300.0, 400.0, 100.0]);
+}
+
+#[test]
+fn reopen_recreates_a_binary_slot_or_reports_the_root_fallback() {
+    let mut tree = TileTree::from_spec(TileSpec::split(
+        Axis::Vertical,
+        [TileSpec::pane(PaneId(1)), TileSpec::tabs([PaneId(2)])],
+        [1.0, 3.0],
+    ))
+    .unwrap();
+    let bookmark = tree.close_pane_with_bookmark(PaneId(2)).unwrap();
+    assert_eq!(tree.reopen_pane(&bookmark), Ok(ReopenPlacement::Exact));
+    let frame = tree.layout(input(600.0));
+    assert_eq!(frame.panes()[0].rect.height(), 75.0);
+    assert_eq!(frame.tab_bars()[0].rect.y0, 75.0);
+
+    let mut tree = TileTree::single_pane(PaneId(3));
+    assert_eq!(
+        tree.reopen_pane(&bookmark),
+        Ok(ReopenPlacement::Approximate)
+    );
+    assert_eq!(tree.panes().collect::<Vec<_>>(), [PaneId(3), PaneId(2)]);
+}
+
+#[test]
 fn scale_invariant_split_insertion() {
     fn run(scale: f64) -> Vec<f64> {
         let mut tree = TileTree::from_spec(TileSpec::split(
