@@ -7,8 +7,8 @@ use alloc::vec::Vec;
 use crate::frame::{HIT_Z_PANE, HIT_Z_SPLIT_HANDLE, HIT_Z_TAB, HIT_Z_TAB_BAR};
 use crate::snapshot::{RepairAction, RepairReport};
 use crate::util::{
-    is_valid_split_fraction, repaired_shares, solve_lengths_with_min, split_min_major,
-    split_tab_bar, tab_rects,
+    is_valid_split_fraction, positive_share, repaired_shares, solve_lengths_with_min,
+    split_min_major, split_tab_bar, tab_rects,
 };
 use crate::{
     Axis, DockTarget, FrameItemId, HitKind, HitRegion, LayoutFrame, LayoutInput, PaneFrame, PaneId,
@@ -672,8 +672,8 @@ impl TileTree {
                     aligned_constraints(parent_split.children.len(), &parent_split.constraints);
                 parent_split.shares = old_shares;
                 let old_share = parent_split.shares[child_index];
-                let inserted_share = (old_share * share).max(0.01);
-                let target_share = (old_share - inserted_share).max(0.01);
+                let inserted_share = positive_share(old_share * share);
+                let target_share = positive_share(old_share * (1.0 - share));
                 parent_split.shares[child_index] = target_share;
                 let insert_index = match placement {
                     Placement::Before => child_index,
@@ -688,14 +688,8 @@ impl TileTree {
         }
 
         let (children, shares) = match placement {
-            Placement::Before => (
-                vec![inserted, target],
-                vec![share.max(0.01), (1.0 - share).max(0.01)],
-            ),
-            Placement::After => (
-                vec![target, inserted],
-                vec![(1.0 - share).max(0.01), share.max(0.01)],
-            ),
+            Placement::Before => (vec![inserted, target], vec![share, 1.0 - share]),
+            Placement::After => (vec![target, inserted], vec![1.0 - share, share]),
         };
         let split = self.push_node(TileNode::Split(SplitNode {
             axis,
@@ -870,11 +864,14 @@ impl TileTree {
                 && minimum == 0.0
             {
                 let child_shares = repaired_shares(child_split.children.len(), &child_split.shares);
+                let child_total = child_shares.iter().sum::<f64>();
                 let child_constraints =
                     aligned_constraints(child_split.children.len(), &child_split.constraints);
                 for (grand_index, grandchild) in child_split.children.iter().copied().enumerate() {
                     children.push(grandchild);
-                    shares.push(share * child_shares.get(grand_index).copied().unwrap_or(1.0));
+                    shares.push(positive_share(
+                        share * (child_shares[grand_index] / child_total),
+                    ));
                     constraints.push(child_constraints.get(grand_index).copied().unwrap_or(0.0));
                 }
                 structure_changed = true;

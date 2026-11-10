@@ -218,7 +218,21 @@ pub(crate) fn repaired_shares(count: usize, shares: &[f64]) -> Vec<f64> {
             repaired.push(1.0);
         }
     }
-    if valid { repaired } else { vec![1.0; count] }
+    if !valid {
+        return vec![1.0; count];
+    }
+    let largest = repaired.iter().copied().fold(0.0, f64::max);
+    if largest < f64::MIN_POSITIVE || !repaired.iter().sum::<f64>().is_finite() {
+        for share in &mut repaired {
+            *share = positive_share(*share / largest);
+        }
+    }
+    repaired
+}
+
+// Keep the smallest representable weight when multiplication underflows.
+pub(crate) fn positive_share(share: f64) -> f64 {
+    share.max(f64::from_bits(1))
 }
 
 pub(crate) fn is_valid_split_fraction(value: f64) -> bool {

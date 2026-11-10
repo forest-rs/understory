@@ -2477,7 +2477,7 @@ fn repair_reports_same_axis_split_merges() {
         panic!("root should remain a split");
     };
     assert_eq!(root.children, vec![TileId(2), TileId(3), TileId(4)]);
-    assert_eq!(root.shares, vec![2.0, 1.0, 1.0]);
+    assert_eq!(root.shares, vec![2.0 / 3.0, 1.0 / 3.0, 1.0]);
     assert!(tree.node(TileId(1)).is_none());
 }
 
