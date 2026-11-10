@@ -961,13 +961,11 @@ pub fn drop_targets_for_drag_with_policy(
         dock_policy_rejection(&proposal, policy)
     };
 
-    if options.allow_split
-        && let Some(root_rect) = frame_bounds(frame)
-    {
+    if options.allow_split {
         push_edge_targets(
             &mut targets,
             tree.root(),
-            root_rect,
+            frame_bounds(frame),
             drag.current,
             edge_fraction,
             if matches!(tree.node(tree.root()), Some(TileNode::Split(_))) {
@@ -1371,22 +1369,13 @@ fn solved_drop_rect(frame: &LayoutFrame, subject: DragSubject) -> Option<Rect> {
     }
 }
 
-fn frame_bounds(frame: &LayoutFrame) -> Option<Rect> {
-    let mut bounds: Option<Rect> = None;
-    for rect in frame
-        .panes
-        .iter()
-        .map(|pane| pane.rect)
-        .chain(frame.tab_bars.iter().map(|bar| bar.rect))
-        .chain(frame.collapsed_tiles.iter().map(|tile| tile.rect))
-        .chain(frame.split_handles.iter().map(|handle| handle.rect))
-    {
-        bounds = Some(match bounds {
-            Some(bounds) => union_rect(bounds, rect),
-            None => rect,
-        });
-    }
-    bounds
+fn frame_bounds(frame: &LayoutFrame) -> Rect {
+    frame
+        .projection
+        .as_ref()
+        .map_or(frame.layout_input.bounds.abs(), |projection| {
+            projection.projected_rect
+        })
 }
 
 fn union_rect(a: Rect, b: Rect) -> Rect {
@@ -1454,11 +1443,13 @@ fn tab_insertion(
     }
 
     let width = (viewport_end - viewport_start).min(2.0);
-    let start = (boundary - width / 2.0).clamp(viewport_start, viewport_end - width);
+    let latest_start = (viewport_end - width).max(viewport_start);
+    let start = (boundary - width / 2.0).clamp(viewport_start, latest_start);
+    let end = (start + width).min(viewport_end);
     let marker = if horizontal {
-        Rect::new(start, bar.viewport.y0, start + width, bar.viewport.y1)
+        Rect::new(start, bar.viewport.y0, end, bar.viewport.y1)
     } else {
-        Rect::new(bar.viewport.x0, start, bar.viewport.x1, start + width)
+        Rect::new(bar.viewport.x0, start, bar.viewport.x1, end)
     };
     (gap, marker)
 }

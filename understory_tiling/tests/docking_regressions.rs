@@ -574,6 +574,26 @@ fn moving_a_leaf_to_a_split_keeps_its_tile_identity() {
 }
 
 #[test]
+fn tab_insertion_marker_fits_a_fractional_viewport_crossing_zero() {
+    let tree = TileTree::from_spec(TileSpec::tabs([PaneId(1), PaneId(2)])).unwrap();
+    let layout = LayoutInput {
+        bounds: Rect::new(-0.1, 0.0, 0.2, 300.0),
+        ..input(1.0)
+    };
+    let frame = tree.layout(layout);
+    let options = InteractionOptions {
+        drag_threshold: 0.0,
+        ..InteractionOptions::from_layout_input(layout)
+    };
+    let mut state = begin_interaction(&frame, Point::new(0.0, 10.0), &options);
+    let update = update_interaction(&tree, &frame, &mut state, Point::new(0.1, 10.0), &options);
+    assert_eq!(
+        update.overlay.ghost_rects[0].rect,
+        frame.tab_bars()[0].viewport
+    );
+}
+
+#[test]
 fn scale_invariant_split_insertion() {
     fn run(scale: f64) -> Vec<f64> {
         let mut tree = TileTree::from_spec(TileSpec::split(
