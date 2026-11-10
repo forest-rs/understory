@@ -618,3 +618,56 @@ fn scale_invariant_split_insertion() {
     assert_eq!(run(1.0), run(f64::MAX));
     assert_eq!(run(1.0), run(f64::from_bits(1)));
 }
+
+#[test]
+fn workspace_left_edge_is_distinct_from_the_first_pane_edge() {
+    let mut tree = TileTree::from_spec(TileSpec::split(
+        Axis::Horizontal,
+        [
+            TileSpec::tabs([PaneId(1), PaneId(2)]),
+            TileSpec::tabs([PaneId(3), PaneId(4), PaneId(5)]),
+            TileSpec::tabs([PaneId(7), PaneId(8)]),
+            TileSpec::pane(PaneId(6)),
+        ],
+        [135.0, 260.0, 480.0, 175.0],
+    ))
+    .unwrap();
+    let layout = LayoutInput {
+        bounds: Rect::new(24.0, 125.0, 1088.0, 633.0),
+        tab_bar_thickness: 36.0,
+        split_handle_thickness: 7.0,
+        min_pane_size: Size::new(110.0, 78.0),
+    };
+    let before = tree.layout(layout);
+    let console = before.panes().last().unwrap().rect.center();
+    let navigator = before.panes()[0].tile;
+    let local = drag(&tree, layout, console, Point::new(44.0, console.y));
+    assert_eq!(
+        local.overlay.active_target,
+        Some(DropTargetId::Split {
+            tile: navigator,
+            axis: Axis::Horizontal,
+            placement: Placement::Before,
+        })
+    );
+
+    let workspace = drag(&tree, layout, console, Point::new(26.0, console.y));
+    assert_eq!(
+        workspace.overlay.active_target,
+        Some(DropTargetId::Split {
+            tile: tree.root(),
+            axis: Axis::Horizontal,
+            placement: Placement::Before,
+        })
+    );
+    let ghost = workspace.overlay.ghost_rects[0].rect;
+    assert_eq!(ghost.x0, layout.bounds.x0);
+    // The Navigator minimum takes some space from the nominal half share.
+    // The workspace drop still gets substantially more than a pane-local split.
+    assert!(ghost.width() > layout.bounds.width() * 0.45);
+    assert!(ghost.width() > local.overlay.ghost_rects[0].rect.width());
+    commit(&mut tree, layout, &workspace);
+    let after = tree.layout(layout);
+    assert_eq!(after.panes()[0].pane, PaneId(6));
+    assert_eq!(after.panes()[0].rect, ghost);
+}

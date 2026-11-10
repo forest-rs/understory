@@ -517,8 +517,9 @@ pub struct DragOptions {
     ///
     /// Expected to be finite and in the range `0.0..=0.5`. Values above the
     /// default `0.25` intentionally create overlapping edge zones. The picker
-    /// resolves those overlaps by normalized depth into each edge zone, then by
-    /// priority and stable target order.
+    /// resolves overlaps at the same priority by normalized depth into each
+    /// edge zone. Workspace edges occupy a narrow outer strip so they can be
+    /// targeted separately from the edges of the outermost panes.
     pub edge_zone_fraction: f64,
     /// Fraction used for tab insertion decisions.
     ///
@@ -962,17 +963,22 @@ pub fn drop_targets_for_drag_with_policy(
     };
 
     if options.allow_split {
+        let split_workspace = matches!(tree.node(tree.root()), Some(TileNode::Split(_)));
+        let (max_depth, priority) = if split_workspace {
+            // The edge of the viewport docks beside the entire workspace.
+            // Slightly farther inward, the outermost tile owns the same edge.
+            (4.0, 28)
+        } else {
+            (f64::INFINITY, 25)
+        };
         push_edge_targets(
             &mut targets,
             tree.root(),
             frame_bounds(frame),
             drag.current,
             edge_fraction,
-            if matches!(tree.node(tree.root()), Some(TileNode::Split(_))) {
-                10
-            } else {
-                25
-            },
+            max_depth,
+            priority,
             rejection_for,
         );
     }
@@ -986,6 +992,7 @@ pub fn drop_targets_for_drag_with_policy(
                     child.rect,
                     drag.current,
                     edge_fraction.min(0.08),
+                    f64::INFINITY,
                     27,
                     rejection_for,
                 );
@@ -1001,6 +1008,7 @@ pub fn drop_targets_for_drag_with_policy(
                 pane_tile_bounds(frame, pane),
                 drag.current,
                 edge_fraction,
+                f64::INFINITY,
                 25,
                 rejection_for,
             );
@@ -1147,6 +1155,7 @@ fn push_edge_targets(
     rect: Rect,
     point: Point,
     edge_fraction: f64,
+    max_depth: f64,
     priority: i16,
     mut rejection_for: impl FnMut(DockTarget) -> Option<DropRejection>,
 ) {
@@ -1159,8 +1168,8 @@ fn push_edge_targets(
     if width == 0.0 || height == 0.0 || edge_fraction == 0.0 {
         return;
     }
-    let edge_w = width * edge_fraction;
-    let edge_h = height * edge_fraction;
+    let edge_w = (width * edge_fraction).min(max_depth);
+    let edge_h = (height * edge_fraction).min(max_depth);
     let tile_rect = rect;
     let specs = [
         (
