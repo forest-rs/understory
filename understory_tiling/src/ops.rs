@@ -96,7 +96,7 @@ pub enum TileOp {
         group: TileId,
         /// Pane tab to move.
         pane: PaneId,
-        /// New tab index.
+        /// Final tab index, after removing the source tab.
         index: usize,
     },
     /// Set split shares directly.

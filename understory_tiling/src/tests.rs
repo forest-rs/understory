@@ -2067,7 +2067,7 @@ fn validate_resize_accepts_frame_checked_proposal() {
 
 #[test]
 fn tab_insert_threshold_controls_reorder_index() {
-    let tree = tab_tree([PaneId(1), PaneId(2)]);
+    let tree = tab_tree([PaneId(1), PaneId(2), PaneId(3)]);
     let frame = tree.layout(input());
     let options = interaction_options_with_drag(DragOptions {
         allow_split: false,
@@ -2078,13 +2078,13 @@ fn tab_insert_threshold_controls_reorder_index() {
     let update = pointer_update(
         &tree,
         &frame,
-        Point::new(225.0, 10.0),
-        Point::new(100.0, 10.0),
+        Point::new(250.0, 10.0),
+        Point::new(160.0, 10.0),
         &options,
     );
     assert!(matches!(
         dock_proposal(&update),
-        Some(DockProposal::ReorderTab { index: 0, .. })
+        Some(DockProposal::ReorderTab { index: 1, .. })
     ));
 
     let options = interaction_options_with_drag(DragOptions {
@@ -2095,13 +2095,13 @@ fn tab_insert_threshold_controls_reorder_index() {
     let update = pointer_update(
         &tree,
         &frame,
-        Point::new(225.0, 10.0),
-        Point::new(100.0, 10.0),
+        Point::new(250.0, 10.0),
+        Point::new(160.0, 10.0),
         &options,
     );
     assert!(matches!(
         dock_proposal(&update),
-        Some(DockProposal::ReorderTab { index: 1, .. })
+        Some(DockProposal::ReorderTab { index: 2, .. })
     ));
 }
 

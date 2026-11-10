@@ -257,7 +257,8 @@ pub struct DropTargetFrame {
     /// Preview rectangle for overlays.
     ///
     /// This is usually larger than `rect`: the hit zone can be an edge strip
-    /// while the preview shows the pane area that would be created.
+    /// while the preview shows the pane area that would be created. A tab-bar
+    /// target uses this rectangle as the insertion marker.
     pub preview_rect: Rect,
     /// Target priority. Higher values win.
     pub priority: i16,
@@ -689,7 +690,7 @@ fn update_drag(
     } else {
         None
     };
-    let proposal = active_frame.and_then(|target| proposal_for_drag(drag, &target, options));
+    let proposal = active_frame.and_then(|target| proposal_for_drag(frame, drag, &target, options));
     let preview = preview_layout.and_then(|input| {
         proposal
             .as_ref()
@@ -842,25 +843,19 @@ pub fn drop_targets_for_drag(
             if !bar.viewport.contains(drag.current) {
                 continue;
             }
-            let index = match drag.subject {
-                DragSubject::Tab { group, .. }
-                    if group == bar.group && options.allow_reorder_tabs =>
-                {
-                    tab_insert_index(frame, bar.group, drag.current, options.tab_insert_threshold)
-                }
-                _ => None,
-            };
+            let (index, marker) =
+                tab_insertion(frame, bar, drag.current, options.tab_insert_threshold);
             let id =
                 DropTargetId(u32::try_from(targets.len()).expect("drop target arena exhausted"));
             let target = DockTarget::TabInto {
                 group: bar.group,
-                index,
+                index: Some(index),
             };
             targets.push(DropTargetFrame {
                 id,
                 rect: bar.viewport,
                 target,
-                preview_rect: bar.viewport,
+                preview_rect: marker,
                 priority: 30,
                 distance: rect_distance(bar.viewport, drag.current),
                 accepts: target_accepts(tree, frame, drag, target, options),
@@ -924,21 +919,27 @@ fn pick_drop_target_frame(
 }
 
 fn proposal_for_drag(
+    frame: &LayoutFrame,
     drag: &DragSession,
     target: &DropTargetFrame,
     options: &DragOptions,
 ) -> Option<DockProposal> {
     match drag.subject {
         DragSubject::Pane(pane) | DragSubject::Tab { pane, .. } => match target.target {
-            DockTarget::TabInto { group, index }
-                if options.allow_reorder_tabs
-                    && matches!(drag.subject, DragSubject::Tab { group: source, .. } if source == group)
-                    && index.is_some() =>
+            DockTarget::TabInto {
+                group,
+                index: Some(gap),
+            } if options.allow_reorder_tabs
+                && matches!(drag.subject, DragSubject::Tab { group: source, .. } if source == group) =>
             {
+                let source = frame
+                    .tabs
+                    .iter()
+                    .find(|tab| tab.group == group && tab.pane == pane)?;
                 Some(DockProposal::ReorderTab {
                     group,
                     pane,
-                    index: index.unwrap_or(0),
+                    index: gap - usize::from(source.index < gap),
                 })
             }
             _ => Some(DockProposal::MovePane {
@@ -1213,44 +1214,46 @@ fn compare_target(
         .then_with(|| best_index.cmp(&candidate_index))
 }
 
-fn tab_insert_index(
+fn tab_insertion(
     frame: &LayoutFrame,
-    group: TileId,
+    bar: &crate::TabBarFrame,
     point: Point,
     threshold: f64,
-) -> Option<usize> {
-    let mut tabs: Vec<_> = frame
-        .tabs
-        .iter()
-        .filter(|tab| tab.group == group)
-        .copied()
-        .collect();
-    tabs.sort_by_key(|tab| tab.index);
-    if tabs.is_empty() {
-        return Some(0);
-    }
-    let horizontal = frame
-        .tab_bars
-        .iter()
-        .find(|bar| bar.group == group)
-        .is_none_or(|bar| {
-            matches!(
-                bar.placement,
-                TabBarPlacement::Top | TabBarPlacement::Bottom
-            )
-        });
-    for tab in &tabs {
-        let insert_before = if horizontal {
-            tab.rect.x0 + tab.rect.width() * threshold
+) -> (usize, Rect) {
+    let horizontal = matches!(
+        bar.placement,
+        TabBarPlacement::Top | TabBarPlacement::Bottom
+    );
+    let (coordinate, viewport_start, viewport_end) = if horizontal {
+        (point.x, bar.viewport.x0, bar.viewport.x1)
+    } else {
+        (point.y, bar.viewport.y0, bar.viewport.y1)
+    };
+    let mut gap = 0;
+    let mut boundary = viewport_start;
+    for tab in frame.tabs.iter().filter(|tab| tab.group == bar.group) {
+        let (start, end) = if horizontal {
+            (tab.rect.x0, tab.rect.x1)
         } else {
-            tab.rect.y0 + tab.rect.height() * threshold
+            (tab.rect.y0, tab.rect.y1)
         };
-        let coordinate = if horizontal { point.x } else { point.y };
-        if coordinate < insert_before {
-            return Some(tab.index);
+        if coordinate < start + (end - start) * threshold {
+            gap = tab.index;
+            boundary = start;
+            break;
         }
+        gap = tab.index + 1;
+        boundary = end;
     }
-    Some(tabs.len())
+
+    let width = (viewport_end - viewport_start).min(2.0);
+    let start = (boundary - width / 2.0).clamp(viewport_start, viewport_end - width);
+    let marker = if horizontal {
+        Rect::new(start, bar.viewport.y0, start + width, bar.viewport.y1)
+    } else {
+        Rect::new(bar.viewport.x0, start, bar.viewport.x1, start + width)
+    };
+    (gap, marker)
 }
 
 fn resize_proposal_from_frame(
